@@ -27,7 +27,7 @@ module top_level(
     // LIF simulation timing (slow)
     // -----------------------------
     localparam int CLK_HZ        = 100_000_000;
-    localparam int LIF_TICK_HZ   = 25; // 40ms per step (visible count-up)
+    localparam int LIF_TICK_HZ   = 500; // 2ms per step (10x faster than previous)
     localparam int LIF_DIV       = CLK_HZ / LIF_TICK_HZ;
     localparam int LIF_DIV_W     = $clog2(LIF_DIV);
 
@@ -48,9 +48,9 @@ module top_level(
     end
 
     // -----------------------------
-    // LIF model (fixed-point, Q8.8)
+    // LIF model (fixed-point, S16.16)
     // -----------------------------
-    localparam int FP_SHIFT = 8;
+    localparam int FP_SHIFT = 16;
     localparam int FP_SCALE = (1 << FP_SHIFT);
 
     localparam int V_REST   = -60;

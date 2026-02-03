@@ -1,0 +1,6 @@
+<testsuites name="results">
+  <testsuite name="all" package="all">
+    <property name="random_seed" value="1770115391" />
+    <testcase name="top_level_lif_count_and_display_test" classname="top_level_test" file="C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\sim\top_level_test.py" lineno="120" time="0.09215617179870605" sim_time_ns="602.501" ratio_time="6537.8258258820115" />
+  </testsuite>
+</testsuites>
