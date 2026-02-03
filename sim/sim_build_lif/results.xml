@@ -1,0 +1,7 @@
+<testsuites name="results">
+  <testsuite name="all" package="all">
+    <property name="random_seed" value="1770123881" />
+    <testcase name="lif_count_test_fixed_point" classname="top_level_test" file="C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\sim\top_level_test.py" lineno="103" time="0.25924229621887207" sim_time_ns="2102.001" ratio_time="8108.248656404937" />
+    <testcase name="lif_count_test_python_model" classname="top_level_test" file="C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\sim\top_level_test.py" lineno="120" time="0.25446295738220215" sim_time_ns="2102.501" ratio_time="8262.503201367945" />
+  </testsuite>
+</testsuites>

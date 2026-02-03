@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 -------------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version     : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date             : Tue Feb  3 05:43:56 2026
-| Host             : eecs-digital-11 running 64-bit Ubuntu 24.04.3 LTS
+| Date             : Tue Feb  3 08:05:32 2026
+| Host             : eecs-digital-17 running 64-bit Ubuntu 24.04.3 LTS
 | Command          : report_power -file obj/post_route_power.rpt
 | Design           : top_level
 | Device           : xc7s50csga324-1
@@ -52,13 +52,13 @@ Table of Contents
 +----------------+-----------+----------+-----------+-----------------+
 | On-Chip        | Power (W) | Used     | Available | Utilization (%) |
 +----------------+-----------+----------+-----------+-----------------+
-| Clocks         |     0.001 |        3 |       --- |             --- |
-| Slice Logic    |     0.073 |     6283 |       --- |             --- |
-|   LUT as Logic |     0.068 |     4274 |     32600 |           13.11 |
-|   CARRY4       |     0.005 |      899 |      8150 |           11.03 |
-|   Register     |    <0.001 |      228 |     65200 |            0.35 |
-|   Others       |     0.000 |        4 |       --- |             --- |
-| Signals        |     0.070 |     5335 |       --- |             --- |
+| Clocks         |     0.002 |        3 |       --- |             --- |
+| Slice Logic    |     0.072 |     6284 |       --- |             --- |
+|   LUT as Logic |     0.067 |     4251 |     32600 |           13.04 |
+|   CARRY4       |     0.005 |      902 |      8150 |           11.07 |
+|   Register     |    <0.001 |      240 |     65200 |            0.37 |
+|   Others       |     0.000 |        6 |       --- |             --- |
+| Signals        |     0.070 |     5308 |       --- |             --- |
 | I/O            |     0.026 |       46 |       210 |           21.90 |
 | Static Power   |     0.072 |          |           |                 |
 | Total          |     0.243 |          |           |                 |
@@ -135,11 +135,12 @@ Table of Contents
 3.1 By Hierarchy
 ----------------
 
-+-------------+-----------+
-| Name        | Power (W) |
-+-------------+-----------+
-| top_level   |     0.171 |
-|   u_divider |     0.003 |
-+-------------+-----------+
++---------------+-----------+
+| Name          | Power (W) |
++---------------+-----------+
+| top_level     |     0.171 |
+|   u_lif       |     0.144 |
+|     u_divider |     0.003 |
++---------------+-----------+
 
 
