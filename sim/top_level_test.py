@@ -59,17 +59,17 @@ def ref_lif_spike_times_fixed(steps):
             i_syn_exc = (G_EXC_FP * ((E_EXC * FP_SCALE) - v_mem)) >> FP_SHIFT
             i_syn_inh = (G_INH_FP * ((E_INH * FP_SCALE) - v_mem)) >> FP_SHIFT
             num = (V_REST * FP_SCALE) - v_mem + i_syn_exc + i_syn_inh
-            dv = int(num / TAU_M)
+            dv = int((num + (TAU_M // 2)) / TAU_M)
             v_next = v_mem + dv
 
             if v_next >= vthr:
                 spike_steps.append(i)
                 v_mem = V_RESET * FP_SCALE
                 refr_cnt = REFRACT
-                theta = theta - int(theta / TC_THETA) + THETA_PLUS_FP
+                theta = theta - int((theta + (TC_THETA // 2)) / TC_THETA) + THETA_PLUS_FP
             else:
                 v_mem = v_next
-                theta = theta - int(theta / TC_THETA)
+                theta = theta - int((theta + (TC_THETA // 2)) / TC_THETA)
 
         if theta < 0:
             theta = 0

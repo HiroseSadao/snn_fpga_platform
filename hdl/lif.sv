@@ -29,6 +29,8 @@ module lif(
     localparam int REFRACT  =  40;    // steps (ratio preserved)
     localparam int TC_THETA =  10000; // steps (ratio preserved)
     localparam int THETA_MAX = 35;
+    localparam int TAU_M_HALF = TAU_M / 2;
+    localparam int TC_THETA_HALF = TC_THETA / 2;
 
     // Synapse params (fixed g_exc/g_inh)
     localparam int E_EXC    =   0;
@@ -142,12 +144,12 @@ module lif(
                             refr_cnt <= refr_cnt - 1'b1;
                             v_mem    <= V_RESET_FP;
                             spike_latched <= 1'b0;
-                            div_dividend <= theta_reg[31:0];
+                            div_dividend <= theta_reg[31:0] + TC_THETA_HALF[31:0];
                             div_divisor  <= TC_THETA[31:0];
                             div_valid_in <= 1'b1;
                             lif_state    <= LIF_THETA_WAIT;
                         end else begin
-                            div_dividend <= num_abs;
+                            div_dividend <= num_abs + TAU_M_HALF[31:0];
                             div_divisor  <= TAU_M[31:0];
                             div_valid_in <= 1'b1;
                             lif_state    <= LIF_DIV_WAIT;
@@ -173,7 +175,7 @@ module lif(
                         end
 
                         // Start theta decay division
-                        div_dividend <= theta_reg[31:0];
+                        div_dividend <= theta_reg[31:0] + TC_THETA_HALF[31:0];
                         div_divisor  <= TC_THETA[31:0];
                         div_valid_in <= 1'b1;
                         lif_state    <= LIF_THETA_WAIT;

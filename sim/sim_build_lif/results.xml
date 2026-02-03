@@ -1,10 +1,10 @@
 <testsuites name="results">
   <testsuite name="all" package="all">
-    <property name="random_seed" value="1770126045" />
-    <testcase name="lif_count_test_fixed_point" classname="top_level_test" file="C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\sim\top_level_test.py" lineno="140" time="12.02219271659851" sim_time_ns="78287.001" ratio_time="6511.873735971026" />
-    <testcase name="lif_count_test_python_model" classname="top_level_test" file="C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\sim\top_level_test.py" lineno="159" time="15.89661192893982" sim_time_ns="78287.501" ratio_time="4924.7916065358195">
-      <failure message="Test failed with RANDOM_SEED=1770126045" />
+    <property name="random_seed" value="1770126992" />
+    <testcase name="lif_count_test_fixed_point" classname="top_level_test" file="C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\sim\top_level_test.py" lineno="140" time="9.762206554412842" sim_time_ns="78108.501" ratio_time="8001.111282027972" />
+    <testcase name="lif_count_test_python_model" classname="top_level_test" file="C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\sim\top_level_test.py" lineno="159" time="9.789425373077393" sim_time_ns="78109.001" ratio_time="7978.915822251755">
+      <failure message="Test failed with RANDOM_SEED=1770126992" />
     </testcase>
-    <testcase name="lif_theta_vthr_plot_test" classname="top_level_test" file="C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\sim\top_level_test.py" lineno="178" time="16.66321635246277" sim_time_ns="78287.50099999999" ratio_time="4698.2226806668905" />
+    <testcase name="lif_theta_vthr_plot_test" classname="top_level_test" file="C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\sim\top_level_test.py" lineno="178" time="10.326003551483154" sim_time_ns="78109.00099999999" ratio_time="7564.301194606985" />
   </testsuite>
 </testsuites>
