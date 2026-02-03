@@ -1,7 +1,7 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Tue Feb  3 08:05:32 2026
+| Date         : Tue Feb  3 08:48:26 2026
 | Host         : eecs-digital-17 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_timing -file obj/post_route_timing.rpt
 | Design       : top_level
@@ -12,20 +12,20 @@ Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanc
 
 Timing Report
 
-Slack (MET) :             0.341ns  (required time - arrival time)
-  Source:                 u_lif/u_divider/dividend_reg[31]/C
+Slack (VIOLATED) :        -5.877ns  (required time - arrival time)
+  Source:                 u_lif/v_mem_reg[0]/C
                             (rising edge-triggered cell FDRE clocked by gclk  {rise@0.000ns fall@4.000ns period=10.000ns})
-  Destination:            u_lif/u_divider/p_reg[28]/D
+  Destination:            u_lif/refr_cnt_reg[4]/CE
                             (rising edge-triggered cell FDRE clocked by gclk  {rise@0.000ns fall@4.000ns period=10.000ns})
   Path Group:             gclk
   Path Type:              Setup (Max at Slow Process Corner)
   Requirement:            10.000ns  (gclk rise@10.000ns - gclk rise@0.000ns)
-  Data Path Delay:        9.573ns  (logic 5.345ns (55.833%)  route 4.228ns (44.167%))
-  Logic Levels:           22  (CARRY4=19 LUT2=2 LUT3=1)
-  Clock Path Skew:        -0.112ns (DCD - SCD + CPR)
-    Destination Clock Delay (DCD):    4.770ns = ( 14.770 - 10.000 ) 
-    Source Clock Delay      (SCD):    5.068ns
-    Clock Pessimism Removal (CPR):    0.187ns
+  Data Path Delay:        15.605ns  (logic 9.079ns (58.180%)  route 6.526ns (41.820%))
+  Logic Levels:           29  (CARRY4=23 LUT2=2 LUT3=1 LUT4=2 LUT5=1)
+  Clock Path Skew:        -0.032ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    4.767ns = ( 14.767 - 10.000 ) 
+    Source Clock Delay      (SCD):    5.057ns
+    Clock Pessimism Removal (CPR):    0.259ns
   Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
     Total System Jitter     (TSJ):    0.071ns
     Total Input Jitter      (TIJ):    0.000ns
@@ -40,75 +40,93 @@ Slack (MET) :             0.341ns  (required time - arrival time)
     N15                  IBUF (Prop_ibuf_I_O)         1.440     1.440 r  clk_100mhz_IBUF_inst/O
                          net (fo=1, routed)           1.972     3.412    clk_100mhz_IBUF
     BUFGCTRL_X0Y0        BUFG (Prop_bufg_I_O)         0.096     3.508 r  clk_100mhz_IBUF_BUFG_inst/O
-                         net (fo=240, routed)         1.560     5.068    u_lif/u_divider/clk_100mhz_IBUF_BUFG
-    SLICE_X37Y36         FDRE                                         r  u_lif/u_divider/dividend_reg[31]/C
+                         net (fo=290, routed)         1.549     5.057    u_lif/CLK
+    SLICE_X45Y23         FDRE                                         r  u_lif/v_mem_reg[0]/C
   -------------------------------------------------------------------    -------------------
-    SLICE_X37Y36         FDRE (Prop_fdre_C_Q)         0.419     5.487 f  u_lif/u_divider/dividend_reg[31]/Q
-                         net (fo=4, routed)           0.946     6.433    u_lif/u_divider/p_1_in0
-    SLICE_X34Y31         LUT2 (Prop_lut2_I0_O)        0.299     6.732 r  u_lif/u_divider/p_temp1_carry_i_8/O
-                         net (fo=1, routed)           0.000     6.732    u_lif/u_divider/p_temp1_carry_i_8_n_0
-    SLICE_X34Y31         CARRY4 (Prop_carry4_S[0]_CO[3])
-                                                      0.513     7.245 r  u_lif/u_divider/p_temp1_carry/CO[3]
-                         net (fo=1, routed)           0.000     7.245    u_lif/u_divider/p_temp1_carry_n_0
-    SLICE_X34Y32         CARRY4 (Prop_carry4_CI_CO[3])
-                                                      0.117     7.362 r  u_lif/u_divider/p_temp1_carry__0/CO[3]
-                         net (fo=1, routed)           0.000     7.362    u_lif/u_divider/p_temp1_carry__0_n_0
-    SLICE_X34Y33         CARRY4 (Prop_carry4_CI_CO[3])
-                                                      0.117     7.479 r  u_lif/u_divider/p_temp1_carry__1/CO[3]
-                         net (fo=1, routed)           0.000     7.479    u_lif/u_divider/p_temp1_carry__1_n_0
-    SLICE_X34Y34         CARRY4 (Prop_carry4_CI_CO[3])
-                                                      0.117     7.596 r  u_lif/u_divider/p_temp1_carry__2/CO[3]
-                         net (fo=34, routed)          1.152     8.748    u_lif/u_divider/dividend[1]
-    SLICE_X33Y29         CARRY4 (Prop_carry4_CYINIT_CO[3])
-                                                      0.580     9.328 r  u_lif/u_divider/p_reg[6]_i_2/CO[3]
-                         net (fo=1, routed)           0.000     9.328    u_lif/u_divider/p_reg[6]_i_2_n_0
-    SLICE_X33Y30         CARRY4 (Prop_carry4_CI_CO[3])
-                                                      0.114     9.442 r  u_lif/u_divider/p_reg[10]_i_2/CO[3]
-                         net (fo=1, routed)           0.000     9.442    u_lif/u_divider/p_reg[10]_i_2_n_0
-    SLICE_X33Y31         CARRY4 (Prop_carry4_CI_CO[3])
-                                                      0.114     9.556 r  u_lif/u_divider/p_reg[14]_i_2/CO[3]
-                         net (fo=1, routed)           0.000     9.556    u_lif/u_divider/p_reg[14]_i_2_n_0
-    SLICE_X33Y32         CARRY4 (Prop_carry4_CI_CO[3])
-                                                      0.114     9.670 r  u_lif/u_divider/p_reg[18]_i_2/CO[3]
-                         net (fo=1, routed)           0.000     9.670    u_lif/u_divider/p_reg[18]_i_2_n_0
-    SLICE_X33Y33         CARRY4 (Prop_carry4_CI_CO[3])
-                                                      0.114     9.784 r  u_lif/u_divider/p_reg[22]_i_2/CO[3]
-                         net (fo=1, routed)           0.000     9.784    u_lif/u_divider/p_reg[22]_i_2_n_0
-    SLICE_X33Y34         CARRY4 (Prop_carry4_CI_CO[3])
-                                                      0.114     9.898 r  u_lif/u_divider/p_reg[26]_i_2/CO[3]
-                         net (fo=1, routed)           0.000     9.898    u_lif/u_divider/p_reg[26]_i_2_n_0
-    SLICE_X33Y35         CARRY4 (Prop_carry4_CI_O[0])
-                                                      0.222    10.120 f  u_lif/u_divider/p_reg[30]_i_5/O[0]
-                         net (fo=4, routed)           0.840    10.960    u_lif/u_divider/p_1_in[24]
-    SLICE_X31Y34         LUT2 (Prop_lut2_I0_O)        0.299    11.259 r  u_lif/u_divider/quotient_out1_carry__2_i_8/O
-                         net (fo=1, routed)           0.000    11.259    u_lif/u_divider/quotient_out1_carry__2_i_8_n_0
-    SLICE_X31Y34         CARRY4 (Prop_carry4_S[0]_CO[3])
-                                                      0.532    11.791 r  u_lif/u_divider/quotient_out1_carry__2/CO[3]
-                         net (fo=31, routed)          1.291    13.081    u_lif/u_divider/dividend[0]
-    SLICE_X32Y30         LUT3 (Prop_lut3_I1_O)        0.124    13.205 r  u_lif/u_divider/p[6]_i_6/O
-                         net (fo=1, routed)           0.000    13.205    u_lif/u_divider/p[6]_i_6_n_0
-    SLICE_X32Y30         CARRY4 (Prop_carry4_S[0]_CO[3])
-                                                      0.532    13.737 r  u_lif/u_divider/p_reg[6]_i_1/CO[3]
-                         net (fo=1, routed)           0.000    13.737    u_lif/u_divider/p_reg[6]_i_1_n_0
-    SLICE_X32Y31         CARRY4 (Prop_carry4_CI_CO[3])
-                                                      0.114    13.851 r  u_lif/u_divider/p_reg[10]_i_1/CO[3]
-                         net (fo=1, routed)           0.000    13.851    u_lif/u_divider/p_reg[10]_i_1_n_0
-    SLICE_X32Y32         CARRY4 (Prop_carry4_CI_CO[3])
-                                                      0.114    13.965 r  u_lif/u_divider/p_reg[14]_i_1/CO[3]
-                         net (fo=1, routed)           0.000    13.965    u_lif/u_divider/p_reg[14]_i_1_n_0
-    SLICE_X32Y33         CARRY4 (Prop_carry4_CI_CO[3])
-                                                      0.114    14.079 r  u_lif/u_divider/p_reg[18]_i_1/CO[3]
-                         net (fo=1, routed)           0.000    14.079    u_lif/u_divider/p_reg[18]_i_1_n_0
-    SLICE_X32Y34         CARRY4 (Prop_carry4_CI_CO[3])
-                                                      0.114    14.193 r  u_lif/u_divider/p_reg[22]_i_1/CO[3]
-                         net (fo=1, routed)           0.000    14.193    u_lif/u_divider/p_reg[22]_i_1_n_0
-    SLICE_X32Y35         CARRY4 (Prop_carry4_CI_CO[3])
-                                                      0.114    14.307 r  u_lif/u_divider/p_reg[26]_i_1/CO[3]
-                         net (fo=1, routed)           0.000    14.307    u_lif/u_divider/p_reg[26]_i_1_n_0
-    SLICE_X32Y36         CARRY4 (Prop_carry4_CI_O[1])
-                                                      0.334    14.641 r  u_lif/u_divider/p_reg[30]_i_3/O[1]
-                         net (fo=1, routed)           0.000    14.641    u_lif/u_divider/p_reg[30]_i_3_n_6
-    SLICE_X32Y36         FDRE                                         r  u_lif/u_divider/p_reg[28]/D
+    SLICE_X45Y23         FDRE (Prop_fdre_C_Q)         0.456     5.513 r  u_lif/v_mem_reg[0]/Q
+                         net (fo=4, routed)           0.324     5.837    u_lif/v_mem_reg_n_0_[0]
+    SLICE_X42Y23         CARRY4 (Prop_carry4_S[0]_CO[3])
+                                                      0.637     6.474 r  u_lif/div_dividend_reg[3]_i_45/CO[3]
+                         net (fo=1, routed)           0.000     6.474    u_lif/div_dividend_reg[3]_i_45_n_0
+    SLICE_X42Y24         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.117     6.591 r  u_lif/div_dividend_reg[7]_i_23/CO[3]
+                         net (fo=1, routed)           0.009     6.600    u_lif/div_dividend_reg[7]_i_23_n_0
+    SLICE_X42Y25         CARRY4 (Prop_carry4_CI_O[1])
+                                                      0.323     6.923 r  u_lif/div_dividend_reg[11]_i_23/O[1]
+                         net (fo=15, routed)          0.601     7.525    u_lif/running8[9]
+    SLICE_X44Y24         LUT2 (Prop_lut2_I1_O)        0.306     7.831 r  u_lif/div_dividend[3]_i_71/O
+                         net (fo=1, routed)           0.000     7.831    u_lif/div_dividend[3]_i_71_n_0
+    SLICE_X44Y24         CARRY4 (Prop_carry4_S[1]_CO[3])
+                                                      0.550     8.381 r  u_lif/div_dividend_reg[3]_i_39/CO[3]
+                         net (fo=1, routed)           0.009     8.390    u_lif/div_dividend_reg[3]_i_39_n_0
+    SLICE_X44Y25         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     8.504 r  u_lif/div_dividend_reg[3]_i_26/CO[3]
+                         net (fo=1, routed)           0.000     8.504    u_lif/div_dividend_reg[3]_i_26_n_0
+    SLICE_X44Y26         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     8.618 r  u_lif/div_dividend_reg[7]_i_16/CO[3]
+                         net (fo=1, routed)           0.000     8.618    u_lif/div_dividend_reg[7]_i_16_n_0
+    SLICE_X44Y27         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     8.732 r  u_lif/div_dividend_reg[11]_i_16/CO[3]
+                         net (fo=1, routed)           0.000     8.732    u_lif/div_dividend_reg[11]_i_16_n_0
+    SLICE_X44Y28         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     8.846 r  u_lif/div_dividend_reg[15]_i_17/CO[3]
+                         net (fo=1, routed)           0.000     8.846    u_lif/div_dividend_reg[15]_i_17_n_0
+    SLICE_X44Y29         CARRY4 (Prop_carry4_CI_O[1])
+                                                      0.334     9.180 r  u_lif/div_dividend_reg[15]_i_16/O[1]
+                         net (fo=1, routed)           0.462     9.642    u_lif/div_dividend_reg[15]_i_16_n_6
+    SLICE_X45Y31         CARRY4 (Prop_carry4_S[0]_O[1])
+                                                      0.727    10.369 r  u_lif/div_dividend_reg[19]_i_22/O[1]
+                         net (fo=3, routed)           0.539    10.908    u_lif/div_dividend_reg[19]_i_22_n_6
+    SLICE_X42Y31         LUT3 (Prop_lut3_I2_O)        0.303    11.211 r  u_lif/div_dividend[19]_i_14/O
+                         net (fo=1, routed)           0.823    12.034    u_lif/div_dividend[19]_i_14_n_0
+    SLICE_X41Y29         CARRY4 (Prop_carry4_DI[0]_CO[3])
+                                                      0.526    12.560 r  u_lif/div_dividend_reg[19]_i_5/CO[3]
+                         net (fo=1, routed)           0.000    12.560    u_lif/div_dividend_reg[19]_i_5_n_0
+    SLICE_X41Y30         CARRY4 (Prop_carry4_CI_O[1])
+                                                      0.334    12.894 r  u_lif/div_dividend_reg[27]_i_11/O[1]
+                         net (fo=3, routed)           0.630    13.524    u_lif/running6[21]
+    SLICE_X40Y29         LUT4 (Prop_lut4_I2_O)        0.303    13.827 r  u_lif/div_dividend[23]_i_9/O
+                         net (fo=1, routed)           0.000    13.827    u_lif/div_dividend[23]_i_9_n_0
+    SLICE_X40Y29         CARRY4 (Prop_carry4_S[1]_CO[3])
+                                                      0.550    14.377 r  u_lif/div_dividend_reg[23]_i_2/CO[3]
+                         net (fo=1, routed)           0.000    14.377    u_lif/div_dividend_reg[23]_i_2_n_0
+    SLICE_X40Y30         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    14.491 r  u_lif/div_dividend_reg[27]_i_2/CO[3]
+                         net (fo=1, routed)           0.000    14.491    u_lif/div_dividend_reg[27]_i_2_n_0
+    SLICE_X40Y31         CARRY4 (Prop_carry4_CI_O[3])
+                                                      0.313    14.804 r  u_lif/div_dividend_reg[31]_i_3/O[3]
+                         net (fo=65, routed)          0.672    15.476    u_lif/u_divider/O[0]
+    SLICE_X40Y23         LUT2 (Prop_lut2_I0_O)        0.306    15.782 r  u_lif/u_divider/v_mem[3]_i_3/O
+                         net (fo=1, routed)           0.341    16.124    u_lif/u_divider/v_mem[3]_i_3_n_0
+    SLICE_X39Y24         CARRY4 (Prop_carry4_CYINIT_CO[3])
+                                                      0.580    16.704 r  u_lif/u_divider/v_mem_reg[3]_i_2/CO[3]
+                         net (fo=1, routed)           0.009    16.713    u_lif/u_divider/v_mem_reg[3]_i_2_n_0
+    SLICE_X39Y25         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    16.827 r  u_lif/u_divider/v_mem_reg[7]_i_2/CO[3]
+                         net (fo=1, routed)           0.000    16.827    u_lif/u_divider/v_mem_reg[7]_i_2_n_0
+    SLICE_X39Y26         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    16.941 r  u_lif/u_divider/v_mem_reg[11]_i_2/CO[3]
+                         net (fo=1, routed)           0.000    16.941    u_lif/u_divider/v_mem_reg[11]_i_2_n_0
+    SLICE_X39Y27         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    17.055 r  u_lif/u_divider/v_mem_reg[15]_i_2/CO[3]
+                         net (fo=1, routed)           0.000    17.055    u_lif/u_divider/v_mem_reg[15]_i_2_n_0
+    SLICE_X39Y28         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    17.169 r  u_lif/u_divider/v_mem_reg[19]_i_2/CO[3]
+                         net (fo=1, routed)           0.000    17.169    u_lif/u_divider/v_mem_reg[19]_i_2_n_0
+    SLICE_X39Y29         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    17.283 r  u_lif/u_divider/v_mem_reg[23]_i_2/CO[3]
+                         net (fo=1, routed)           0.000    17.283    u_lif/u_divider/v_mem_reg[23]_i_2_n_0
+    SLICE_X39Y30         CARRY4 (Prop_carry4_CI_O[1])
+                                                      0.334    17.617 r  u_lif/u_divider/v_mem_reg[27]_i_2/O[1]
+                         net (fo=3, routed)           0.683    18.299    u_lif/u_divider/v_mem_reg[27]_i_2_n_6
+    SLICE_X38Y30         LUT4 (Prop_lut4_I0_O)        0.303    18.602 r  u_lif/u_divider/v_mem[31]_i_18/O
+                         net (fo=1, routed)           0.000    18.602    u_lif/u_divider/v_mem[31]_i_18_n_0
+    SLICE_X38Y30         CARRY4 (Prop_carry4_S[0]_CO[3])
+                                                      0.513    19.115 r  u_lif/u_divider/v_mem_reg[31]_i_5/CO[3]
+                         net (fo=37, routed)          1.052    20.168    u_lif/u_divider/running1
+    SLICE_X37Y30         LUT5 (Prop_lut5_I1_O)        0.124    20.292 r  u_lif/u_divider/refr_cnt[15]_i_1/O
+                         net (fo=16, routed)          0.371    20.662    u_lif/u_divider_n_52
+    SLICE_X36Y32         FDRE                                         r  u_lif/refr_cnt_reg[4]/CE
   -------------------------------------------------------------------    -------------------
 
                          (clock gclk rise edge)      10.000    10.000 r  
@@ -117,16 +135,16 @@ Slack (MET) :             0.341ns  (required time - arrival time)
     N15                  IBUF (Prop_ibuf_I_O)         1.370    11.370 r  clk_100mhz_IBUF_inst/O
                          net (fo=1, routed)           1.868    13.238    clk_100mhz_IBUF
     BUFGCTRL_X0Y0        BUFG (Prop_bufg_I_O)         0.091    13.329 r  clk_100mhz_IBUF_BUFG_inst/O
-                         net (fo=240, routed)         1.440    14.770    u_lif/u_divider/clk_100mhz_IBUF_BUFG
-    SLICE_X32Y36         FDRE                                         r  u_lif/u_divider/p_reg[28]/C
-                         clock pessimism              0.187    14.956    
-                         clock uncertainty           -0.035    14.921    
-    SLICE_X32Y36         FDRE (Setup_fdre_C_D)        0.062    14.983    u_lif/u_divider/p_reg[28]
+                         net (fo=290, routed)         1.437    14.767    u_lif/CLK
+    SLICE_X36Y32         FDRE                                         r  u_lif/refr_cnt_reg[4]/C
+                         clock pessimism              0.259    15.025    
+                         clock uncertainty           -0.035    14.990    
+    SLICE_X36Y32         FDRE (Setup_fdre_C_CE)      -0.205    14.785    u_lif/refr_cnt_reg[4]
   -------------------------------------------------------------------
-                         required time                         14.983    
-                         arrival time                         -14.641    
+                         required time                         14.785    
+                         arrival time                         -20.662    
   -------------------------------------------------------------------
-                         slack                                  0.341    
+                         slack                                 -5.877    
 
 
 

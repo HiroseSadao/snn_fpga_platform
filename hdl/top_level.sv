@@ -54,6 +54,8 @@ module top_level(
     logic done;
     logic [9:0] spike_count;
     logic spike_pulse;
+    logic signed [31:0] theta_dbg;
+    logic signed [31:0] vthr_dbg;
 
     lif u_lif(
         .clk         (clk_100mhz),
@@ -62,7 +64,9 @@ module top_level(
         .spike_count (spike_count),
         .spike_pulse (spike_pulse),
         .running     (running),
-        .done        (done)
+        .done        (done),
+        .theta_out   (theta_dbg),
+        .vthr_out    (vthr_dbg)
     );
 
     // -----------------------------
