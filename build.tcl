@@ -67,9 +67,14 @@ place_design
 report_clock_utilization -file $outputDir/clock_util.rpt
 
 #get timing violations and run optimizations if needed
-if {[get_property SLACK [get_timing_paths -max_paths 1 -nworst 1 -setup]] < 0} {
- puts "Found setup timing violations => running physical optimization"
- phys_opt_design
+set worst_path [get_timing_paths -max_paths 1 -nworst 1 -setup]
+if {[llength $worst_path] > 0} {
+    if {[get_property SLACK $worst_path] < 0} {
+        puts "Found setup timing violations => running physical optimization"
+        phys_opt_design
+    }
+} else {
+    puts "WARNING: No timing paths found for setup analysis; skipping phys_opt_design check."
 }
 #write_checkpoint -force $outputDir/post_place.dcp
 report_utilization -file $outputDir/post_place_util.rpt
