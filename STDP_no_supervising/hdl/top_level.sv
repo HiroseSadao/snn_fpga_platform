@@ -25,7 +25,13 @@ module top_level(
     // -----------------------------
     // Clocks and reset
     // -----------------------------
-    wire reset = btn[0];
+    logic stop_latched;
+    always_ff @(posedge clk_100mhz) begin
+        if (btn[0]) begin
+            stop_latched <= 1'b1;
+        end
+    end
+    wire reset = stop_latched;
 
     // 25 MHz clock from 100 MHz input (divide by 4)
     logic [1:0] clk_div;
@@ -125,15 +131,17 @@ module top_level(
     // led[15]    = card present (active low)
     always_comb begin
         led = 16'b0;
-        led[7:0]   = first_bytes[sw[3:0]];
-        led[8]     = (first_bytes[0] == 8'h53); // 'S'
-        led[9]     = (first_bytes[1] == 8'h50); // 'P'
-        led[10]    = (first_bytes[2] == 8'h4B); // 'K'
-        led[11]    = (first_bytes[3] == 8'h31); // '1'
-        led[12]    = ready;
-        led[13]    = byte_available;
-        led[14]    = in_read;
-        led[15]    = ~SD_CD_N;
+        if (!stop_latched) begin
+            led[7:0]   = first_bytes[sw[3:0]];
+            led[8]     = (first_bytes[0] == 8'h53); // 'S'
+            led[9]     = (first_bytes[1] == 8'h50); // 'P'
+            led[10]    = (first_bytes[2] == 8'h4B); // 'K'
+            led[11]    = (first_bytes[3] == 8'h31); // '1'
+            led[12]    = ready;
+            led[13]    = byte_available;
+            led[14]    = in_read;
+            led[15]    = ~SD_CD_N;
+        end
     end
 
     // Keep unused outputs quiet
