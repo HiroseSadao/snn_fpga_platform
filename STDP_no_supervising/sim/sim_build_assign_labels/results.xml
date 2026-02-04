@@ -1,0 +1,6 @@
+<testsuites name="results">
+  <testsuite name="all" package="all">
+    <property name="random_seed" value="1770172715" />
+    <testcase name="assign_labels_basic_test" classname="assign_labels_test" file="C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\STDP_no_supervising\sim\assign_labels_test.py" lineno="47" time="55.09440875053406" sim_time_ns="5766160.001" ratio_time="104659.62212443392" />
+  </testsuite>
+</testsuites>
