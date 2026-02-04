@@ -89,27 +89,70 @@ def write_spike_file(
     return out_path, labels, n_time
 
 
-def write_raw_to_physical_drive(bin_path, physical_drive_number, lba_start=2048):
+def write_raw_to_physical_drive(
+    bin_path,
+    physical_drive_number,
+    lba_start=2048,
+    chunk_size=64 * 1024,
+    log_interval_bytes=64 * 1024 * 1024,
+):
     bin_path = Path(bin_path)
-    data = bin_path.read_bytes()
-
-    if len(data) % 512 != 0:
-        pad_len = 512 - (len(data) % 512)
-        data += b"\x00" * pad_len
+    total_size = bin_path.stat().st_size
 
     device_path = rf"\\.\PhysicalDrive{physical_drive_number}"
     byte_offset = lba_start * 512
 
-    with open(device_path, "r+b") as f:
-        f.seek(byte_offset)
-        f.write(data)
+    total_written = 0
+    chunk_index = 0
+    next_log = log_interval_bytes if log_interval_bytes > 0 else None
+    print(
+        f"Writing {total_size} bytes to {device_path} at byte offset {byte_offset} "
+        f"(chunk_size={chunk_size})"
+    )
+    with open(bin_path, "rb") as src, open(device_path, "r+b") as dst:
+        dst.seek(byte_offset)
+        while True:
+            chunk = src.read(chunk_size)
+            if not chunk:
+                break
+            remaining = total_size - total_written
+            if remaining <= len(chunk) and (len(chunk) % 512) != 0:
+                pad_len = 512 - (len(chunk) % 512)
+                chunk += b"\x00" * pad_len
+            try:
+                dst.write(chunk)
+            except OSError as exc:
+                current_offset = byte_offset + total_written
+                print(
+                    "Write failed.",
+                    f"errno={getattr(exc, 'errno', None)}",
+                    f"chunk_index={chunk_index}",
+                    f"chunk_size={len(chunk)}",
+                    f"total_written={total_written}",
+                    f"byte_offset={current_offset}",
+                    sep=" ",
+                )
+                raise
+            total_written += len(chunk)
+            chunk_index += 1
+            if next_log is not None and total_written >= next_log:
+                print(f"Wrote {total_written} / {total_size} bytes...")
+                next_log += log_interval_bytes
 
-    return len(data), byte_offset
+        if total_written % 512 != 0:
+            pad_len = 512 - (total_written % 512)
+            dst.write(b"\x00" * pad_len)
+            total_written += pad_len
+            print(f"Padded {pad_len} bytes to 512-byte boundary.")
+
+        dst.flush()
+
+    return total_written, byte_offset
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="MNIST spike generator and SD writer")
-    parser.add_argument("--num-images", type=int, default=4)
+    parser.add_argument("--num-images", type=int, default=10000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--dt", type=float, default=0.001)
     parser.add_argument("--t-inj", type=float, default=0.35)
@@ -147,7 +190,7 @@ if __name__ == "__main__":
         dt=dt,
         t_inj=t_inj,
     )
-    print(f"Wrote {out_path} (labels={labels.tolist()}, n_time={n_time})")
+    print(f"Wrote {out_path} (labels={labels[:10].tolist()}, n_time={n_time})")
 
     if args.write_raw:
         total_bytes, offset = write_raw_to_physical_drive(
