@@ -71,74 +71,183 @@ module top_level(
     assign SD_DQ2 = 1'b1;
 
     // -----------------------------
-    // Simple read of sector 2048 (LBA2048)
+    // Streamed read of SPK1 file from SD (starting at LBA 2048)
     // -----------------------------
     localparam int SECTOR_BYTES = 512;
-    logic [8:0]  byte_count;
-    logic [7:0]  last_byte;
-    logic [7:0]  first_bytes [0:15];
-    logic        in_read;
+    localparam int LBA_START    = 32'd2048;
+    localparam int HEADER_BYTES = 20;
 
+    logic [8:0]  byte_count;
+    logic        in_read;
+    logic [31:0] sector_addr;
+    logic [31:0] file_byte_index;
+
+    // Header parsing
+    logic [7:0]  header_bytes [0:19];
+    logic [31:0] version_u32;
+    logic [31:0] num_images_u32;
+    logic [31:0] n_time_u32;
+    logic [31:0] n_neurons_u32;
+    logic        header_done;
+    logic        header_ok;
+
+    // Labels
+    logic [31:0] label_index;
+    logic [7:0]  last_label;
+
+    // Spike stream counters
+    logic [31:0] sample_idx;
+    logic [31:0] time_idx;
+    logic [15:0] neuron_idx;
+    logic        spike_valid;
+    logic        spike_value;
+    logic        streaming;
+
+    typedef enum logic [2:0] {
+        S_IDLE,
+        S_START_READ,
+        S_READ_BYTES,
+        S_DONE
+    } stream_state_e;
+    stream_state_e stream_state;
+
+    // read control + parsing
     always_ff @(posedge clk_25mhz) begin
         if (reset) begin
-            rd         <= 1'b0;
-            wr         <= 1'b0;
-            address    <= 32'd2048;
-            byte_count <= 9'd0;
-            last_byte  <= 8'd0;
-            in_read    <= 1'b0;
+            rd              <= 1'b0;
+            wr              <= 1'b0;
+            address         <= LBA_START;
+            sector_addr     <= LBA_START;
+            byte_count      <= 9'd0;
+            in_read         <= 1'b0;
+            file_byte_index <= 32'd0;
+
+            header_done     <= 1'b0;
+            header_ok       <= 1'b0;
+            version_u32     <= 32'd0;
+            num_images_u32  <= 32'd0;
+            n_time_u32      <= 32'd0;
+            n_neurons_u32   <= 32'd0;
+            label_index     <= 32'd0;
+            last_label      <= 8'd0;
+
+            sample_idx      <= 32'd0;
+            time_idx        <= 32'd0;
+            neuron_idx      <= 16'd0;
+            spike_valid     <= 1'b0;
+            spike_value     <= 1'b0;
+            streaming       <= 1'b0;
+
+            stream_state    <= S_IDLE;
         end else begin
-            rd <= 1'b0; // default: pulse
+            rd          <= 1'b0;
+            spike_valid <= 1'b0;
 
-            if (!in_read && ready && (SD_CD_N == 1'b0)) begin
-                // start a single-block read at address 0
-                rd      <= 1'b1;
-                in_read <= 1'b1;
-                byte_count <= 9'd0;
-            end
+            case (stream_state)
+                S_IDLE: begin
+                    if (ready && (SD_CD_N == 1'b0)) begin
+                        stream_state <= S_START_READ;
+                    end
+                end
 
-            if (byte_available) begin
-                last_byte <= dout;
-                if (byte_count < 16) begin
-                    first_bytes[byte_count] <= dout;
+                S_START_READ: begin
+                    if (!in_read && ready) begin
+                        address   <= sector_addr;
+                        rd        <= 1'b1;
+                        in_read   <= 1'b1;
+                        byte_count <= 9'd0;
+                        stream_state <= S_READ_BYTES;
+                    end
                 end
-                if (byte_count == SECTOR_BYTES - 1) begin
-                    in_read <= 1'b0; // done
-                end else begin
-                    byte_count <= byte_count + 1'b1;
+
+                S_READ_BYTES: begin
+                    if (byte_available) begin
+                        // Capture header
+                        if (!header_done) begin
+                            header_bytes[file_byte_index] <= dout;
+                            if (file_byte_index == 32'd19) begin
+                                // parse header (little-endian), use current dout for byte[19]
+                                version_u32    <= {header_bytes[7],  header_bytes[6],  header_bytes[5],  header_bytes[4]};
+                                num_images_u32 <= {header_bytes[11], header_bytes[10], header_bytes[9],  header_bytes[8]};
+                                n_time_u32     <= {header_bytes[15], header_bytes[14], header_bytes[13], header_bytes[12]};
+                                n_neurons_u32  <= {dout, header_bytes[18], header_bytes[17], header_bytes[16]};
+                                header_ok      <= (header_bytes[0] == 8'h53) && (header_bytes[1] == 8'h50) &&
+                                                  (header_bytes[2] == 8'h4B) && (header_bytes[3] == 8'h31);
+                                header_done    <= 1'b1;
+                            end
+                        end else if (file_byte_index < (HEADER_BYTES + num_images_u32)) begin
+                            // Labels area
+                            last_label  <= dout;
+                            label_index <= label_index + 1'b1;
+                        end else if (streaming) begin
+                            // Spikes area (one byte per neuron per time step)
+                            spike_valid <= 1'b1;
+                            spike_value <= (dout != 8'd0);
+
+                            if (neuron_idx == (n_neurons_u32[15:0] - 1'b1)) begin
+                                neuron_idx <= 16'd0;
+                                if (time_idx + 1 >= n_time_u32) begin
+                                    time_idx <= 32'd0;
+                                    sample_idx <= sample_idx + 1'b1;
+                                end else begin
+                                    time_idx <= time_idx + 1'b1;
+                                end
+                            end else begin
+                                neuron_idx <= neuron_idx + 1'b1;
+                            end
+                        end
+
+                        // advance file byte index
+                        file_byte_index <= file_byte_index + 1'b1;
+
+                        // enter streaming after header+labels
+                        if (header_done && !streaming &&
+                            (file_byte_index + 1 >= (HEADER_BYTES + num_images_u32))) begin
+                            streaming  <= 1'b1;
+                            sample_idx <= 32'd0;
+                            time_idx   <= 32'd0;
+                            neuron_idx <= 16'd0;
+                        end
+
+                        if (byte_count == SECTOR_BYTES - 1) begin
+                            in_read    <= 1'b0;
+                            sector_addr <= sector_addr + 1'b1;
+                            stream_state <= (sample_idx >= num_images_u32) ? S_DONE : S_START_READ;
+                        end else begin
+                            byte_count <= byte_count + 1'b1;
+                        end
+                    end
                 end
-            end
+
+                S_DONE: begin
+                    streaming <= 1'b0;
+                end
+            endcase
         end
     end
 
     // -----------------------------
     // Debug outputs
     // -----------------------------
-    // led[7:0]   = selected byte from first 16 bytes (sw[3:0])
-    // led[8]     = header match 'S'
-    // led[9]     = header match 'P'
-    // led[10]    = header match 'K'
-    // led[11]    = header match '1'
-    // led[12]    = ready
-    // led[13]    = byte_available
-    // led[14]    = in_read
-    // led[15]    = card present (active low)
+    // led[0]  = spike_valid
+    // led[1]  = spike_value
+    // led[2]  = header_ok
+    // led[3]  = streaming
+    // led[7:4]= stream_state
+    // led[15:8]= byte_count (within sector)
     always_comb begin
         led = 16'b0;
-        led[7:0]   = first_bytes[sw[3:0]];
-        led[8]     = (first_bytes[0] == 8'h53); // 'S'
-        led[9]     = (first_bytes[1] == 8'h50); // 'P'
-        led[10]    = (first_bytes[2] == 8'h4B); // 'K'
-        led[11]    = (first_bytes[3] == 8'h31); // '1'
-        led[12]    = ready;
-        led[13]    = byte_available;
-        led[14]    = in_read;
-        led[15]    = ~SD_CD_N;
+        led[0]    = spike_valid;
+        led[1]    = spike_value;
+        led[2]    = header_ok;
+        led[3]    = streaming;
+        led[7:4]  = stream_state;
+        led[15:8] = byte_count;
     end
 
-    // Keep unused outputs quiet
-    assign rgb0  = 3'b0;
-    assign rgb1  = 3'b0;
+    // Debug color: show label low bits once labels start
+    assign rgb0  = last_label[2:0];
+    assign rgb1  = {2'b0, header_ok};
     assign ss0_an = 4'hF;
     assign ss1_an = 4'hF;
     assign ss0_c  = 7'h7F;
