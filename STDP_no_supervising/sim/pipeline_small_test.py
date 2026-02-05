@@ -8,6 +8,261 @@ from cocotb.triggers import RisingEdge, ClockCycles
 
 CLK_PERIOD_NS = 10  # 100 MHz
 MAX_WAIT_CYCLES = 5000
+FP_SHIFT = 16
+FP_SCALE = 1 << FP_SHIFT
+
+# Match pipeline_small.sv defaults
+N_IN = 4
+N_NEURONS = 4
+UPDATE_NT = 8
+
+# Network params
+TD_IN_STEPS = 1
+TD_EXC_STEPS = 1
+TD_INH_STEPS = 2
+TD_X_STEPS = 20
+DELAY_IN_STEPS = 5
+DELAY_E2I_STEPS = 2
+
+WEXC_FP = 147456
+WINH_FP = 57344
+
+WMIN_FP = 0
+WMAX_FP = 3277
+LR_P_FP = 655
+LR_M_FP = 7
+NORM_FP = 6554
+DW_CLIP_FP = 66
+
+EXC_VREST = -65
+EXC_VRESET = -65
+EXC_INIT_VTHR = -52
+EXC_VPEAK = 20
+EXC_TAU_M = 100
+EXC_REFRACT = 5
+EXC_TC_THETA = 10000000
+EXC_THETA_MAX = 35
+EXC_THETA_PLUS_FP = 3277
+EXC_E_EXC = 0
+EXC_E_INH = -100
+
+INH_VREST = -60
+INH_VRESET = -45
+INH_VTHR = -40
+INH_VPEAK = 20
+INH_TAU_M = 10
+INH_REFRACT = 2
+INH_E_EXC = 0
+INH_E_INH = -85
+
+
+def fp_mul(a, b):
+    return (a * b) >> FP_SHIFT
+
+
+def fp_div_round(a, div):
+    if a >= 0:
+        return (a + (div >> 1)) // div
+    return (a - (div >> 1)) // div
+
+
+class RefModel:
+    def __init__(self):
+        self.r_in = [0] * N_IN
+        self.x_in = [0] * N_IN
+        self.r_exc = [0] * N_NEURONS
+        self.r_inh = [0] * N_NEURONS
+        self.x_exc = [0] * N_NEURONS
+        self.v_exc = [EXC_VRESET * FP_SCALE] * N_NEURONS
+        self.theta = [0] * N_NEURONS
+        self.vthr = [EXC_INIT_VTHR * FP_SCALE] * N_NEURONS
+        self.refr_exc = [0] * N_NEURONS
+        self.v_inh = [INH_VRESET * FP_SCALE] * N_NEURONS
+        self.refr_inh = [0] * N_NEURONS
+        self.g_inh_state = [0] * N_NEURONS
+        self.W_in = [[66 for _ in range(N_IN)] for _ in range(N_NEURONS)]
+        self.delay_in = [[0 for _ in range(N_NEURONS)] for _ in range(DELAY_IN_STEPS)]
+        self.delay_e2i = [[0 for _ in range(N_NEURONS)] for _ in range(DELAY_E2I_STEPS)]
+        self.s_in_hist = [[0 for _ in range(N_IN)] for _ in range(UPDATE_NT)]
+        self.s_exc_hist = [[0 for _ in range(N_NEURONS)] for _ in range(UPDATE_NT)]
+        self.x_in_hist = [[[0 for _ in range(N_IN)] for _ in range(UPDATE_NT)]][0]
+        self.x_exc_hist = [[[0 for _ in range(N_NEURONS)] for _ in range(UPDATE_NT)]][0]
+        self.tcount = 0
+
+    def step(self, s_in_bits, stdp_en):
+        s_in = [(s_in_bits >> i) & 1 for i in range(N_IN)]
+
+        # input synapse + trace
+        r_in_next = []
+        x_in_next = []
+        for i in range(N_IN):
+            r = self.r_in[i] - fp_div_round(self.r_in[i], TD_IN_STEPS) + (FP_SCALE // TD_IN_STEPS) * s_in[i]
+            x = self.x_in[i] - fp_div_round(self.x_in[i], TD_X_STEPS) + (FP_SCALE // TD_X_STEPS) * s_in[i]
+            r_in_next.append(r)
+            x_in_next.append(x)
+
+        # g_in = W * c_in
+        g_in = []
+        for i in range(N_NEURONS):
+            acc = 0
+            for j in range(N_IN):
+                acc += self.W_in[i][j] * r_in_next[j]
+            g_in.append(acc >> FP_SHIFT)
+
+        # delays
+        g_in_delayed = [self.delay_in[-1][i] for i in range(N_NEURONS)]
+        g_exc_delayed = [self.delay_e2i[-1][i] for i in range(N_NEURONS)]
+
+        # exc LIF
+        s_exc_next = [0] * N_NEURONS
+        v_exc_next = [0] * N_NEURONS
+        theta_next = [0] * N_NEURONS
+        vthr_next = [0] * N_NEURONS
+        refr_exc_next = [0] * N_NEURONS
+        for i in range(N_NEURONS):
+            i_syn_exc = fp_mul(g_in_delayed[i], (EXC_E_EXC * FP_SCALE) - self.v_exc[i])
+            i_syn_inh = fp_mul(self.g_inh_state[i], (EXC_E_INH * FP_SCALE) - self.v_exc[i])
+            num = (EXC_VREST * FP_SCALE) - self.v_exc[i] + i_syn_exc + i_syn_inh
+            dv = fp_div_round(num, EXC_TAU_M)
+            v_next = self.v_exc[i] + dv
+
+            if self.refr_exc[i] != 0:
+                refr_exc_next[i] = self.refr_exc[i] - 1
+                v_exc_next[i] = EXC_VRESET * FP_SCALE
+                theta_tmp = self.theta[i] - fp_div_round(self.theta[i], EXC_TC_THETA)
+                s_exc_next[i] = 0
+            else:
+                if v_next >= self.vthr[i]:
+                    s_exc_next[i] = 1
+                    v_exc_next[i] = EXC_VRESET * FP_SCALE
+                    refr_exc_next[i] = EXC_REFRACT
+                    theta_tmp = self.theta[i] - fp_div_round(self.theta[i], EXC_TC_THETA) + EXC_THETA_PLUS_FP
+                else:
+                    s_exc_next[i] = 0
+                    v_exc_next[i] = v_next
+                    refr_exc_next[i] = 0
+                    theta_tmp = self.theta[i] - fp_div_round(self.theta[i], EXC_TC_THETA)
+
+            if theta_tmp < 0:
+                theta_tmp = 0
+            if theta_tmp > (EXC_THETA_MAX * FP_SCALE):
+                theta_tmp = EXC_THETA_MAX * FP_SCALE
+            theta_next[i] = theta_tmp
+            vthr_next[i] = (EXC_INIT_VTHR * FP_SCALE) + theta_tmp
+
+        # exc synapse + trace
+        r_exc_next = []
+        x_exc_next = []
+        g_exc = []
+        for i in range(N_NEURONS):
+            r = self.r_exc[i] - fp_div_round(self.r_exc[i], TD_EXC_STEPS) + (FP_SCALE // TD_EXC_STEPS) * s_exc_next[i]
+            x = self.x_exc[i] - fp_div_round(self.x_exc[i], TD_X_STEPS) + (FP_SCALE // TD_X_STEPS) * s_exc_next[i]
+            r_exc_next.append(r)
+            x_exc_next.append(x)
+            g_exc.append(fp_mul(WEXC_FP, r))
+
+        # inh LIF
+        s_inh_next = [0] * N_NEURONS
+        v_inh_next = [0] * N_NEURONS
+        refr_inh_next = [0] * N_NEURONS
+        for i in range(N_NEURONS):
+            i_syn_exc_i = fp_mul(g_exc_delayed[i], (INH_E_EXC * FP_SCALE) - self.v_inh[i])
+            num_i = (INH_VREST * FP_SCALE) - self.v_inh[i] + i_syn_exc_i
+            dv_i = fp_div_round(num_i, INH_TAU_M)
+            v_next_i = self.v_inh[i] + dv_i
+
+            if self.refr_inh[i] != 0:
+                refr_inh_next[i] = self.refr_inh[i] - 1
+                v_inh_next[i] = INH_VRESET * FP_SCALE
+                s_inh_next[i] = 0
+            else:
+                if v_next_i >= (INH_VTHR * FP_SCALE):
+                    s_inh_next[i] = 1
+                    v_inh_next[i] = INH_VRESET * FP_SCALE
+                    refr_inh_next[i] = INH_REFRACT
+                else:
+                    s_inh_next[i] = 0
+                    v_inh_next[i] = v_next_i
+                    refr_inh_next[i] = 0
+
+        # inh synapse + g_inh
+        r_inh_next = []
+        for i in range(N_NEURONS):
+            r = self.r_inh[i] - fp_div_round(self.r_inh[i], TD_INH_STEPS) + (FP_SCALE // TD_INH_STEPS) * s_inh_next[i]
+            r_inh_next.append(r)
+        g_inh_next = []
+        for i in range(N_NEURONS):
+            acc = 0
+            for j in range(N_NEURONS):
+                if j != i:
+                    acc += r_inh_next[j]
+            if N_NEURONS > 1:
+                g_inh_next.append(fp_mul(fp_div_round(WINH_FP, (N_NEURONS - 1)), acc))
+            else:
+                g_inh_next.append(0)
+
+        # update delays
+        self.delay_in = [g_in] + self.delay_in[:-1]
+        self.delay_e2i = [g_exc] + self.delay_e2i[:-1]
+
+        # STDP buffers + update
+        if stdp_en:
+            self.s_in_hist[self.tcount] = s_in
+            self.s_exc_hist[self.tcount] = s_exc_next
+            self.x_in_hist[self.tcount] = list(x_in_next)
+            self.x_exc_hist[self.tcount] = list(x_exc_next)
+
+            if self.tcount == UPDATE_NT - 1:
+                for i in range(N_NEURONS):
+                    sum_abs = sum(abs(w) for w in self.W_in[i])
+                    if sum_abs == 0:
+                        sum_abs = 1
+                    for j in range(N_IN):
+                        sum1 = 0
+                        sum2 = 0
+                        for t in range(UPDATE_NT):
+                            if self.s_exc_hist[t][i]:
+                                sum1 += self.x_in_hist[t][j]
+                            if self.s_in_hist[t][j]:
+                                sum2 += self.x_exc_hist[t][i]
+                        Wn = fp_mul(self.W_in[i][j], fp_div_round(NORM_FP, sum_abs))
+                        dW = fp_div_round(
+                            fp_mul(fp_mul((WMAX_FP - Wn), sum1), LR_P_FP)
+                            - fp_mul(fp_mul(Wn, sum2), LR_M_FP),
+                            UPDATE_NT,
+                        )
+                        if dW > DW_CLIP_FP:
+                            dW = DW_CLIP_FP
+                        if dW < -DW_CLIP_FP:
+                            dW = -DW_CLIP_FP
+                        W_new = Wn + dW
+                        if W_new < WMIN_FP:
+                            W_new = WMIN_FP
+                        if W_new > WMAX_FP:
+                            W_new = WMAX_FP
+                        self.W_in[i][j] = W_new
+                self.tcount = 0
+            else:
+                self.tcount += 1
+
+        # commit state
+        self.r_in = r_in_next
+        self.x_in = x_in_next
+        self.r_exc = r_exc_next
+        self.x_exc = x_exc_next
+        self.r_inh = r_inh_next
+        self.v_exc = v_exc_next
+        self.theta = theta_next
+        self.vthr = vthr_next
+        self.refr_exc = refr_exc_next
+        self.v_inh = v_inh_next
+        self.refr_inh = refr_inh_next
+        self.g_inh_state = g_inh_next
+
+        s_exc_bits = 0
+        for i in range(N_NEURONS):
+            s_exc_bits |= (s_exc_next[i] & 1) << i
+        return s_exc_bits
 
 
 def required_signals_present(dut):
@@ -17,9 +272,11 @@ def required_signals_present(dut):
         "s_tvalid",
         "s_tready",
         "s_tdata",
+        "s_stdp_en",
         "m_tvalid",
         "m_tready",
         "m_tdata",
+        "w_flat",
     ]
     return all(hasattr(dut, name) for name in names)
 
@@ -28,15 +285,17 @@ async def reset_dut(dut):
     dut.rst.value = 1
     dut.s_tvalid.value = 0
     dut.s_tdata.value = 0
+    dut.s_stdp_en.value = 0
     dut.m_tready.value = 1
     await ClockCycles(dut.clk, 2)
     dut.rst.value = 0
     await ClockCycles(dut.clk, 2)
 
 
-async def send_packet(dut, tstep_id, spike):
-    dut.s_tdata.value = (int(tstep_id) << 1) | int(spike)
+async def send_packet(dut, tstep_id, spikes_bits, stdp_en=1):
+    dut.s_tdata.value = (int(tstep_id) << len(spikes_bits)) | int(spikes_bits, 2)
     dut.s_tvalid.value = 1
+    dut.s_stdp_en.value = stdp_en
     for cycle in range(MAX_WAIT_CYCLES):
         await RisingEdge(dut.clk)
         if int(dut.s_tready.value) == 1:
@@ -60,11 +319,12 @@ async def recv_packet(dut):
         await RisingEdge(dut.clk)
         if int(dut.m_tvalid.value) == 1 and int(dut.m_tready.value) == 1:
             data = int(dut.m_tdata.value)
-            tstep_id = data >> 1
-            spike = data & 0x1
+            # lower bits are s_exc vector, upper bits are tstep_id
+            tstep_id = data >> N_NEURONS
+            s_exc_bits = data & ((1 << N_NEURONS) - 1)
             if cycle > 0:
                 dut._log.info(f"m_tvalid&ready after {cycle} cycles (tstep_id={tstep_id})")
-            return tstep_id, spike
+            return tstep_id, s_exc_bits
         if cycle % 200 == 0:
             dut._log.info(
                 f"waiting m_tvalid... cycle={cycle} s_tvalid={int(dut.s_tvalid.value)} "
@@ -84,14 +344,14 @@ async def pipeline_small_basic_handshake(dut):
     await reset_dut(dut)
 
     expected_ids = [0, 1, 2, 3, 4]
-    spikes = [1, 0, 1, 1, 0]
+    spikes = ["0001", "0010", "0100", "1000", "1111"]
 
     # Bufferless assumption: keep ready high and receive per send
     dut.m_tready.value = 1
 
     got_ids = []
     for tstep_id, spike in zip(expected_ids, spikes):
-        await send_packet(dut, tstep_id, spike)
+        await send_packet(dut, tstep_id, spike, stdp_en=1)
         out_id, _ = await recv_packet(dut)
         got_ids.append(out_id)
 
@@ -121,11 +381,58 @@ async def pipeline_small_backpressure(dut):
     expected_ids = [10, 11, 12]
     got_ids = []
     for tstep_id in expected_ids:
-        await send_packet(dut, tstep_id, 1)
+        await send_packet(dut, tstep_id, "0001", stdp_en=1)
         out_id, _ = await recv_packet(dut)
         got_ids.append(out_id)
 
     assert got_ids == expected_ids, f"backpressure tstep_id mismatch: exp={expected_ids} got={got_ids}"
+
+
+@cocotb.test()
+async def pipeline_small_reference_model(dut):
+    if not required_signals_present(dut):
+        dut._log.info("Skipping: DUT missing required AXI-stream ports.")
+        return
+
+    cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, units="ns").start())
+    await reset_dut(dut)
+
+    model = RefModel()
+    dut.m_tready.value = 1
+
+    # Fixed stimulus sequence
+    patterns = [
+        "0001",
+        "0010",
+        "0100",
+        "1000",
+        "1111",
+        "0110",
+        "0000",
+        "1010",
+    ]
+
+    for step_idx, bits in enumerate(patterns):
+        await send_packet(dut, step_idx, bits, stdp_en=1)
+        out_id, s_exc_bits = await recv_packet(dut)
+        ref_bits = model.step(int(bits, 2), stdp_en=1)
+        assert out_id == step_idx, f"tstep_id mismatch at {step_idx}"
+        assert s_exc_bits == ref_bits, f"s_exc mismatch at {step_idx}: exp={ref_bits:0{N_NEURONS}b} got={s_exc_bits:0{N_NEURONS}b}"
+
+    # Check STDP weights after UPDATE_NT steps (if we reached it)
+    if len(patterns) >= UPDATE_NT:
+        w_flat = int(dut.w_flat.value)
+        for i in range(N_NEURONS):
+            for j in range(N_IN):
+                idx = (i * N_IN + j) * 32
+                mask = (1 << 32) - 1
+                raw = (w_flat >> idx) & mask
+                if raw & (1 << 31):
+                    dut_w = raw - (1 << 32)
+                else:
+                    dut_w = raw
+                ref_w = model.W_in[i][j]
+                assert dut_w == ref_w, f"W_in mismatch [{i}][{j}]: exp={ref_w} got={dut_w}"
 
 
 def pipeline_small_runner():
