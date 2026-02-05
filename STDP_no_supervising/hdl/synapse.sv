@@ -11,12 +11,12 @@ module synapse(
     // -----------------------------
     // Single exponential synapse (S16.16)
     // r = r*(1 - dt/td) + spike/td
-    // Use dt=1 step, td=50 steps (matches dt=1e-4, td=5e-3 ratio)
+    // LIF_WTA_STDP_MNIST.py uses dt=1e-3, td=1e-3 for input/exc synapses
     // -----------------------------
     localparam int FP_SHIFT = 16;
     localparam int FP_SCALE = (1 << FP_SHIFT);
 
-    localparam int TD_STEPS = 50;
+    localparam int TD_STEPS = 1;
     localparam int TD_HALF  = TD_STEPS / 2;
     localparam int SPIKE_ADD = FP_SCALE / TD_STEPS; // 1/td in S16.16 (rounded by integer div)
 

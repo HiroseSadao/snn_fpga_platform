@@ -4,10 +4,13 @@ module lif(
         input  wire        clk,
         input  wire        start,     // pulse to reset and start
         input  wire        tick,      // LIF step tick
+        input  wire signed [31:0] g_exc, // S16.16
+        input  wire signed [31:0] g_inh, // S16.16
         output logic [9:0] spike_count,
         output logic       spike_pulse,
         output logic       running,
         output logic       done,
+        output logic       step_done,
         output logic signed [31:0] theta_out,
         output logic signed [31:0] vthr_out
     );
@@ -22,23 +25,22 @@ module lif(
     localparam int V_RESET  = -65;
     localparam int INIT_VTHR = -52;
     localparam int V_PEAK   =  20;
-    // Keep parameter ratios consistent with the original Python model:
-    // tau_m / dt = 0.01 / 0.00005 = 200 steps
-    // tref  / dt = 0.002 / 0.00005 = 40 steps
-    localparam int TAU_M    =  200;   // steps (ratio preserved)
-    localparam int REFRACT  =  40;    // steps (ratio preserved)
-    localparam int TC_THETA =  10000; // steps (ratio preserved)
+    // Keep parameter ratios consistent with LIF_WTA_STDP_MNIST.py (dt=1e-3):
+    // tau_m / dt = 0.1 / 0.001 = 100 steps
+    // tref  / dt = 0.005 / 0.001 = 5 steps
+    // tc_theta / dt = 1e4 / 1e-3 = 10,000,000 steps
+    localparam int TAU_M    =  100;       // steps
+    localparam int REFRACT  =  5;         // steps
+    localparam int TC_THETA =  10000000;  // steps
     localparam int THETA_MAX = 35;
     localparam int TAU_M_HALF = TAU_M / 2;
     localparam int TC_THETA_HALF = TC_THETA / 2;
 
-    // Synapse params (fixed g_exc/g_inh)
+    // Synapse params (from inputs)
     localparam int E_EXC    =   0;
     localparam int E_INH    = -100;
     localparam int THETA_PLUS_FP = 3277; // 0.05 in S16.16
     // g_exc chosen to approximate constant input of 21 at v=-65: 21/65 ≈ 0.3230769
-    localparam int G_EXC_FP = 21134; // 0.3230769 in S16.16
-    localparam int G_INH_FP = 0;
 
     localparam int V_REST_FP   = V_REST   * FP_SCALE;
     localparam int V_RESET_FP  = V_RESET  * FP_SCALE;
@@ -80,8 +82,8 @@ module lif(
     logic signed [31:0] theta_next;
 
     always_comb begin
-        mul_tmp_exc = $signed(G_EXC_FP) * $signed(E_EXC_FP - v_mem);
-        mul_tmp_inh = $signed(G_INH_FP) * $signed(E_INH_FP - v_mem);
+        mul_tmp_exc = $signed(g_exc) * $signed(E_EXC_FP - v_mem);
+        mul_tmp_inh = $signed(g_inh) * $signed(E_INH_FP - v_mem);
         i_syn_exc = $signed(mul_tmp_exc >>> FP_SHIFT);
         i_syn_inh = $signed(mul_tmp_inh >>> FP_SHIFT);
 
@@ -126,6 +128,7 @@ module lif(
             v_mem        <= V_RESET_FP;
             refr_cnt     <= '0;
             spike_pulse  <= 1'b0;
+            step_done    <= 1'b0;
             lif_state    <= LIF_IDLE;
             div_dividend <= '0;
             div_divisor  <= '0;
@@ -136,6 +139,7 @@ module lif(
         end else begin
             div_valid_in <= 1'b0;
             spike_pulse  <= 1'b0;
+            step_done    <= 1'b0;
 
             case (lif_state)
                 LIF_IDLE: begin
@@ -186,6 +190,7 @@ module lif(
                     if (div_valid_out) begin
                         theta_reg <= theta_next;
                         vthr_reg <= $signed(INIT_VTHR_FP + theta_next);
+                        step_done <= 1'b1;
                         lif_state <= LIF_IDLE;
                     end
                 end
