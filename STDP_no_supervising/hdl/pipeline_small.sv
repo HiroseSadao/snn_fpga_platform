@@ -6,7 +6,8 @@ module pipeline_small #(
         parameter int N_NEURONS = 100,
         parameter int UPDATE_NT = 350,
         parameter int NEURON_W = (N_NEURONS <= 1) ? 1 : $clog2(N_NEURONS),
-        parameter int IN_W = (N_IN <= 1) ? 1 : $clog2(N_IN)
+        parameter int IN_W = (N_IN <= 1) ? 1 : $clog2(N_IN),
+        parameter bit W_INIT_FROM_FILE = 0
     )(
         input  wire                         clk,
         input  wire                         rst, // synchronous reset
@@ -120,6 +121,13 @@ module pipeline_small #(
 
     // Per-neuron abs weight sum (for normalization)
     logic signed [31:0] sum_abs [0:N_NEURONS-1];
+    logic signed [31:0] sum_abs_base [0:N_NEURONS-1];
+
+    initial begin
+        if (W_INIT_FROM_FILE) begin
+            $readmemh("sum_abs.hex", sum_abs);
+        end
+    end
 
     typedef enum logic [3:0] {
         S_IDLE,
@@ -163,7 +171,8 @@ module pipeline_small #(
     w_in_mem_4bank #(
         .N_IN(N_IN),
         .N_NEURONS(N_NEURONS),
-        .INIT_VAL(32'sd66)
+        .INIT_VAL(32'sd66),
+        .INIT_FROM_FILE(W_INIT_FROM_FILE)
     ) u_wmem (
         .clk(clk),
         .rst(rst),
@@ -374,7 +383,9 @@ module pipeline_small #(
                 g_in_state[i] <= '0;
                 g_in_accum[i] <= '0;
                 g_exc[i] <= '0;
-                sum_abs[i] <= 32'sd66 * N_IN;
+                if (!W_INIT_FROM_FILE) begin
+                    sum_abs[i] <= 32'sd66 * N_IN;
+                end
                 s_exc[i] <= 1'b0;
                 s_inh[i] <= 1'b0;
             end
@@ -562,6 +573,9 @@ module pipeline_small #(
                     stdp_j <= '0;
                     stdp_g <= '0;
                     stdp_t <= '0;
+                    for (i = 0; i < N_NEURONS; i = i + 1) begin
+                        sum_abs_base[i] <= sum_abs[i];
+                    end
                     for (i = 0; i < LANES; i = i + 1) begin
                         stdp_sum1[i] <= '0;
                         stdp_sum2[i] <= '0;
@@ -613,7 +627,7 @@ module pipeline_small #(
                         neuron_idx = stdp_g * LANES + i;
                         if (neuron_idx < N_NEURONS) begin
                             w_old = mem_r_data[i];
-                            sum_abs_val = sum_abs[neuron_idx];
+                            sum_abs_val = sum_abs_base[neuron_idx];
                             if (sum_abs_val == 0) sum_abs_val = 1;
 
                             w_norm = fp_mul(w_old, fp_div_round(NORM_FP, sum_abs_val));

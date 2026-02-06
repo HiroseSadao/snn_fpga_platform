@@ -3,7 +3,8 @@
 module w_in_mem_4bank #(
     parameter int N_IN = 784,
     parameter int N_NEURONS = 100,
-    parameter logic signed [31:0] INIT_VAL = 32'sd66
+    parameter logic signed [31:0] INIT_VAL = 32'sd66,
+    parameter bit INIT_FROM_FILE = 0
 ) (
     input  wire                         clk,
     input  wire                         rst,
@@ -56,6 +57,15 @@ module w_in_mem_4bank #(
     (* ram_style = "block" *) logic signed [31:0] mem2 [0:DEPTH-1];
     (* ram_style = "block" *) logic signed [31:0] mem3 [0:DEPTH-1];
 
+    initial begin
+        if (INIT_FROM_FILE) begin
+            $readmemh("w_init0.hex", mem0);
+            $readmemh("w_init1.hex", mem1);
+            $readmemh("w_init2.hex", mem2);
+            $readmemh("w_init3.hex", mem3);
+        end
+    end
+
     logic dbg_pending;
     logic [1:0] dbg_bank;
     logic [ADDR_W-1:0] dbg_addr;
@@ -74,11 +84,13 @@ module w_in_mem_4bank #(
 
     always_ff @(posedge clk) begin
         if (rst) begin
-            for (i = 0; i < DEPTH; i = i + 1) begin
-                mem0[i] <= INIT_VAL;
-                mem1[i] <= INIT_VAL;
-                mem2[i] <= INIT_VAL;
-                mem3[i] <= INIT_VAL;
+            if (!INIT_FROM_FILE) begin
+                for (i = 0; i < DEPTH; i = i + 1) begin
+                    mem0[i] <= INIT_VAL;
+                    mem1[i] <= INIT_VAL;
+                    mem2[i] <= INIT_VAL;
+                    mem3[i] <= INIT_VAL;
+                end
             end
             r_data0 <= INIT_VAL;
             r_data1 <= INIT_VAL;

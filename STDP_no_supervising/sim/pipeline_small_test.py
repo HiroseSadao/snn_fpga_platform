@@ -1,6 +1,7 @@
 # file: sim/pipeline_small_test.py
 import os
 from pathlib import Path
+import numpy as np
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, ClockCycles
@@ -10,6 +11,8 @@ CLK_PERIOD_NS = 10  # 100 MHz
 MAX_WAIT_CYCLES = 20000
 FP_SHIFT = 16
 FP_SCALE = 1 << FP_SHIFT
+INIT_W_SCALE = 1e-3
+INIT_VAL_FP = int(round(INIT_W_SCALE * FP_SCALE))
 
 # Match pipeline_small.sv defaults
 N_IN = 784
@@ -20,6 +23,44 @@ UPDATE_NT = 350
 DBG_NEURON_COUNT = 8
 DBG_IN_STRIDE = 4
 DBG_IN_LIMIT = 64
+
+
+def gen_init_weights():
+    np.random.seed(0)
+    w = np.random.rand(N_NEURONS, N_IN) * INIT_W_SCALE
+    w_fp = np.rint(w * FP_SCALE).astype(np.int32)
+    return w_fp
+
+
+def write_init_files(build_dir):
+    w_fp = gen_init_weights()
+    neuron_groups = (N_NEURONS + 3) // 4
+    depth = neuron_groups * N_IN
+    banks = [[INIT_VAL_FP for _ in range(depth)] for _ in range(4)]
+
+    for row in range(neuron_groups):
+        for in_idx in range(N_IN):
+            base = row * N_IN + in_idx
+            for bank in range(4):
+                neuron = row * 4 + bank
+                if neuron < N_NEURONS:
+                    banks[bank][base] = int(w_fp[neuron, in_idx])
+
+    for bank in range(4):
+        path = build_dir / f"w_init{bank}.hex"
+        with open(path, "w", encoding="utf-8") as f:
+            for v in banks[bank]:
+                if v < 0:
+                    v = (v + (1 << 32)) & 0xFFFFFFFF
+                f.write(f"{v:08x}\n")
+
+    sum_abs = np.sum(np.abs(w_fp), axis=1).astype(np.int64)
+    path = build_dir / "sum_abs.hex"
+    with open(path, "w", encoding="utf-8") as f:
+        for v in sum_abs:
+            if v < 0:
+                v = (v + (1 << 32)) & 0xFFFFFFFF
+            f.write(f"{int(v) & 0xFFFFFFFF:08x}\n")
 
 # Network params
 TD_IN_STEPS = 1
@@ -85,7 +126,7 @@ class RefModel:
         self.v_inh = [INH_VRESET * FP_SCALE] * N_NEURONS
         self.refr_inh = [0] * N_NEURONS
         self.g_inh_state = [0] * N_NEURONS
-        self.W_in = [[66 for _ in range(N_IN)] for _ in range(N_NEURONS)]
+        self.W_in = gen_init_weights().tolist()
         self.delay_in = [[0 for _ in range(N_NEURONS)] for _ in range(DELAY_IN_STEPS)]
         self.delay_e2i = [[0 for _ in range(N_NEURONS)] for _ in range(DELAY_E2I_STEPS)]
         self.s_in_hist = [[0 for _ in range(N_IN)] for _ in range(UPDATE_NT)]
@@ -219,7 +260,8 @@ class RefModel:
 
             if self.tcount == UPDATE_NT - 1:
                 for i in range(N_NEURONS):
-                    sum_abs = sum(abs(w) for w in self.W_in[i])
+                    w_old_row = list(self.W_in[i])
+                    sum_abs = sum(abs(w) for w in w_old_row)
                     if sum_abs == 0:
                         sum_abs = 1
                     for j in range(N_IN):
@@ -230,7 +272,7 @@ class RefModel:
                                 sum1 += self.x_in_hist[t][j]
                             if self.s_in_hist[t][j]:
                                 sum2 += self.x_exc_hist[t][i]
-                        Wn = fp_mul(self.W_in[i][j], fp_div_round(NORM_FP, sum_abs))
+                        Wn = fp_mul(w_old_row[j], fp_div_round(NORM_FP, sum_abs))
                         dW = fp_div_round(
                             fp_mul(fp_mul((WMAX_FP - Wn), sum1), LR_P_FP)
                             - fp_mul(fp_mul(Wn, sum2), LR_M_FP),
@@ -475,11 +517,13 @@ def pipeline_small_runner():
     runner.build(
         sources=sv_sources,
         hdl_toplevel="pipeline_small",
+        parameters={"W_INIT_FROM_FILE": 1},
         timescale=("1ns", "1ps"),
         waves=True,
         always=True,
         build_dir=str(repo_root / "sim" / "sim_build_pipeline_small"),
     )
+    write_init_files(repo_root / "sim" / "sim_build_pipeline_small")
     runner.test(
         hdl_toplevel="pipeline_small",
         test_module=Path(__file__).stem,
