@@ -59,10 +59,10 @@ module w_in_mem_4bank #(
 
     initial begin
         if (INIT_FROM_FILE) begin
-            $readmemh("w_init0.hex", mem0);
-            $readmemh("w_init1.hex", mem1);
-            $readmemh("w_init2.hex", mem2);
-            $readmemh("w_init3.hex", mem3);
+            $readmemh("data/w_init0.mem", mem0);
+            $readmemh("data/w_init1.mem", mem1);
+            $readmemh("data/w_init2.mem", mem2);
+            $readmemh("data/w_init3.mem", mem3);
         end
     end
 

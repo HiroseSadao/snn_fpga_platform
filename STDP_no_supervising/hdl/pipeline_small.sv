@@ -125,7 +125,7 @@ module pipeline_small #(
 
     initial begin
         if (W_INIT_FROM_FILE) begin
-            $readmemh("sum_abs.hex", sum_abs);
+            $readmemh("data/sum_abs.mem", sum_abs);
         end
     end
 

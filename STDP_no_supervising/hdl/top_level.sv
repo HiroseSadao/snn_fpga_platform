@@ -38,6 +38,11 @@ module top_level(
     end
     wire clk_25mhz = clk_div[1];
 
+    localparam int N_IN = 784;
+    localparam int N_NEURONS = 100;
+    localparam int TSTEP_W = 16;
+    localparam int BLANK_STEPS = 150;
+
     // -----------------------------
     // SD controller instance
     // -----------------------------
@@ -95,12 +100,6 @@ module top_level(
     logic [31:0] label_index;
     logic [7:0]  last_label;
 
-    // Spike stream counters
-    logic [31:0] sample_idx;
-    logic [31:0] time_idx;
-    logic [15:0] neuron_idx;
-    logic        spike_valid;
-    logic        spike_value;
     logic        streaming;
 
     typedef enum logic [2:0] {
@@ -110,6 +109,57 @@ module top_level(
         S_DONE
     } stream_state_e;
     stream_state_e stream_state;
+
+    // -----------------------------
+    // FIFO for spike bytes (from SD)
+    // -----------------------------
+    localparam int FIFO_DEPTH = 2048;
+    localparam int FIFO_W = $clog2(FIFO_DEPTH);
+    logic [7:0] fifo_mem [0:FIFO_DEPTH-1];
+    logic [FIFO_W-1:0] fifo_wptr;
+    logic [FIFO_W-1:0] fifo_rptr;
+    logic [FIFO_W:0] fifo_count;
+    logic fifo_overflow;
+    logic fifo_wr_en;
+    logic [7:0] fifo_wr_data;
+    logic fifo_rd_en;
+    wire [7:0] fifo_rd_data = fifo_mem[fifo_rptr];
+
+    // -----------------------------
+    // Pipeline small instance
+    // -----------------------------
+    logic                        ps_s_tvalid;
+    logic                        ps_s_tready;
+    logic [TSTEP_W+N_IN-1:0]      ps_s_tdata;
+    logic                        ps_s_stdp_en;
+    logic                        ps_m_tvalid;
+    logic                        ps_m_tready;
+    logic [TSTEP_W+N_NEURONS-1:0] ps_m_tdata;
+
+    pipeline_small #(
+        .TSTEP_W(TSTEP_W),
+        .N_IN(N_IN),
+        .N_NEURONS(N_NEURONS),
+        .UPDATE_NT(350),
+        .W_INIT_FROM_FILE(1)
+    ) u_pipeline_small (
+        .clk(clk_25mhz),
+        .rst(reset),
+        .s_tvalid(ps_s_tvalid),
+        .s_tready(ps_s_tready),
+        .s_tdata(ps_s_tdata),
+        .s_stdp_en(ps_s_stdp_en),
+        .m_tvalid(ps_m_tvalid),
+        .m_tready(ps_m_tready),
+        .m_tdata(ps_m_tdata),
+        .dbg_en(1'b0),
+        .dbg_neuron('0),
+        .dbg_in('0),
+        .dbg_valid(),
+        .dbg_data()
+    );
+
+    assign ps_m_tready = 1'b1;
 
     // read control + parsing
     always_ff @(posedge clk_25mhz) begin
@@ -131,17 +181,15 @@ module top_level(
             label_index     <= 32'd0;
             last_label      <= 8'd0;
 
-            sample_idx      <= 32'd0;
-            time_idx        <= 32'd0;
-            neuron_idx      <= 16'd0;
-            spike_valid     <= 1'b0;
-            spike_value     <= 1'b0;
             streaming       <= 1'b0;
 
             stream_state    <= S_IDLE;
+            fifo_overflow   <= 1'b0;
+            fifo_wr_en      <= 1'b0;
+            fifo_wr_data    <= 8'd0;
         end else begin
             rd          <= 1'b0;
-            spike_valid <= 1'b0;
+            fifo_wr_en  <= 1'b0;
 
             case (stream_state)
                 S_IDLE: begin
@@ -151,7 +199,7 @@ module top_level(
                 end
 
                 S_START_READ: begin
-                    if (!in_read && ready) begin
+                    if (!in_read && ready && (fifo_count <= (FIFO_DEPTH-512))) begin
                         address   <= sector_addr;
                         rd        <= 1'b1;
                         in_read   <= 1'b1;
@@ -181,19 +229,11 @@ module top_level(
                             label_index <= label_index + 1'b1;
                         end else if (streaming) begin
                             // Spikes area (one byte per neuron per time step)
-                            spike_valid <= 1'b1;
-                            spike_value <= (dout != 8'd0);
-
-                            if (neuron_idx == (n_neurons_u32[15:0] - 1'b1)) begin
-                                neuron_idx <= 16'd0;
-                                if (time_idx + 1 >= n_time_u32) begin
-                                    time_idx <= 32'd0;
-                                    sample_idx <= sample_idx + 1'b1;
-                                end else begin
-                                    time_idx <= time_idx + 1'b1;
-                                end
+                            if (fifo_count < FIFO_DEPTH) begin
+                                fifo_wr_en   <= 1'b1;
+                                fifo_wr_data <= dout;
                             end else begin
-                                neuron_idx <= neuron_idx + 1'b1;
+                                fifo_overflow <= 1'b1;
                             end
                         end
 
@@ -204,15 +244,15 @@ module top_level(
                         if (header_done && !streaming &&
                             (file_byte_index + 1 >= (HEADER_BYTES + num_images_u32))) begin
                             streaming  <= 1'b1;
-                            sample_idx <= 32'd0;
-                            time_idx   <= 32'd0;
-                            neuron_idx <= 16'd0;
                         end
 
                         if (byte_count == SECTOR_BYTES - 1) begin
                             in_read    <= 1'b0;
                             sector_addr <= sector_addr + 1'b1;
-                            stream_state <= (sample_idx >= num_images_u32) ? S_DONE : S_START_READ;
+                            stream_state <= (streaming && (file_byte_index >= (HEADER_BYTES + num_images_u32)) &&
+                                             (file_byte_index - (HEADER_BYTES + num_images_u32) >=
+                                              (num_images_u32 * n_time_u32 * n_neurons_u32)))
+                                            ? S_DONE : S_START_READ;
                         end else begin
                             byte_count <= byte_count + 1'b1;
                         end
@@ -226,19 +266,152 @@ module top_level(
         end
     end
 
+    // FIFO update (single writer for pointers/count)
+    always_ff @(posedge clk_25mhz) begin
+        if (reset) begin
+            fifo_wptr  <= '0;
+            fifo_rptr  <= '0;
+            fifo_count <= '0;
+        end else begin
+            if (fifo_wr_en) begin
+                fifo_mem[fifo_wptr] <= fifo_wr_data;
+            end
+
+            case ({fifo_wr_en, fifo_rd_en})
+                2'b10: begin
+                    fifo_wptr  <= fifo_wptr + 1'b1;
+                    fifo_count <= fifo_count + 1'b1;
+                end
+                2'b01: begin
+                    fifo_rptr  <= fifo_rptr + 1'b1;
+                    fifo_count <= fifo_count - 1'b1;
+                end
+                2'b11: begin
+                    fifo_wptr <= fifo_wptr + 1'b1;
+                    fifo_rptr <= fifo_rptr + 1'b1;
+                end
+                default: begin
+                end
+            endcase
+        end
+    end
+
+    // -----------------------------
+    // Spike packer -> pipeline_small
+    // -----------------------------
+    typedef enum logic [1:0] {
+        P_IDLE,
+        P_PACK,
+        P_WAIT_SEND,
+        P_BLANK
+    } pack_state_e;
+    pack_state_e pack_state;
+
+    logic [N_IN-1:0] spike_vec;
+    logic [$clog2(N_IN):0] spike_idx;
+    logic [31:0] sample_idx_p;
+    logic [31:0] time_idx_p;
+    logic [31:0] blank_left;
+    logic [TSTEP_W-1:0] tstep_id;
+    wire train_mode = sw[0];
+
+    always_ff @(posedge clk_25mhz) begin
+        if (reset) begin
+            pack_state  <= P_IDLE;
+            spike_vec   <= '0;
+            spike_idx   <= '0;
+            sample_idx_p<= 32'd0;
+            time_idx_p  <= 32'd0;
+            blank_left  <= 32'd0;
+            tstep_id    <= '0;
+            ps_s_tvalid <= 1'b0;
+            ps_s_tdata  <= '0;
+            ps_s_stdp_en<= 1'b0;
+        end else begin
+            ps_s_tvalid <= 1'b0;
+            fifo_rd_en  <= 1'b0;
+            ps_s_stdp_en <= 1'b0;
+
+            case (pack_state)
+                P_IDLE: begin
+                    if (streaming) begin
+                        pack_state <= P_PACK;
+                        spike_vec  <= '0;
+                        spike_idx  <= '0;
+                    end
+                end
+
+                P_PACK: begin
+                    fifo_rd_en <= 1'b0;
+                    if (fifo_count != 0) begin
+                        fifo_rd_en <= 1'b1;
+                        spike_vec[spike_idx] <= (fifo_rd_data != 8'd0);
+
+                        if (spike_idx == N_IN-1) begin
+                            spike_idx <= '0;
+                            pack_state <= P_WAIT_SEND;
+                        end else begin
+                            spike_idx <= spike_idx + 1'b1;
+                        end
+                    end
+                end
+
+                P_WAIT_SEND: begin
+                    if (ps_s_tready) begin
+                        ps_s_tdata <= {tstep_id, spike_vec};
+                        ps_s_tvalid <= 1'b1;
+                        ps_s_stdp_en <= train_mode;
+                        tstep_id <= tstep_id + 1'b1;
+
+                        if (time_idx_p + 1 >= n_time_u32) begin
+                            time_idx_p <= 32'd0;
+                            sample_idx_p <= sample_idx_p + 1'b1;
+                            if (sample_idx_p + 1 >= num_images_u32) begin
+                                pack_state <= P_IDLE;
+                            end else if (BLANK_STEPS != 0) begin
+                                blank_left <= BLANK_STEPS;
+                                pack_state <= P_BLANK;
+                            end else begin
+                                pack_state <= P_PACK;
+                            end
+                        end else begin
+                            time_idx_p <= time_idx_p + 1'b1;
+                            pack_state <= P_PACK;
+                        end
+                    end
+                end
+
+                P_BLANK: begin
+                    if (ps_s_tready) begin
+                        ps_s_tdata <= {tstep_id, {N_IN{1'b0}}};
+                        ps_s_tvalid <= 1'b1;
+                        ps_s_stdp_en <= 1'b0;
+                        tstep_id <= tstep_id + 1'b1;
+                        if (blank_left <= 1) begin
+                            blank_left <= 0;
+                            pack_state <= P_PACK;
+                        end else begin
+                            blank_left <= blank_left - 1'b1;
+                        end
+                    end
+                end
+            endcase
+        end
+    end
+
     // -----------------------------
     // Debug outputs
     // -----------------------------
-    // led[0]  = spike_valid
-    // led[1]  = spike_value
+    // led[0]  = fifo_overflow
+    // led[1]  = train_mode
     // led[2]  = header_ok
     // led[3]  = streaming
     // led[7:4]= stream_state
     // led[15:8]= byte_count (within sector)
     always_comb begin
         led = 16'b0;
-        led[0]    = spike_valid;
-        led[1]    = spike_value;
+        led[0]    = fifo_overflow;
+        led[1]    = train_mode;
         led[2]    = header_ok;
         led[3]    = streaming;
         led[7:4]  = stream_state;

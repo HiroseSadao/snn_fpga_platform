@@ -17,7 +17,7 @@ INIT_VAL_FP = int(round(INIT_W_SCALE * FP_SCALE))
 # Match pipeline_small.sv defaults
 N_IN = 784
 N_NEURONS = 100
-UPDATE_NT = 350
+UPDATE_NT = 8
 
 # Debug weight readback subset (to avoid huge export)
 DBG_NEURON_COUNT = 8
@@ -33,6 +33,8 @@ def gen_init_weights():
 
 
 def write_init_files(build_dir):
+    data_dir = build_dir / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
     w_fp = gen_init_weights()
     neuron_groups = (N_NEURONS + 3) // 4
     depth = neuron_groups * N_IN
@@ -47,7 +49,7 @@ def write_init_files(build_dir):
                     banks[bank][base] = int(w_fp[neuron, in_idx])
 
     for bank in range(4):
-        path = build_dir / f"w_init{bank}.hex"
+        path = data_dir / f"w_init{bank}.mem"
         with open(path, "w", encoding="utf-8") as f:
             for v in banks[bank]:
                 if v < 0:
@@ -55,7 +57,7 @@ def write_init_files(build_dir):
                 f.write(f"{v:08x}\n")
 
     sum_abs = np.sum(np.abs(w_fp), axis=1).astype(np.int64)
-    path = build_dir / "sum_abs.hex"
+    path = data_dir / "sum_abs.mem"
     with open(path, "w", encoding="utf-8") as f:
         for v in sum_abs:
             if v < 0:
@@ -467,17 +469,42 @@ async def pipeline_small_reference_model(dut):
     dut.m_tready.value = 1
     dut.dbg_en.value = 0
 
+    async def dbg_read_weight(ii, jj):
+        dut.dbg_neuron.value = ii
+        dut.dbg_in.value = jj
+        dut.dbg_en.value = 1
+        await RisingEdge(dut.clk)
+        dut.dbg_en.value = 0
+        await RisingEdge(dut.clk)
+        await RisingEdge(dut.clk)
+        if int(dut.dbg_valid.value) != 1:
+            dut._log.error(
+                "dbg_valid not asserted in dbg_read_weight: i=%d j=%d dbg_valid=%d dbg_data=0x%08x",
+                ii,
+                jj,
+                int(dut.dbg_valid.value),
+                int(dut.dbg_data.value.integer),
+            )
+            raise AssertionError("dbg_valid not asserted")
+        return int(dut.dbg_data.value.signed_integer)
+
     # Fixed stimulus sequence
-    patterns = [
-        bits_from_indices([0]),
-        bits_from_indices([1]),
-        bits_from_indices([2]),
-        bits_from_indices([3]),
-        bits_from_indices([0, 1, 2, 3]),
-        bits_from_indices([10, 20, 30]),
-        bits_from_indices([]),
-        bits_from_indices([100, 200, 300, 400]),
-    ]
+    patterns = [bits_from_indices([i]) for i in range(UPDATE_NT)]
+
+    # Sanity-check initial weights for a small subset
+    for i in range(min(N_NEURONS, 2)):
+        for j in range(0, min(N_IN, 8), 4):
+            dut_w0 = await dbg_read_weight(i, j)
+            ref_w0 = model.W_in[i][j]
+            if dut_w0 != ref_w0:
+                dut._log.error(
+                    "Initial W mismatch [%d][%d]: exp=%d got=%d",
+                    i,
+                    j,
+                    ref_w0,
+                    dut_w0,
+                )
+                raise AssertionError("Initial weight mismatch")
 
     for step_idx, bits in enumerate(patterns):
         await send_packet(dut, step_idx, bits, stdp_en=1)
@@ -488,21 +515,51 @@ async def pipeline_small_reference_model(dut):
 
     # Check STDP weights after UPDATE_NT steps (if we reached it)
     if len(patterns) >= UPDATE_NT:
+        # Wait for DUT's STDP update microcode to finish.
+        neuron_groups = (N_NEURONS + 3) // 4
+        cycles_per_group = UPDATE_NT + 2  # S_STDP_T (UPDATE_NT) + READ + CALC
+        wait_cycles = (N_IN * neuron_groups * cycles_per_group) + 5
+        dut._log.info(f"Waiting {wait_cycles} cycles for STDP update to complete...")
+        await ClockCycles(dut.clk, wait_cycles)
+
         max_neurons = min(N_NEURONS, DBG_NEURON_COUNT)
         max_in = min(N_IN, DBG_IN_LIMIT)
 
         for i in range(max_neurons):
             for j in range(0, max_in, DBG_IN_STRIDE):
-                dut.dbg_neuron.value = i
-                dut.dbg_in.value = j
-                dut.dbg_en.value = 1
-                await RisingEdge(dut.clk)
-                dut.dbg_en.value = 0
-                await RisingEdge(dut.clk)
-                assert int(dut.dbg_valid.value) == 1, "dbg_valid not asserted"
-                dut_w = int(dut.dbg_data.value.signed_integer)
+                dut_w = await dbg_read_weight(i, j)
                 ref_w = model.W_in[i][j]
-                assert dut_w == ref_w, f"W_in mismatch [{i}][{j}]: exp={ref_w} got={dut_w}"
+                if dut_w != ref_w:
+                    # Detailed reference breakdown
+                    sum_abs = sum(abs(w) for w in model.W_in[i])
+                    if sum_abs == 0:
+                        sum_abs = 1
+                    sum1 = 0
+                    sum2 = 0
+                    for t in range(UPDATE_NT):
+                        if model.s_exc_hist[t][i]:
+                            sum1 += model.x_in_hist[t][j]
+                        if model.s_in_hist[t][j]:
+                            sum2 += model.x_exc_hist[t][i]
+                    wn = fp_mul(model.W_in[i][j], fp_div_round(NORM_FP, sum_abs))
+                    dw = fp_div_round(
+                        fp_mul(fp_mul((WMAX_FP - wn), sum1), LR_P_FP)
+                        - fp_mul(fp_mul(wn, sum2), LR_M_FP),
+                        UPDATE_NT,
+                    )
+                    dut._log.error(
+                        "W_in mismatch [%d][%d]: exp=%d got=%d sum_abs=%d sum1=%d sum2=%d Wn=%d dW=%d",
+                        i,
+                        j,
+                        ref_w,
+                        dut_w,
+                        sum_abs,
+                        sum1,
+                        sum2,
+                        wn,
+                        dw,
+                    )
+                    raise AssertionError(f"W_in mismatch [{i}][{j}]: exp={ref_w} got={dut_w}")
 
 
 def pipeline_small_runner():
@@ -517,7 +574,7 @@ def pipeline_small_runner():
     runner.build(
         sources=sv_sources,
         hdl_toplevel="pipeline_small",
-        parameters={"W_INIT_FROM_FILE": 1},
+        parameters={"W_INIT_FROM_FILE": 1, "UPDATE_NT": UPDATE_NT},
         timescale=("1ns", "1ps"),
         waves=True,
         always=True,
