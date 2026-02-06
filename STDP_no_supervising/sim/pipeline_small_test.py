@@ -7,14 +7,19 @@ from cocotb.triggers import RisingEdge, ClockCycles
 
 
 CLK_PERIOD_NS = 10  # 100 MHz
-MAX_WAIT_CYCLES = 5000
+MAX_WAIT_CYCLES = 20000
 FP_SHIFT = 16
 FP_SCALE = 1 << FP_SHIFT
 
 # Match pipeline_small.sv defaults
-N_IN = 4
-N_NEURONS = 4
-UPDATE_NT = 8
+N_IN = 784
+N_NEURONS = 100
+UPDATE_NT = 350
+
+# Debug weight readback subset (to avoid huge export)
+DBG_NEURON_COUNT = 8
+DBG_IN_STRIDE = 4
+DBG_IN_LIMIT = 64
 
 # Network params
 TD_IN_STEPS = 1
@@ -276,7 +281,11 @@ def required_signals_present(dut):
         "m_tvalid",
         "m_tready",
         "m_tdata",
-        "w_flat",
+        "dbg_en",
+        "dbg_neuron",
+        "dbg_in",
+        "dbg_valid",
+        "dbg_data",
     ]
     return all(hasattr(dut, name) for name in names)
 
@@ -287,13 +296,22 @@ async def reset_dut(dut):
     dut.s_tdata.value = 0
     dut.s_stdp_en.value = 0
     dut.m_tready.value = 1
+    if hasattr(dut, "dbg_en"):
+        dut.dbg_en.value = 0
     await ClockCycles(dut.clk, 2)
     dut.rst.value = 0
     await ClockCycles(dut.clk, 2)
 
 
+def bits_from_indices(indices):
+    value = 0
+    for idx in indices:
+        value |= 1 << idx
+    return value
+
+
 async def send_packet(dut, tstep_id, spikes_bits, stdp_en=1):
-    dut.s_tdata.value = (int(tstep_id) << len(spikes_bits)) | int(spikes_bits, 2)
+    dut.s_tdata.value = (int(tstep_id) << N_IN) | int(spikes_bits)
     dut.s_tvalid.value = 1
     dut.s_stdp_en.value = stdp_en
     for cycle in range(MAX_WAIT_CYCLES):
@@ -344,7 +362,13 @@ async def pipeline_small_basic_handshake(dut):
     await reset_dut(dut)
 
     expected_ids = [0, 1, 2, 3, 4]
-    spikes = ["0001", "0010", "0100", "1000", "1111"]
+    spikes = [
+        bits_from_indices([0]),
+        bits_from_indices([1]),
+        bits_from_indices([2]),
+        bits_from_indices([3]),
+        bits_from_indices([0, 1, 2, 3]),
+    ]
 
     # Bufferless assumption: keep ready high and receive per send
     dut.m_tready.value = 1
@@ -381,7 +405,7 @@ async def pipeline_small_backpressure(dut):
     expected_ids = [10, 11, 12]
     got_ids = []
     for tstep_id in expected_ids:
-        await send_packet(dut, tstep_id, "0001", stdp_en=1)
+        await send_packet(dut, tstep_id, bits_from_indices([0]), stdp_en=1)
         out_id, _ = await recv_packet(dut)
         got_ids.append(out_id)
 
@@ -399,38 +423,42 @@ async def pipeline_small_reference_model(dut):
 
     model = RefModel()
     dut.m_tready.value = 1
+    dut.dbg_en.value = 0
 
     # Fixed stimulus sequence
     patterns = [
-        "0001",
-        "0010",
-        "0100",
-        "1000",
-        "1111",
-        "0110",
-        "0000",
-        "1010",
+        bits_from_indices([0]),
+        bits_from_indices([1]),
+        bits_from_indices([2]),
+        bits_from_indices([3]),
+        bits_from_indices([0, 1, 2, 3]),
+        bits_from_indices([10, 20, 30]),
+        bits_from_indices([]),
+        bits_from_indices([100, 200, 300, 400]),
     ]
 
     for step_idx, bits in enumerate(patterns):
         await send_packet(dut, step_idx, bits, stdp_en=1)
         out_id, s_exc_bits = await recv_packet(dut)
-        ref_bits = model.step(int(bits, 2), stdp_en=1)
+        ref_bits = model.step(int(bits), stdp_en=1)
         assert out_id == step_idx, f"tstep_id mismatch at {step_idx}"
         assert s_exc_bits == ref_bits, f"s_exc mismatch at {step_idx}: exp={ref_bits:0{N_NEURONS}b} got={s_exc_bits:0{N_NEURONS}b}"
 
     # Check STDP weights after UPDATE_NT steps (if we reached it)
     if len(patterns) >= UPDATE_NT:
-        w_flat = int(dut.w_flat.value)
-        for i in range(N_NEURONS):
-            for j in range(N_IN):
-                idx = (i * N_IN + j) * 32
-                mask = (1 << 32) - 1
-                raw = (w_flat >> idx) & mask
-                if raw & (1 << 31):
-                    dut_w = raw - (1 << 32)
-                else:
-                    dut_w = raw
+        max_neurons = min(N_NEURONS, DBG_NEURON_COUNT)
+        max_in = min(N_IN, DBG_IN_LIMIT)
+
+        for i in range(max_neurons):
+            for j in range(0, max_in, DBG_IN_STRIDE):
+                dut.dbg_neuron.value = i
+                dut.dbg_in.value = j
+                dut.dbg_en.value = 1
+                await RisingEdge(dut.clk)
+                dut.dbg_en.value = 0
+                await RisingEdge(dut.clk)
+                assert int(dut.dbg_valid.value) == 1, "dbg_valid not asserted"
+                dut_w = int(dut.dbg_data.value.signed_integer)
                 ref_w = model.W_in[i][j]
                 assert dut_w == ref_w, f"W_in mismatch [{i}][{j}]: exp={ref_w} got={dut_w}"
 
@@ -447,7 +475,6 @@ def pipeline_small_runner():
     runner.build(
         sources=sv_sources,
         hdl_toplevel="pipeline_small",
-        parameters={},
         timescale=("1ns", "1ps"),
         waves=True,
         always=True,

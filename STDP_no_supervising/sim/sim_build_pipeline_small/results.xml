@@ -1,8 +1,8 @@
 <testsuites name="results">
   <testsuite name="all" package="all">
-    <property name="random_seed" value="1770300196" />
-    <testcase name="pipeline_small_basic_handshake" classname="pipeline_small_test" file="C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\STDP_no_supervising\sim\pipeline_small_test.py" lineno="337" time="0.01128840446472168" sim_time_ns="170.001" ratio_time="15059.789940313009" />
-    <testcase name="pipeline_small_backpressure" classname="pipeline_small_test" file="C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\STDP_no_supervising\sim\pipeline_small_test.py" lineno="361" time="0.008034706115722656" sim_time_ns="150.001" ratio_time="18669.133362136497" />
-    <testcase name="pipeline_small_reference_model" classname="pipeline_small_test" file="C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\STDP_no_supervising\sim\pipeline_small_test.py" lineno="391" time="0.019733190536499023" sim_time_ns="270.00100000000003" ratio_time="13682.582119733712" />
+    <property name="random_seed" value="1770346820" />
+    <testcase name="pipeline_small_basic_handshake" classname="pipeline_small_test" file="C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\STDP_no_supervising\sim\pipeline_small_test.py" lineno="355" time="2.6759541034698486" sim_time_ns="41470.001" ratio_time="15497.27663349188" />
+    <testcase name="pipeline_small_backpressure" classname="pipeline_small_test" file="C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\STDP_no_supervising\sim\pipeline_small_test.py" lineno="385" time="1.450061321258545" sim_time_ns="24450.000999999997" ratio_time="16861.356579581905" />
+    <testcase name="pipeline_small_reference_model" classname="pipeline_small_test" file="C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\STDP_no_supervising\sim\pipeline_small_test.py" lineno="415" time="4.696863174438477" sim_time_ns="66900.001" ratio_time="14243.549048668656" />
   </testsuite>
 </testsuites>
