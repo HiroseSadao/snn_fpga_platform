@@ -1,0 +1,41 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
+---------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
+| Date         : Tue Oct 14 20:37:18 2025
+| Host         : eecs-digital-01 running 64-bit Ubuntu 24.04.3 LTS
+| Command      : report_utilization -file obj/post_synth_util.rpt -hierarchical -hierarchical_depth 4
+| Design       : top_level
+| Device       : xc7s50csga324-1
+| Speed File   : -1
+| Design State : Synthesized
+---------------------------------------------------------------------------------------------------------------------------------------------
+
+Utilization Design Information
+
+Table of Contents
+-----------------
+1. Utilization by Hierarchy
+
+1. Utilization by Hierarchy
+---------------------------
+
++--------------------+-------------------+------------+------------+---------+------+------+--------+--------+------------+
+|      Instance      |       Module      | Total LUTs | Logic LUTs | LUTRAMs | SRLs |  FFs | RAMB36 | RAMB18 | DSP Blocks |
++--------------------+-------------------+------------+------------+---------+------+------+--------+--------+------------+
+| top_level          |             (top) |        991 |        913 |       0 |   78 | 1027 |     48 |      2 |          8 |
+|   (top_level)      |             (top) |         60 |          3 |       0 |   57 |  289 |      0 |      0 |          1 |
+|   com_m            |    center_of_mass |        230 |        230 |       0 |    0 |  418 |      0 |      0 |          0 |
+|     (com_m)        |    center_of_mass |         42 |         42 |       0 |    0 |  240 |      0 |      0 |          0 |
+|     div_x          |           divider |         94 |         94 |       0 |    0 |   90 |      0 |      0 |          0 |
+|     div_y          |         divider_4 |         94 |         94 |       0 |    0 |   88 |      0 |      0 |          0 |
+|   com_sprite_m     |      image_sprite |         63 |         42 |       0 |   21 |   21 |     16 |      1 |          0 |
+|     (com_sprite_m) |      image_sprite |         61 |         40 |       0 |   21 |   21 |      0 |      0 |          0 |
+|   crw              |  camera_registers |        131 |        131 |       0 |    0 |  104 |      0 |      0 |          0 |
+|     sccb_c         |        i2c_master |        107 |        107 |       0 |    0 |   53 |      0 |      0 |          0 |
+|   mt               |         threshold |        216 |        216 |       0 |    0 |    1 |      0 |      0 |          0 |
+|   nolabel_line122  | pixel_reconstruct |         46 |         46 |       0 |    0 |   51 |      0 |      0 |          0 |
+|   rgbtoycrcb_m     |      rgb_to_ycrcb |         57 |         57 |       0 |    0 |   50 |      0 |      0 |          7 |
+|   vsg              |     video_sig_gen |        104 |        104 |       0 |    0 |   22 |      0 |      0 |          0 |
++--------------------+-------------------+------------+------------+---------+------+------+--------+--------+------------+
+
+

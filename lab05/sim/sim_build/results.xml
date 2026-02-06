@@ -1,0 +1,11 @@
+<testsuites name="results">
+  <testsuite name="all" package="all">
+    <property name="random_seed" value="1759955064" />
+    <testcase name="com_single_pixel_test" classname="com_test" file="C:\Users\kamer\Documents\2025年度東大\MIT留学\留学後\digital_systems_laboratory\lab05\sim\com_test.py" lineno="39" time="0.012090206146240234" sim_time_ns="1380.001" ratio_time="114142.05707560638" />
+    <testcase name="com_average_sweep_xy_same" classname="com_test" file="C:\Users\kamer\Documents\2025年度東大\MIT留学\留学後\digital_systems_laboratory\lab05\sim\com_test.py" lineno="48" time="0.07000017166137695" sim_time_ns="9110.001" ratio_time="130142.55227928965" />
+    <testcase name="com_average_x_sweep_y_const" classname="com_test" file="C:\Users\kamer\Documents\2025年度東大\MIT留学\留学後\digital_systems_laboratory\lab05\sim\com_test.py" lineno="60" time="0.0782933235168457" sim_time_ns="10430.001" ratio_time="133216.99132820521" />
+    <testcase name="com_no_valid_pixels" classname="com_test" file="C:\Users\kamer\Documents\2025年度東大\MIT留学\留学後\digital_systems_laboratory\lab05\sim\com_test.py" lineno="72" time="0.12022089958190918" sim_time_ns="20080.001" ratio_time="167025.87544954318" />
+    <testcase name="com_multi_frame_back_to_back" classname="com_test" file="C:\Users\kamer\Documents\2025年度東大\MIT留学\留学後\digital_systems_laboratory\lab05\sim\com_test.py" lineno="87" time="0.059297800064086914" sim_time_ns="8190.000999999997" ratio_time="138116.4392464567" />
+    <testcase name="com_stress_many_pixels" classname="com_test" file="C:\Users\kamer\Documents\2025年度東大\MIT留学\留学後\digital_systems_laboratory\lab05\sim\com_test.py" lineno="105" time="0.6570501327514648" sim_time_ns="82370.00099999999" ratio_time="125363.34275600426" />
+  </testsuite>
+</testsuites>
