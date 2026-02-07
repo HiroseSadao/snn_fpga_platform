@@ -45,10 +45,9 @@ module pipeline_small #(
 
     localparam int WMIN_FP = 0;
     localparam int WMAX_FP = 3277;   // 0.05
-    localparam int LR_P_FP = 655;    // 1e-2
-    localparam int LR_M_FP = 7;      // 1e-4
-    localparam int NORM_FP = 6554;   // 0.1
-    localparam int DW_CLIP_FP = 66;  // 1e-3
+    // Online STDP (stdp3.py): A_p=0.01, A_m=1.05*A_p
+    localparam int A_P_FP = 655;     // 0.01
+    localparam int A_M_FP = 688;     // 0.0105
 
     // Exc LIF params
     localparam int EXC_VREST = -65;
@@ -112,22 +111,7 @@ module pipeline_small #(
     logic signed [31:0] delay_in [0:DELAY_IN_STEPS-1][0:N_NEURONS-1];
     logic signed [31:0] delay_e2i [0:DELAY_E2I_STEPS-1][0:N_NEURONS-1];
 
-    // STDP buffers
-    logic [N_IN-1:0] s_in_hist [0:UPDATE_NT-1];
-    logic [N_NEURONS-1:0] s_exc_hist [0:UPDATE_NT-1];
-    logic signed [31:0] x_in_hist [0:UPDATE_NT-1][0:N_IN-1];
-    logic signed [31:0] x_exc_hist[0:UPDATE_NT-1][0:N_NEURONS-1];
-    logic [$clog2(UPDATE_NT):0] tcount;
-
-    // Per-neuron abs weight sum (for normalization)
-    logic signed [31:0] sum_abs [0:N_NEURONS-1];
-    logic signed [31:0] sum_abs_base [0:N_NEURONS-1];
-
-    initial begin
-        if (W_INIT_FROM_FILE) begin
-            $readmemh("data/sum_abs.mem", sum_abs);
-        end
-    end
+    // No history buffers for online STDP
 
     typedef enum logic [3:0] {
         S_IDLE,
@@ -135,8 +119,6 @@ module pipeline_small #(
         S_GIN_WAIT,
         S_NEURON,
         S_OUT,
-        S_STDP_INIT,
-        S_STDP_T,
         S_STDP_READ,
         S_STDP_CALC
     } state_e;
@@ -220,9 +202,6 @@ module pipeline_small #(
     logic stdp_pending;
     logic [IN_W-1:0] stdp_j;
     logic [$clog2(NEURON_GROUPS):0] stdp_g;
-    logic [$clog2(UPDATE_NT):0] stdp_t;
-    logic signed [31:0] stdp_sum1 [0:LANES-1];
-    logic signed [31:0] stdp_sum2 [0:LANES-1];
 
     // Combinational math for neuron update
     logic signed [31:0] g_in_state_next [0:N_NEURONS-1];
@@ -356,7 +335,6 @@ module pipeline_small #(
             tstep_id_reg <= '0;
             s_in_reg <= '0;
             s_stdp_reg <= 1'b0;
-            tcount <= 0;
             state <= S_IDLE;
             scan_in_idx <= '0;
             scan_group_idx <= '0;
@@ -364,7 +342,6 @@ module pipeline_small #(
             stdp_pending <= 1'b0;
             stdp_j <= '0;
             stdp_g <= '0;
-            stdp_t <= '0;
 
             for (i = 0; i < N_IN; i = i + 1) begin
                 x_in[i] <= '0;
@@ -383,21 +360,8 @@ module pipeline_small #(
                 g_in_state[i] <= '0;
                 g_in_accum[i] <= '0;
                 g_exc[i] <= '0;
-                if (!W_INIT_FROM_FILE) begin
-                    sum_abs[i] <= 32'sd66 * N_IN;
-                end
                 s_exc[i] <= 1'b0;
                 s_inh[i] <= 1'b0;
-            end
-            for (t = 0; t < UPDATE_NT; t = t + 1) begin
-                s_in_hist[t] <= '0;
-                s_exc_hist[t] <= '0;
-                for (i = 0; i < N_IN; i = i + 1) begin
-                    x_in_hist[t][i] <= '0;
-                end
-                for (i = 0; i < N_NEURONS; i = i + 1) begin
-                    x_exc_hist[t][i] <= '0;
-                end
             end
             for (i = 0; i < DELAY_IN_STEPS; i = i + 1) begin
                 for (j = 0; j < N_NEURONS; j = j + 1) begin
@@ -437,7 +401,7 @@ module pipeline_small #(
                     end
                 end
 
-                // Scan inputs; update x_in/x_in_hist; if spike, read weights in groups of 4 neurons
+                // Scan inputs; update x_in; if spike, read weights in groups of 4 neurons
                 S_SCAN: begin
                     if (scan_in_idx < N_IN) begin
                         // update trace for this input
@@ -446,10 +410,6 @@ module pipeline_small #(
                             x_next = x_in[scan_in_idx] - fp_div_round(x_in[scan_in_idx], TD_X_STEPS)
                                    + (s_in_reg[scan_in_idx] ? TRACE_SPIKE_FP : 0);
                             x_in[scan_in_idx] <= x_next;
-                            if (s_stdp_reg) begin
-                                x_in_hist[tcount][scan_in_idx] <= x_next;
-                                s_in_hist[tcount][scan_in_idx] <= s_in_reg[scan_in_idx];
-                            end
                         end
 
                         if (s_in_reg[scan_in_idx]) begin
@@ -538,146 +498,91 @@ module pipeline_small #(
                     end
 
                     // STDP buffers
-                    if (s_stdp_reg) begin
-                        s_exc_hist[tcount] <= s_exc_next;
-                        for (i = 0; i < N_NEURONS; i = i + 1) begin
-                            x_exc_hist[tcount][i] <= x_exc_next[i];
-                        end
-                        if (tcount == UPDATE_NT-1) begin
-                            tcount <= 0;
-                            stdp_pending <= 1'b1;
-                        end else begin
-                            tcount <= tcount + 1'b1;
-                        end
-                    end
+            if (s_stdp_reg) begin
+                stdp_pending <= 1'b1;
+                stdp_j <= '0;
+                stdp_g <= '0;
+            end
 
-                    m_tdata <= {tstep_id_reg, s_exc_next};
-                    m_tvalid <= 1'b1;
-                    state <= S_OUT;
-                end
+            m_tdata <= {tstep_id_reg, s_exc_next};
+            m_tvalid <= 1'b1;
+            state <= S_OUT;
+        end
 
-                S_OUT: begin
-                    if (m_tvalid && m_tready) begin
-                        m_tvalid <= 1'b0;
-                        if (stdp_pending) begin
-                            stdp_pending <= 1'b0;
-                            state <= S_STDP_INIT;
-                        end else begin
-                            state <= S_IDLE;
-                        end
-                    end
-                end
-
-                // STDP update (4 weights per cycle)
-                S_STDP_INIT: begin
-                    stdp_j <= '0;
-                    stdp_g <= '0;
-                    stdp_t <= '0;
-                    for (i = 0; i < N_NEURONS; i = i + 1) begin
-                        sum_abs_base[i] <= sum_abs[i];
-                    end
+        S_OUT: begin
+            if (m_tvalid && m_tready) begin
+                m_tvalid <= 1'b0;
+                if (stdp_pending) begin
+                    stdp_pending <= 1'b0;
+                    // start online STDP update over all weights
+                    mem_r_en <= 1'b1;
                     for (i = 0; i < LANES; i = i + 1) begin
-                        stdp_sum1[i] <= '0;
-                        stdp_sum2[i] <= '0;
+                        mem_r_neuron[i] <= stdp_g * LANES + i;
+                        mem_r_in[i] <= stdp_j;
                     end
-                    state <= S_STDP_T;
+                    state <= S_STDP_READ;
+                end else begin
+                    state <= S_IDLE;
                 end
+            end
+        end
 
-                S_STDP_T: begin
+        // Online STDP update (4 weights per cycle)
+        S_STDP_READ: begin
+            state <= S_STDP_CALC;
+        end
+
+        S_STDP_CALC: begin
+            for (i = 0; i < LANES; i = i + 1) begin
+                int neuron_idx;
+                logic signed [31:0] w_old;
+                logic signed [31:0] dW;
+                logic signed [31:0] w_new;
+                logic signed [31:0] pre_term;
+                logic signed [31:0] post_term;
+
+                neuron_idx = stdp_g * LANES + i;
+                if (neuron_idx < N_NEURONS) begin
+                    w_old = mem_r_data[i];
+
+                    pre_term = s_exc_next[neuron_idx] ? fp_mul(A_P_FP, x_in[stdp_j]) : 0;
+                    post_term = s_in_reg[stdp_j] ? fp_mul(A_M_FP, x_exc_next[neuron_idx]) : 0;
+                    dW = pre_term - post_term;
+
+                    w_new = w_old + dW;
+                    if (w_new < WMIN_FP) w_new = WMIN_FP;
+                    if (w_new > WMAX_FP) w_new = WMAX_FP;
+
+                    mem_w_en[i] <= 1'b1;
+                    mem_w_neuron[i] <= neuron_idx[NEURON_W-1:0];
+                    mem_w_in[i] <= stdp_j;
+                    mem_w_data[i] <= w_new;
+                end
+            end
+
+            if (stdp_g == NEURON_GROUPS-1) begin
+                stdp_g <= '0;
+                if (stdp_j == N_IN-1) begin
+                    state <= S_IDLE;
+                end else begin
+                    stdp_j <= stdp_j + 1'b1;
+                    mem_r_en <= 1'b1;
                     for (i = 0; i < LANES; i = i + 1) begin
-                        int neuron_idx;
-                        neuron_idx = stdp_g * LANES + i;
-                        if (neuron_idx < N_NEURONS) begin
-                            if (s_exc_hist[stdp_t][neuron_idx]) begin
-                                stdp_sum1[i] <= stdp_sum1[i] + x_in_hist[stdp_t][stdp_j];
-                            end
-                            if (s_in_hist[stdp_t][stdp_j]) begin
-                                stdp_sum2[i] <= stdp_sum2[i] + x_exc_hist[stdp_t][neuron_idx];
-                            end
-                        end
+                        mem_r_neuron[i] <= (stdp_g) * LANES + i;
+                        mem_r_in[i] <= stdp_j + 1'b1;
                     end
-
-                    if (stdp_t == UPDATE_NT-1) begin
-                        mem_r_en <= 1'b1;
-                        for (i = 0; i < LANES; i = i + 1) begin
-                            mem_r_neuron[i] <= stdp_g * LANES + i;
-                            mem_r_in[i] <= stdp_j;
-                        end
-                        state <= S_STDP_READ;
-                    end else begin
-                        stdp_t <= stdp_t + 1'b1;
-                    end
+                    state <= S_STDP_READ;
                 end
-
-                S_STDP_READ: begin
-                    state <= S_STDP_CALC;
+            end else begin
+                stdp_g <= stdp_g + 1'b1;
+                mem_r_en <= 1'b1;
+                for (i = 0; i < LANES; i = i + 1) begin
+                    mem_r_neuron[i] <= (stdp_g + 1'b1) * LANES + i;
+                    mem_r_in[i] <= stdp_j;
                 end
-
-                S_STDP_CALC: begin
-                    for (i = 0; i < LANES; i = i + 1) begin
-                        int neuron_idx;
-                        logic signed [31:0] w_old;
-                        logic signed [31:0] w_norm;
-                        logic signed [31:0] dW;
-                        logic signed [31:0] w_new;
-                        logic signed [31:0] sum_abs_val;
-                        logic signed [31:0] abs_old;
-                        logic signed [31:0] abs_new;
-
-                        neuron_idx = stdp_g * LANES + i;
-                        if (neuron_idx < N_NEURONS) begin
-                            w_old = mem_r_data[i];
-                            sum_abs_val = sum_abs_base[neuron_idx];
-                            if (sum_abs_val == 0) sum_abs_val = 1;
-
-                            w_norm = fp_mul(w_old, fp_div_round(NORM_FP, sum_abs_val));
-
-                            dW = fp_div_round(
-                                fp_mul(fp_mul((WMAX_FP - w_norm), stdp_sum1[i]), LR_P_FP)
-                              - fp_mul(fp_mul(w_norm, stdp_sum2[i]), LR_M_FP),
-                                UPDATE_NT
-                            );
-                            if (dW > DW_CLIP_FP) dW = DW_CLIP_FP;
-                            if (dW < -DW_CLIP_FP) dW = -DW_CLIP_FP;
-                            w_new = w_norm + dW;
-                            if (w_new < WMIN_FP) w_new = WMIN_FP;
-                            if (w_new > WMAX_FP) w_new = WMAX_FP;
-
-                            mem_w_en[i] <= 1'b1;
-                            mem_w_neuron[i] <= neuron_idx[NEURON_W-1:0];
-                            mem_w_in[i] <= stdp_j;
-                            mem_w_data[i] <= w_new;
-
-                            abs_old = w_old[31] ? -w_old : w_old;
-                            abs_new = w_new[31] ? -w_new : w_new;
-                            sum_abs[neuron_idx] <= sum_abs_val + abs_new - abs_old;
-                        end
-                    end
-
-                    // advance to next weight group
-                    if (stdp_g == NEURON_GROUPS-1) begin
-                        stdp_g <= '0;
-                        if (stdp_j == N_IN-1) begin
-                            state <= S_IDLE;
-                        end else begin
-                            stdp_j <= stdp_j + 1'b1;
-                            stdp_t <= '0;
-                            for (i = 0; i < LANES; i = i + 1) begin
-                                stdp_sum1[i] <= '0;
-                                stdp_sum2[i] <= '0;
-                            end
-                            state <= S_STDP_T;
-                        end
-                    end else begin
-                        stdp_g <= stdp_g + 1'b1;
-                        stdp_t <= '0;
-                        for (i = 0; i < LANES; i = i + 1) begin
-                            stdp_sum1[i] <= '0;
-                            stdp_sum2[i] <= '0;
-                        end
-                        state <= S_STDP_T;
-                    end
-                end
+                state <= S_STDP_READ;
+            end
+        end
 
                 default: state <= S_IDLE;
             endcase
