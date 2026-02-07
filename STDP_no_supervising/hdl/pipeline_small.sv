@@ -102,14 +102,97 @@ module pipeline_small #(
     logic signed [31:0] g_in_state [0:N_NEURONS-1];
     logic signed [31:0] g_in_accum [0:N_NEURONS-1];
 
-    logic signed [31:0] g_exc  [0:N_NEURONS-1];
     logic signed [31:0] g_inh_state [0:N_NEURONS-1];
 
-    logic [N_NEURONS-1:0] s_exc;
-    logic [N_NEURONS-1:0] s_inh;
+    localparam int DELAY_IN_DEPTH = DELAY_IN_STEPS * N_NEURONS;
+    localparam int DELAY_E2I_DEPTH = DELAY_E2I_STEPS * N_NEURONS;
+    localparam int DELAY_IN_ADDR_W = (DELAY_IN_DEPTH <= 1) ? 1 : $clog2(DELAY_IN_DEPTH);
+    localparam int DELAY_E2I_ADDR_W = (DELAY_E2I_DEPTH <= 1) ? 1 : $clog2(DELAY_E2I_DEPTH);
+    (* ram_style = "block" *) logic signed [31:0] delay_in_mem [0:DELAY_IN_DEPTH-1];
+    (* ram_style = "block" *) logic signed [31:0] delay_e2i_mem [0:DELAY_E2I_DEPTH-1];
+    logic [DELAY_IN_ADDR_W-1:0] delay_in_rd_addr;
+    logic [DELAY_E2I_ADDR_W-1:0] delay_e2i_rd_addr;
+    logic signed [31:0] delay_in_rd_data;
+    logic signed [31:0] delay_e2i_rd_data;
+    localparam int DELAY_IN_W = (DELAY_IN_STEPS <= 1) ? 1 : $clog2(DELAY_IN_STEPS);
+    localparam int DELAY_E2I_W = (DELAY_E2I_STEPS <= 1) ? 1 : $clog2(DELAY_E2I_STEPS);
+    logic [DELAY_IN_W-1:0] delay_in_wr_idx;
+    logic [DELAY_E2I_W-1:0] delay_e2i_wr_idx;
+    logic [DELAY_IN_W-1:0] delay_in_clr_step;
+    logic [DELAY_E2I_W-1:0] delay_e2i_clr_step;
+    logic [NEURON_W-1:0] delay_clr_neuron;
 
-    logic signed [31:0] delay_in [0:DELAY_IN_STEPS-1][0:N_NEURONS-1];
-    logic signed [31:0] delay_e2i [0:DELAY_E2I_STEPS-1][0:N_NEURONS-1];
+    function automatic [DELAY_IN_W-1:0] delay_in_rd_idx;
+        begin
+            if (DELAY_IN_STEPS <= 1) begin
+                delay_in_rd_idx = '0;
+            end else if (delay_in_wr_idx == 0) begin
+                delay_in_rd_idx = DELAY_IN_STEPS-1;
+            end else begin
+                delay_in_rd_idx = delay_in_wr_idx - 1'b1;
+            end
+        end
+    endfunction
+
+    function automatic [DELAY_E2I_W-1:0] delay_e2i_rd_idx;
+        begin
+            if (DELAY_E2I_STEPS <= 1) begin
+                delay_e2i_rd_idx = '0;
+            end else if (delay_e2i_wr_idx == 0) begin
+                delay_e2i_rd_idx = DELAY_E2I_STEPS-1;
+            end else begin
+                delay_e2i_rd_idx = delay_e2i_wr_idx - 1'b1;
+            end
+        end
+    endfunction
+
+    function automatic [DELAY_IN_W-1:0] delay_in_next_idx;
+        input [DELAY_IN_W-1:0] idx;
+        begin
+            if (DELAY_IN_STEPS <= 1) begin
+                delay_in_next_idx = '0;
+            end else if (idx == DELAY_IN_STEPS-1) begin
+                delay_in_next_idx = '0;
+            end else begin
+                delay_in_next_idx = idx + 1'b1;
+            end
+        end
+    endfunction
+
+    function automatic [DELAY_E2I_W-1:0] delay_e2i_next_idx;
+        input [DELAY_E2I_W-1:0] idx;
+        begin
+            if (DELAY_E2I_STEPS <= 1) begin
+                delay_e2i_next_idx = '0;
+            end else if (idx == DELAY_E2I_STEPS-1) begin
+                delay_e2i_next_idx = '0;
+            end else begin
+                delay_e2i_next_idx = idx + 1'b1;
+            end
+        end
+    endfunction
+
+    function automatic [DELAY_IN_ADDR_W-1:0] delay_in_addr(
+        input [DELAY_IN_W-1:0] step,
+        input [NEURON_W-1:0] neuron
+    );
+        int unsigned addr;
+        begin
+            addr = (step * N_NEURONS) + neuron;
+            delay_in_addr = addr[DELAY_IN_ADDR_W-1:0];
+        end
+    endfunction
+
+    function automatic [DELAY_E2I_ADDR_W-1:0] delay_e2i_addr(
+        input [DELAY_E2I_W-1:0] step,
+        input [NEURON_W-1:0] neuron
+    );
+        int unsigned addr;
+        begin
+            addr = (step * N_NEURONS) + neuron;
+            delay_e2i_addr = addr[DELAY_E2I_ADDR_W-1:0];
+        end
+    endfunction
 
     // No history buffers for online STDP
 
@@ -117,10 +200,15 @@ module pipeline_small #(
         S_IDLE,
         S_SCAN,
         S_GIN_WAIT,
-        S_NEURON,
+        S_NEURON_PREP,
+        S_NEURON_CALC1,
+        S_NEURON_CALC2,
+        S_NEURON_COMMIT,
         S_OUT,
         S_STDP_READ,
-        S_STDP_CALC
+        S_STDP_CALC,
+        S_CLR_DELAY_IN,
+        S_CLR_DELAY_E2I
     } state_e;
     state_e state;
 
@@ -138,6 +226,23 @@ module pipeline_small #(
                 fp_div_round = (a - (div >> 1)) / div;
         end
     endfunction
+
+    always_ff @(posedge clk) begin
+        if (rst) begin
+            mul_result <= '0;
+            div_result <= '0;
+        end else begin
+            mul_result <= (mul_a * mul_b) >>> FP_SHIFT;
+            if (div_div != 0) begin
+                if (div_a >= 0)
+                    div_result <= (div_a + (div_div >> 1)) / div_div;
+                else
+                    div_result <= (div_a - (div_div >> 1)) / div_div;
+            end else begin
+                div_result <= '0;
+            end
+        end
+    end
 
     // Memory interface for W_in (4-bank)
     logic mem_r_en;
@@ -203,126 +308,72 @@ module pipeline_small #(
     logic [IN_W-1:0] stdp_j;
     logic [$clog2(NEURON_GROUPS):0] stdp_g;
 
-    // Combinational math for neuron update
-    logic signed [31:0] g_in_state_next [0:N_NEURONS-1];
-    logic signed [31:0] r_exc_next [0:N_NEURONS-1];
-    logic signed [31:0] x_exc_next [0:N_NEURONS-1];
-    logic signed [31:0] r_inh_next [0:N_NEURONS-1];
-    logic signed [31:0] v_exc_next [0:N_NEURONS-1];
-    logic signed [31:0] theta_next [0:N_NEURONS-1];
-    logic signed [31:0] vthr_next [0:N_NEURONS-1];
-    logic [15:0]        refr_exc_next [0:N_NEURONS-1];
+    // Per-neuron next-state storage (computed over multiple cycles)
+    (* ram_style = "block" *) logic signed [31:0] g_in_state_next [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic signed [31:0] r_exc_next [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic signed [31:0] x_exc_next [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic signed [31:0] r_inh_next [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic signed [31:0] v_exc_next [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic signed [31:0] theta_next [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic signed [31:0] vthr_next [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic [15:0]        refr_exc_next [0:N_NEURONS-1];
 
-    logic signed [31:0] v_inh_next [0:N_NEURONS-1];
-    logic [15:0]        refr_inh_next [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic signed [31:0] v_inh_next [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic [15:0]        refr_inh_next [0:N_NEURONS-1];
 
-    logic [N_NEURONS-1:0] s_exc_next;
-    logic [N_NEURONS-1:0] s_inh_next;
-    logic signed [31:0] g_exc_next [0:N_NEURONS-1];
-    logic signed [31:0] g_inh_next [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic [N_NEURONS-1:0] s_exc_next;
+    (* ram_style = "block" *) logic signed [31:0] g_exc_next [0:N_NEURONS-1];
 
-    always_comb begin
-        for (i = 0; i < N_NEURONS; i = i + 1) begin
-            g_in_state_next[i] = g_in_state[i] - fp_div_round(g_in_state[i], TD_IN_STEPS) + g_in_accum[i];
-        end
+    logic [$clog2(N_NEURONS):0] neuron_idx;
+    logic signed [63:0] sum_r_inh_reg;
 
-        for (i = 0; i < N_NEURONS; i = i + 1) begin
-            logic signed [31:0] i_syn_exc;
-            logic signed [31:0] i_syn_inh;
-            logic signed [31:0] num_exc;
-            logic signed [31:0] dv_exc;
-            logic signed [31:0] v_next_exc;
-            logic signed [31:0] theta_tmp;
-            logic signed [31:0] g_in_delayed_val;
+    typedef enum logic [3:0] {
+        P_GIN_DIV,
+        P_I_SYN_EXC_MUL,
+        P_I_SYN_INH_MUL,
+        P_DV_EXC_DIV,
+        P_THETA_DIV,
+        P_R_EXC_DIV,
+        P_X_EXC_DIV,
+        P_G_EXC_MUL,
+        P_I_SYN_I_MUL,
+        P_DV_I_DIV,
+        P_R_INH_DIV
+    } calc_phase_e;
+    calc_phase_e calc_phase;
 
-            g_in_delayed_val = delay_in[DELAY_IN_STEPS-1][i];
+    logic signed [31:0] mul_a;
+    logic signed [31:0] mul_b;
+    logic signed [31:0] mul_result;
+    logic signed [31:0] div_a;
+    logic [31:0]        div_div;
+    logic signed [31:0] div_result;
 
-            i_syn_exc = fp_mul(g_in_delayed_val, (EXC_E_EXC*FP_SCALE) - v_exc[i]);
-            i_syn_inh = fp_mul(g_inh_state[i], (EXC_E_INH*FP_SCALE) - v_exc[i]);
-            num_exc = (EXC_VREST*FP_SCALE) - v_exc[i] + i_syn_exc + i_syn_inh;
-            dv_exc = fp_div_round(num_exc, EXC_TAU_M);
-            v_next_exc = v_exc[i] + dv_exc;
+    logic signed [31:0] num_exc_val;
+    logic signed [31:0] num_i_val;
+    logic signed [31:0] i_syn_exc_val;
+    logic signed [31:0] v_next_exc_val;
+    logic signed [31:0] theta_decayed_val;
+    logic signed [31:0] r_exc_next_val;
+    logic signed [31:0] x_exc_next_val;
+    logic signed [31:0] g_exc_next_val;
+    logic signed [31:0] v_next_i_val;
+    logic signed [31:0] theta_next_val;
+    logic signed [31:0] vthr_next_val;
+    logic signed [31:0] v_exc_next_val;
+    logic signed [31:0] v_inh_next_val;
+    logic [15:0]        refr_exc_next_val;
+    logic [15:0]        refr_inh_next_val;
+    logic              s_exc_next_val;
 
-            if (refr_exc[i] != 0) begin
-                refr_exc_next[i] = refr_exc[i] - 1'b1;
-                v_exc_next[i] = EXC_VRESET * FP_SCALE;
-                theta_tmp = theta[i] - fp_div_round(theta[i], EXC_TC_THETA);
-                s_exc_next[i] = 1'b0;
-            end else begin
-                if (v_next_exc >= vthr[i]) begin
-                    s_exc_next[i] = 1'b1;
-                    v_exc_next[i] = EXC_VRESET * FP_SCALE;
-                    refr_exc_next[i] = EXC_REFRACT;
-                    theta_tmp = theta[i] - fp_div_round(theta[i], EXC_TC_THETA) + EXC_THETA_PLUS_FP;
-                end else begin
-                    s_exc_next[i] = 1'b0;
-                    v_exc_next[i] = v_next_exc;
-                    refr_exc_next[i] = 0;
-                    theta_tmp = theta[i] - fp_div_round(theta[i], EXC_TC_THETA);
-                end
-            end
-            if (theta_tmp < 0) theta_tmp = 0;
-            if (theta_tmp > (EXC_THETA_MAX*FP_SCALE)) theta_tmp = EXC_THETA_MAX*FP_SCALE;
-            theta_next[i] = theta_tmp;
-            vthr_next[i] = (EXC_INIT_VTHR * FP_SCALE) + theta_tmp;
-        end
-
-        for (i = 0; i < N_NEURONS; i = i + 1) begin
-            r_exc_next[i] = r_exc[i] - fp_div_round(r_exc[i], TD_EXC_STEPS)
-                          + (s_exc_next[i] ? (FP_SCALE / TD_EXC_STEPS) : 0);
-            x_exc_next[i] = x_exc[i] - fp_div_round(x_exc[i], TD_X_STEPS)
-                          + (s_exc_next[i] ? (FP_SCALE / TD_X_STEPS) : 0);
-            g_exc_next[i] = fp_mul(WEXC_FP, r_exc_next[i]);
-        end
-
-        for (i = 0; i < N_NEURONS; i = i + 1) begin
-            logic signed [31:0] i_syn_exc_i;
-            logic signed [31:0] num_i;
-            logic signed [31:0] dv_i;
-            logic signed [31:0] v_next_i;
-            logic signed [31:0] g_exc_delayed_val;
-
-            g_exc_delayed_val = delay_e2i[DELAY_E2I_STEPS-1][i];
-            i_syn_exc_i = fp_mul(g_exc_delayed_val, (INH_E_EXC*FP_SCALE) - v_inh[i]);
-            num_i = (INH_VREST*FP_SCALE) - v_inh[i] + i_syn_exc_i;
-            dv_i = fp_div_round(num_i, INH_TAU_M);
-            v_next_i = v_inh[i] + dv_i;
-
-            if (refr_inh[i] != 0) begin
-                refr_inh_next[i] = refr_inh[i] - 1'b1;
-                v_inh_next[i] = INH_VRESET * FP_SCALE;
-                s_inh_next[i] = 1'b0;
-            end else begin
-                if (v_next_i >= (INH_VTHR*FP_SCALE)) begin
-                    s_inh_next[i] = 1'b1;
-                    v_inh_next[i] = INH_VRESET * FP_SCALE;
-                    refr_inh_next[i] = INH_REFRACT;
-                end else begin
-                    s_inh_next[i] = 1'b0;
-                    v_inh_next[i] = v_next_i;
-                    refr_inh_next[i] = 0;
-                end
-            end
-        end
-
-        for (i = 0; i < N_NEURONS; i = i + 1) begin
-            r_inh_next[i] = r_inh[i] - fp_div_round(r_inh[i], TD_INH_STEPS)
-                          + (s_inh_next[i] ? (FP_SCALE / TD_INH_STEPS) : 0);
-        end
-
-        for (i = 0; i < N_NEURONS; i = i + 1) begin
-            logic signed [63:0] acc_inh;
-            acc_inh = 0;
-            for (j = 0; j < N_NEURONS; j = j + 1) begin
-                if (j != i) begin
-                    acc_inh = acc_inh + r_inh_next[j];
-                end
-            end
-            if (N_NEURONS > 1) begin
-                g_inh_next[i] = fp_mul(fp_div_round(WINH_FP, (N_NEURONS-1)), acc_inh[31:0]);
-            end else begin
-                g_inh_next[i] = 0;
-            end
+    // Delay line RAM read ports (1-cycle latency)
+    always_ff @(posedge clk) begin
+        if (rst) begin
+            delay_in_rd_data <= '0;
+            delay_e2i_rd_data <= '0;
+        end else begin
+            delay_in_rd_data <= delay_in_mem[delay_in_rd_addr];
+            delay_e2i_rd_data <= delay_e2i_mem[delay_e2i_rd_addr];
         end
     end
 
@@ -335,13 +386,36 @@ module pipeline_small #(
             tstep_id_reg <= '0;
             s_in_reg <= '0;
             s_stdp_reg <= 1'b0;
-            state <= S_IDLE;
+            state <= S_CLR_DELAY_IN;
             scan_in_idx <= '0;
             scan_group_idx <= '0;
             scan_spike_active <= 1'b0;
             stdp_pending <= 1'b0;
             stdp_j <= '0;
             stdp_g <= '0;
+            neuron_idx <= '0;
+            sum_r_inh_reg <= '0;
+            calc_phase <= P_GIN_DIV;
+            mul_a <= '0;
+            mul_b <= '0;
+            div_a <= '0;
+            div_div <= '0;
+            num_exc_val <= '0;
+            num_i_val <= '0;
+            i_syn_exc_val <= '0;
+            v_next_exc_val <= '0;
+            theta_decayed_val <= '0;
+            r_exc_next_val <= '0;
+            x_exc_next_val <= '0;
+            g_exc_next_val <= '0;
+            v_next_i_val <= '0;
+            theta_next_val <= '0;
+            vthr_next_val <= '0;
+            v_exc_next_val <= '0;
+            v_inh_next_val <= '0;
+            refr_exc_next_val <= '0;
+            refr_inh_next_val <= '0;
+            s_exc_next_val <= 1'b0;
 
             for (i = 0; i < N_IN; i = i + 1) begin
                 x_in[i] <= '0;
@@ -359,20 +433,14 @@ module pipeline_small #(
                 g_inh_state[i] <= '0;
                 g_in_state[i] <= '0;
                 g_in_accum[i] <= '0;
-                g_exc[i] <= '0;
-                s_exc[i] <= 1'b0;
-                s_inh[i] <= 1'b0;
             end
-            for (i = 0; i < DELAY_IN_STEPS; i = i + 1) begin
-                for (j = 0; j < N_NEURONS; j = j + 1) begin
-                    delay_in[i][j] <= '0;
-                end
-            end
-            for (i = 0; i < DELAY_E2I_STEPS; i = i + 1) begin
-                for (j = 0; j < N_NEURONS; j = j + 1) begin
-                    delay_e2i[i][j] <= '0;
-                end
-            end
+            delay_in_wr_idx <= '0;
+            delay_e2i_wr_idx <= '0;
+            delay_in_clr_step <= '0;
+            delay_e2i_clr_step <= '0;
+            delay_clr_neuron <= '0;
+            delay_in_rd_addr <= '0;
+            delay_e2i_rd_addr <= '0;
         end else begin
             // defaults
             mem_r_en <= 1'b0;
@@ -381,6 +449,38 @@ module pipeline_small #(
             end
 
             case (state)
+                S_CLR_DELAY_IN: begin
+                    s_tready <= 1'b0;
+                    delay_in_mem[delay_in_addr(delay_in_clr_step, delay_clr_neuron)] <= '0;
+                    if (delay_clr_neuron == N_NEURONS-1) begin
+                        delay_clr_neuron <= '0;
+                        if (delay_in_clr_step == DELAY_IN_STEPS-1) begin
+                            delay_in_clr_step <= '0;
+                            state <= S_CLR_DELAY_E2I;
+                        end else begin
+                            delay_in_clr_step <= delay_in_clr_step + 1'b1;
+                        end
+                    end else begin
+                        delay_clr_neuron <= delay_clr_neuron + 1'b1;
+                    end
+                end
+
+                S_CLR_DELAY_E2I: begin
+                    s_tready <= 1'b0;
+                    delay_e2i_mem[delay_e2i_addr(delay_e2i_clr_step, delay_clr_neuron)] <= '0;
+                    if (delay_clr_neuron == N_NEURONS-1) begin
+                        delay_clr_neuron <= '0;
+                        if (delay_e2i_clr_step == DELAY_E2I_STEPS-1) begin
+                            delay_e2i_clr_step <= '0;
+                            state <= S_IDLE;
+                        end else begin
+                            delay_e2i_clr_step <= delay_e2i_clr_step + 1'b1;
+                        end
+                    end else begin
+                        delay_clr_neuron <= delay_clr_neuron + 1'b1;
+                    end
+                end
+
                 S_IDLE: begin
                     s_tready <= 1'b1;
                     if (s_tvalid && s_tready) begin
@@ -426,7 +526,7 @@ module pipeline_small #(
                             scan_in_idx <= scan_in_idx + 1'b1;
                         end
                     end else begin
-                        state <= S_NEURON;
+                        state <= S_NEURON_PREP;
                     end
                 end
 
@@ -461,53 +561,238 @@ module pipeline_small #(
                 end
 
                 // Finish neuron update (LIF, synapses, delays) in one step
-                S_NEURON: begin
-                    for (i = 0; i < N_NEURONS; i = i + 1) begin
-                        g_in_state[i] <= g_in_state_next[i];
-                        r_exc[i] <= r_exc_next[i];
-                        x_exc[i] <= x_exc_next[i];
-                        r_inh[i] <= r_inh_next[i];
-                        v_exc[i] <= v_exc_next[i];
-                        theta[i] <= theta_next[i];
-                        vthr[i] <= vthr_next[i];
-                        refr_exc[i] <= refr_exc_next[i];
-                        v_inh[i] <= v_inh_next[i];
-                        refr_inh[i] <= refr_inh_next[i];
-                        g_inh_state[i] <= g_inh_next[i];
-                        g_exc[i] <= g_exc_next[i];
-                        s_exc[i] <= s_exc_next[i];
-                        s_inh[i] <= s_inh_next[i];
+                S_NEURON_PREP: begin
+                    neuron_idx <= '0;
+                    sum_r_inh_reg <= '0;
+                    calc_phase <= P_GIN_DIV;
+                    if (s_stdp_reg) begin
+                        stdp_pending <= 1'b1;
+                        stdp_j <= '0;
+                        stdp_g <= '0;
                     end
+                    state <= S_NEURON_CALC1;
+                end
 
-                    // update delays
-                    for (i = DELAY_IN_STEPS-1; i > 0; i = i - 1) begin
-                        for (j = 0; j < N_NEURONS; j = j + 1) begin
-                            delay_in[i][j] <= delay_in[i-1][j];
+                S_NEURON_CALC1: begin
+                    int n;
+                    n = neuron_idx;
+                    case (calc_phase)
+                        P_GIN_DIV: begin
+                            div_a <= g_in_state[n];
+                            div_div <= TD_IN_STEPS;
                         end
-                    end
-                    for (j = 0; j < N_NEURONS; j = j + 1) begin
-                        delay_in[0][j] <= g_in_state_next[j];
-                    end
-                    for (i = DELAY_E2I_STEPS-1; i > 0; i = i - 1) begin
-                        for (j = 0; j < N_NEURONS; j = j + 1) begin
-                            delay_e2i[i][j] <= delay_e2i[i-1][j];
+                        P_I_SYN_EXC_MUL: begin
+                            mul_a <= delay_in_rd_data;
+                            mul_b <= (EXC_E_EXC*FP_SCALE) - v_exc[n];
                         end
-                    end
-                    for (j = 0; j < N_NEURONS; j = j + 1) begin
-                        delay_e2i[0][j] <= g_exc_next[j];
-                    end
+                        P_I_SYN_INH_MUL: begin
+                            mul_a <= g_inh_state[n];
+                            mul_b <= (EXC_E_INH*FP_SCALE) - v_exc[n];
+                        end
+                        P_DV_EXC_DIV: begin
+                            div_a <= num_exc_val;
+                            div_div <= EXC_TAU_M;
+                        end
+                        P_THETA_DIV: begin
+                            div_a <= theta[n];
+                            div_div <= EXC_TC_THETA;
+                        end
+                        P_R_EXC_DIV: begin
+                            div_a <= r_exc[n];
+                            div_div <= TD_EXC_STEPS;
+                        end
+                        P_X_EXC_DIV: begin
+                            div_a <= x_exc[n];
+                            div_div <= TD_X_STEPS;
+                        end
+                        P_G_EXC_MUL: begin
+                            mul_a <= WEXC_FP;
+                            mul_b <= r_exc_next_val;
+                        end
+                        P_I_SYN_I_MUL: begin
+                            mul_a <= delay_e2i_rd_data;
+                            mul_b <= (INH_E_EXC*FP_SCALE) - v_inh[n];
+                        end
+                        P_DV_I_DIV: begin
+                            div_a <= num_i_val;
+                            div_div <= INH_TAU_M;
+                        end
+                        P_R_INH_DIV: begin
+                            div_a <= r_inh[n];
+                            div_div <= TD_INH_STEPS;
+                        end
+                        default: begin
+                            div_a <= '0;
+                            div_div <= '0;
+                            mul_a <= '0;
+                            mul_b <= '0;
+                        end
+                    endcase
+                    state <= S_NEURON_CALC2;
+                end
 
-                    // STDP buffers
-            if (s_stdp_reg) begin
-                stdp_pending <= 1'b1;
-                stdp_j <= '0;
-                stdp_g <= '0;
-            end
+                S_NEURON_CALC2: begin
+                    int n;
+                    logic signed [31:0] theta_tmp;
+                    logic s_exc_local;
+                    logic s_inh_local;
+                    n = neuron_idx;
 
-            m_tdata <= {tstep_id_reg, s_exc_next};
-            m_tvalid <= 1'b1;
-            state <= S_OUT;
-        end
+                    case (calc_phase)
+                        P_GIN_DIV: begin
+                            g_in_state_next[n] <= g_in_state[n] - div_result + g_in_accum[n];
+                            delay_in_rd_addr <= delay_in_addr(delay_in_rd_idx(), n[NEURON_W-1:0]);
+                            calc_phase <= P_I_SYN_EXC_MUL;
+                        end
+                        P_I_SYN_EXC_MUL: begin
+                            i_syn_exc_val <= mul_result;
+                            calc_phase <= P_I_SYN_INH_MUL;
+                        end
+                        P_I_SYN_INH_MUL: begin
+                            num_exc_val <= (EXC_VREST*FP_SCALE) - v_exc[n] + i_syn_exc_val + mul_result;
+                            calc_phase <= P_DV_EXC_DIV;
+                        end
+                        P_DV_EXC_DIV: begin
+                            v_next_exc_val <= v_exc[n] + div_result;
+                            calc_phase <= P_THETA_DIV;
+                        end
+                        P_THETA_DIV: begin
+                            theta_decayed_val <= theta[n] - div_result;
+                            calc_phase <= P_R_EXC_DIV;
+                        end
+                        P_R_EXC_DIV: begin
+                            if (refr_exc[n] != 0) begin
+                                refr_exc_next_val <= refr_exc[n] - 1'b1;
+                                v_exc_next_val <= EXC_VRESET * FP_SCALE;
+                                theta_tmp = theta_decayed_val;
+                                s_exc_local = 1'b0;
+                            end else begin
+                                if (v_next_exc_val >= vthr[n]) begin
+                                    s_exc_local = 1'b1;
+                                    v_exc_next_val <= EXC_VRESET * FP_SCALE;
+                                    refr_exc_next_val <= EXC_REFRACT;
+                                    theta_tmp = theta_decayed_val + EXC_THETA_PLUS_FP;
+                                end else begin
+                                    s_exc_local = 1'b0;
+                                    v_exc_next_val <= v_next_exc_val;
+                                    refr_exc_next_val <= 0;
+                                    theta_tmp = theta_decayed_val;
+                                end
+                            end
+                            if (theta_tmp < 0) theta_tmp = 0;
+                            if (theta_tmp > (EXC_THETA_MAX*FP_SCALE)) theta_tmp = EXC_THETA_MAX*FP_SCALE;
+                            theta_next_val <= theta_tmp;
+                            vthr_next_val <= (EXC_INIT_VTHR * FP_SCALE) + theta_tmp;
+                            s_exc_next_val <= s_exc_local;
+                            r_exc_next_val <= r_exc[n] - div_result
+                                            + (s_exc_local ? (FP_SCALE / TD_EXC_STEPS) : 0);
+                            calc_phase <= P_X_EXC_DIV;
+                        end
+                        P_X_EXC_DIV: begin
+                            x_exc_next_val <= x_exc[n] - div_result
+                                            + (s_exc_next_val ? (FP_SCALE / TD_X_STEPS) : 0);
+                            calc_phase <= P_G_EXC_MUL;
+                        end
+                        P_G_EXC_MUL: begin
+                            g_exc_next_val <= mul_result;
+                            delay_e2i_rd_addr <= delay_e2i_addr(delay_e2i_rd_idx(), n[NEURON_W-1:0]);
+                            calc_phase <= P_I_SYN_I_MUL;
+                        end
+                        P_I_SYN_I_MUL: begin
+                            num_i_val <= (INH_VREST*FP_SCALE) - v_inh[n] + mul_result;
+                            calc_phase <= P_DV_I_DIV;
+                        end
+                        P_DV_I_DIV: begin
+                            v_next_i_val <= v_inh[n] + div_result;
+                            calc_phase <= P_R_INH_DIV;
+                        end
+                        P_R_INH_DIV: begin
+                            logic signed [31:0] r_inh_local;
+                            if (refr_inh[n] != 0) begin
+                                refr_inh_next_val <= refr_inh[n] - 1'b1;
+                                v_inh_next_val <= INH_VRESET * FP_SCALE;
+                                s_inh_local = 1'b0;
+                            end else begin
+                                if (v_next_i_val >= (INH_VTHR*FP_SCALE)) begin
+                                    s_inh_local = 1'b1;
+                                    v_inh_next_val <= INH_VRESET * FP_SCALE;
+                                    refr_inh_next_val <= INH_REFRACT;
+                                end else begin
+                                    s_inh_local = 1'b0;
+                                    v_inh_next_val <= v_next_i_val;
+                                    refr_inh_next_val <= 0;
+                                end
+                            end
+                            r_inh_local = r_inh[n] - div_result
+                                        + (s_inh_local ? (FP_SCALE / TD_INH_STEPS) : 0);
+
+                            s_exc_next[n] <= s_exc_next_val;
+                            v_exc_next[n] <= v_exc_next_val;
+                            v_inh_next[n] <= v_inh_next_val;
+                            refr_exc_next[n] <= refr_exc_next_val;
+                            refr_inh_next[n] <= refr_inh_next_val;
+                            theta_next[n] <= theta_next_val;
+                            vthr_next[n] <= vthr_next_val;
+                            r_exc_next[n] <= r_exc_next_val;
+                            x_exc_next[n] <= x_exc_next_val;
+                            g_exc_next[n] <= g_exc_next_val;
+                            r_inh_next[n] <= r_inh_local;
+                            sum_r_inh_reg <= sum_r_inh_reg + r_inh_local;
+
+                            if (neuron_idx == N_NEURONS-1) begin
+                                neuron_idx <= '0;
+                                calc_phase <= P_GIN_DIV;
+                                state <= S_NEURON_COMMIT;
+                            end else begin
+                                neuron_idx <= neuron_idx + 1'b1;
+                                calc_phase <= P_GIN_DIV;
+                                state <= S_NEURON_CALC1;
+                            end
+                        end
+                        default: begin
+                            calc_phase <= P_GIN_DIV;
+                            state <= S_NEURON_CALC1;
+                        end
+                    endcase
+                end
+
+                S_NEURON_COMMIT: begin
+                    int n;
+                    logic signed [63:0] acc_inh;
+                    logic signed [31:0] g_inh_next_val;
+                    n = neuron_idx;
+                    acc_inh = sum_r_inh_reg - r_inh_next[n];
+                    if (N_NEURONS > 1) begin
+                        g_inh_next_val = fp_mul(fp_div_round(WINH_FP, (N_NEURONS-1)), acc_inh[31:0]);
+                    end else begin
+                        g_inh_next_val = 0;
+                    end
+                    g_in_state[n] <= g_in_state_next[n];
+                    r_exc[n] <= r_exc_next[n];
+                    x_exc[n] <= x_exc_next[n];
+                    r_inh[n] <= r_inh_next[n];
+                    v_exc[n] <= v_exc_next[n];
+                    theta[n] <= theta_next[n];
+                    vthr[n] <= vthr_next[n];
+                    refr_exc[n] <= refr_exc_next[n];
+                    v_inh[n] <= v_inh_next[n];
+                    refr_inh[n] <= refr_inh_next[n];
+                    g_inh_state[n] <= g_inh_next_val;
+                    delay_in_mem[delay_in_addr(delay_in_wr_idx, n[NEURON_W-1:0])] <= g_in_state_next[n];
+                    delay_e2i_mem[delay_e2i_addr(delay_e2i_wr_idx, n[NEURON_W-1:0])] <= g_exc_next[n];
+
+                    if (neuron_idx == N_NEURONS-1) begin
+                        delay_in_wr_idx <= delay_in_next_idx(delay_in_wr_idx);
+                        delay_e2i_wr_idx <= delay_e2i_next_idx(delay_e2i_wr_idx);
+
+                        m_tdata <= {tstep_id_reg, s_exc_next};
+                        m_tvalid <= 1'b1;
+                        state <= S_OUT;
+                        neuron_idx <= '0;
+                    end else begin
+                        neuron_idx <= neuron_idx + 1'b1;
+                    end
+                end
 
         S_OUT: begin
             if (m_tvalid && m_tready) begin

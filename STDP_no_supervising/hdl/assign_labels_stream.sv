@@ -57,7 +57,6 @@ module assign_labels_stream #(
                 for (l = 0; l < N_LABELS; l = l + 1) begin
                     sum_spikes[i][l] <= '0;
                 end
-                assignments[i*LABEL_BITS +: LABEL_BITS] <= '0;
             end
             for (l = 0; l < N_LABELS; l = l + 1) begin
                 n_labeled[l] <= '0;
@@ -106,6 +105,9 @@ module assign_labels_stream #(
             div_dividend <= '0;
             div_divisor <= '0;
             div_valid_in <= 1'b0;
+            for (i = 0; i < N_NEURONS; i = i + 1) begin
+                assignments[i*LABEL_BITS +: LABEL_BITS] <= '0;
+            end
         end else begin
             done <= 1'b0;
             div_valid_in <= 1'b0;

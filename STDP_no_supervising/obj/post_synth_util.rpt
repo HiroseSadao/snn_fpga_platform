@@ -1,0 +1,40 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
+---------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
+| Date         : Sat Feb  7 04:17:16 2026
+| Host         : eecs-digital-17 running 64-bit Ubuntu 24.04.3 LTS
+| Command      : report_utilization -file obj/post_synth_util.rpt -hierarchical -hierarchical_depth 4
+| Design       : top_level
+| Device       : xc7s50csga324-1
+| Speed File   : -1
+| Design State : Synthesized
+---------------------------------------------------------------------------------------------------------------------------------------------
+
+Utilization Design Information
+
+Table of Contents
+-----------------
+1. Utilization by Hierarchy
+
+1. Utilization by Hierarchy
+---------------------------
+
++------------------------------+----------------------+------------+------------+---------+------+-------+--------+--------+------------+
+|           Instance           |        Module        | Total LUTs | Logic LUTs | LUTRAMs | SRLs |  FFs  | RAMB36 | RAMB18 | DSP Blocks |
++------------------------------+----------------------+------------+------------+---------+------+-------+--------+--------+------------+
+| top_level                    |                (top) |     131197 |      75523 |   55674 |    0 | 81199 |      2 |      2 |         17 |
+|   (top_level)                |                (top) |       2496 |       2048 |     448 |    0 |  3950 |      2 |      0 |          6 |
+|   u_assign_labels_stream     | assign_labels_stream |      11147 |      11147 |       0 |    0 | 17084 |      0 |      0 |          0 |
+|     (u_assign_labels_stream) | assign_labels_stream |      10995 |      10995 |       0 |    0 | 16949 |      0 |      0 |          0 |
+|     u_divider                |          divider2b_0 |        152 |        152 |       0 |    0 |   135 |      0 |      0 |          0 |
+|   u_bto7s                    |                bto7s |       2286 |       2286 |       0 |    0 |     0 |      0 |      0 |          0 |
+|   u_pipeline_small           |       pipeline_small |     114399 |      59173 |   55226 |    0 | 59449 |      0 |      2 |         11 |
+|     (u_pipeline_small)       |       pipeline_small |      33376 |      32182 |    1194 |    0 | 59321 |      0 |      2 |          3 |
+|     u_wmem                   |       w_in_mem_4bank |      81023 |      26991 |   54032 |    0 |   128 |      0 |      0 |          8 |
+|   u_prediction_stream        |    prediction_stream |        523 |        523 |       0 |    0 |   568 |      0 |      0 |          0 |
+|     (u_prediction_stream)    |    prediction_stream |        375 |        375 |       0 |    0 |   449 |      0 |      0 |          0 |
+|     u_divider                |            divider2b |        148 |        148 |       0 |    0 |   119 |      0 |      0 |          0 |
+|   u_sd                       |        sd_controller |        346 |        346 |       0 |    0 |   148 |      0 |      0 |          0 |
++------------------------------+----------------------+------------+------------+---------+------+-------+--------+--------+------------+
+
+

@@ -8,7 +8,7 @@ from cocotb.triggers import RisingEdge, ClockCycles
 
 
 CLK_PERIOD_NS = 10  # 100 MHz
-MAX_WAIT_CYCLES = 20000
+MAX_WAIT_CYCLES = 200000
 FP_SHIFT = 16
 FP_SCALE = 1 << FP_SHIFT
 INIT_W_SCALE = 1e-3

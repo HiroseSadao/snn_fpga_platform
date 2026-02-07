@@ -16,7 +16,6 @@ module divider2b #(parameter WIDTH = 32) (
 
     logic [WIDTH-1:0]            dividend;   // holds running quotient bits in LSBs
     logic [WIDTH-1:0]            divisor;
-    logic [WIDTH-1:0]            quotient;   // (not used internally; final comes from dividend)
     logic [31:0]                 p;          // partial remainder (N+1 bits ok with 32)
     logic [5:0]                  count;      // counts remaining iterations (32 -> 0)
 
@@ -39,7 +38,6 @@ module divider2b #(parameter WIDTH = 32) (
     // ------------------------------ Sequential ------------------------------
     always_ff @(posedge clk_in) begin
         if (rst_in) begin
-            quotient        <= '0;
             dividend        <= '0;
             divisor         <= '0;
             remainder_out   <= '0;
@@ -67,7 +65,6 @@ module divider2b #(parameter WIDTH = 32) (
                             state          <= RESTING; // stay idle
                         end else begin
                             state      <= DIVIDING;
-                            quotient   <= '0;
                             dividend   <= dividend_in;
                             divisor    <= divisor_in;
                             p          <= '0;

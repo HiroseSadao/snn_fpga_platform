@@ -95,16 +95,13 @@ module top_level(
 
     // Header parsing
     logic [7:0]  header_bytes [0:19];
-    logic [31:0] version_u32;
     logic [31:0] num_images_u32;
     logic [31:0] n_time_u32;
     logic [31:0] n_neurons_u32;
     logic        header_done;
-    logic        header_ok;
 
     // Labels
     logic [31:0] label_index;
-    logic [7:0]  last_label;
 
     logic        streaming;
 
@@ -145,7 +142,6 @@ module top_level(
     logic [FIFO_W-1:0] fifo_wptr;
     logic [FIFO_W-1:0] fifo_rptr;
     logic [FIFO_W:0] fifo_count;
-    logic fifo_overflow;
     logic fifo_wr_en;
     logic [7:0] fifo_wr_data;
     logic fifo_rd_en;
@@ -292,18 +288,14 @@ module top_level(
             file_byte_index <= 32'd0;
 
             header_done     <= 1'b0;
-            header_ok       <= 1'b0;
-            version_u32     <= 32'd0;
             num_images_u32  <= 32'd0;
             n_time_u32      <= 32'd0;
             n_neurons_u32   <= 32'd0;
             label_index     <= 32'd0;
-            last_label      <= 8'd0;
 
             streaming       <= 1'b0;
 
             stream_state    <= S_IDLE;
-            fifo_overflow   <= 1'b0;
             fifo_wr_en      <= 1'b0;
             fifo_wr_data    <= 8'd0;
             // labels_mem initialized on read
@@ -368,20 +360,18 @@ module top_level(
                     if (byte_available) begin
                         // Capture header
                         if (!header_done) begin
-                            header_bytes[file_byte_index] <= dout;
+                            if ((file_byte_index >= 32'd8) && (file_byte_index <= 32'd18)) begin
+                                header_bytes[file_byte_index] <= dout;
+                            end
                             if (file_byte_index == 32'd19) begin
                                 // parse header (little-endian), use current dout for byte[19]
-                                version_u32    <= {header_bytes[7],  header_bytes[6],  header_bytes[5],  header_bytes[4]};
                                 num_images_u32 <= {header_bytes[11], header_bytes[10], header_bytes[9],  header_bytes[8]};
                                 n_time_u32     <= {header_bytes[15], header_bytes[14], header_bytes[13], header_bytes[12]};
                                 n_neurons_u32  <= {dout, header_bytes[18], header_bytes[17], header_bytes[16]};
-                                header_ok      <= (header_bytes[0] == 8'h53) && (header_bytes[1] == 8'h50) &&
-                                                  (header_bytes[2] == 8'h4B) && (header_bytes[3] == 8'h31);
                                 header_done    <= 1'b1;
                             end
                         end else if (file_byte_index < (HEADER_BYTES + num_images_u32)) begin
                             // Labels area
-                            last_label  <= dout;
                             labels_mem[label_index[$clog2(N_SAMPLES)-1:0]] <= dout[LABEL_BITS-1:0];
                             label_index <= label_index + 1'b1;
                         end else if (streaming) begin
@@ -389,8 +379,6 @@ module top_level(
                             if (fifo_count < FIFO_DEPTH) begin
                                 fifo_wr_en   <= 1'b1;
                                 fifo_wr_data <= dout;
-                            end else begin
-                                fifo_overflow <= 1'b1;
                             end
                         end
 
