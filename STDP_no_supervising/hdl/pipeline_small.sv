@@ -72,7 +72,7 @@ module pipeline_small #(
     localparam int INH_E_EXC = 0;
     localparam int INH_E_INH = -85;
 
-    localparam int LANES = 4;
+    localparam int LANES = 1;
     localparam int NEURON_GROUPS = (N_NEURONS + LANES - 1) / LANES;
 
     localparam int INPUT_SPIKE_FP = FP_SCALE / TD_IN_STEPS;
@@ -197,6 +197,7 @@ module pipeline_small #(
     // No history buffers for online STDP
 
     typedef enum logic [3:0] {
+        S_WAIT_WMEM_INIT,
         S_IDLE,
         S_SCAN,
         S_GIN_WAIT,
@@ -255,6 +256,8 @@ module pipeline_small #(
     logic [IN_W-1:0] mem_w_in [0:LANES-1];
     logic signed [31:0] mem_w_data [0:LANES-1];
 
+    logic wmem_init_done;
+
     w_in_mem_4bank #(
         .N_IN(N_IN),
         .N_NEURONS(N_NEURONS),
@@ -265,38 +268,18 @@ module pipeline_small #(
         .rst(rst),
         .r_en(mem_r_en),
         .r_neuron0(mem_r_neuron[0]),
-        .r_neuron1(mem_r_neuron[1]),
-        .r_neuron2(mem_r_neuron[2]),
-        .r_neuron3(mem_r_neuron[3]),
         .r_in0(mem_r_in[0]),
-        .r_in1(mem_r_in[1]),
-        .r_in2(mem_r_in[2]),
-        .r_in3(mem_r_in[3]),
         .r_data0(mem_r_data[0]),
-        .r_data1(mem_r_data[1]),
-        .r_data2(mem_r_data[2]),
-        .r_data3(mem_r_data[3]),
         .w_en0(mem_w_en[0]),
-        .w_en1(mem_w_en[1]),
-        .w_en2(mem_w_en[2]),
-        .w_en3(mem_w_en[3]),
         .w_neuron0(mem_w_neuron[0]),
-        .w_neuron1(mem_w_neuron[1]),
-        .w_neuron2(mem_w_neuron[2]),
-        .w_neuron3(mem_w_neuron[3]),
         .w_in0(mem_w_in[0]),
-        .w_in1(mem_w_in[1]),
-        .w_in2(mem_w_in[2]),
-        .w_in3(mem_w_in[3]),
         .w_data0(mem_w_data[0]),
-        .w_data1(mem_w_data[1]),
-        .w_data2(mem_w_data[2]),
-        .w_data3(mem_w_data[3]),
         .dbg_en(dbg_en),
         .dbg_neuron(dbg_neuron),
         .dbg_in(dbg_in),
         .dbg_valid(dbg_valid),
-        .dbg_data(dbg_data)
+        .dbg_data(dbg_data),
+        .init_done(wmem_init_done)
     );
 
     // Scan and STDP counters
@@ -386,7 +369,7 @@ module pipeline_small #(
             tstep_id_reg <= '0;
             s_in_reg <= '0;
             s_stdp_reg <= 1'b0;
-            state <= S_CLR_DELAY_IN;
+            state <= S_WAIT_WMEM_INIT;
             scan_in_idx <= '0;
             scan_group_idx <= '0;
             scan_spike_active <= 1'b0;
@@ -449,6 +432,13 @@ module pipeline_small #(
             end
 
             case (state)
+                S_WAIT_WMEM_INIT: begin
+                    s_tready <= 1'b0;
+                    if (wmem_init_done) begin
+                        state <= S_CLR_DELAY_IN;
+                    end
+                end
+
                 S_CLR_DELAY_IN: begin
                     s_tready <= 1'b0;
                     delay_in_mem[delay_in_addr(delay_in_clr_step, delay_clr_neuron)] <= '0;

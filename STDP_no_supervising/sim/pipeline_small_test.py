@@ -36,25 +36,20 @@ def write_init_files(build_dir):
     data_dir = build_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     w_fp = gen_init_weights()
-    neuron_groups = (N_NEURONS + 3) // 4
-    depth = neuron_groups * N_IN
-    banks = [[INIT_VAL_FP for _ in range(depth)] for _ in range(4)]
+    depth = N_NEURONS * N_IN
+    bank = [INIT_VAL_FP for _ in range(depth)]
 
-    for row in range(neuron_groups):
+    for neuron in range(N_NEURONS):
+        base = neuron * N_IN
         for in_idx in range(N_IN):
-            base = row * N_IN + in_idx
-            for bank in range(4):
-                neuron = row * 4 + bank
-                if neuron < N_NEURONS:
-                    banks[bank][base] = int(w_fp[neuron, in_idx])
+            bank[base + in_idx] = int(w_fp[neuron, in_idx])
 
-    for bank in range(4):
-        path = data_dir / f"w_init{bank}.mem"
-        with open(path, "w", encoding="utf-8") as f:
-            for v in banks[bank]:
-                if v < 0:
-                    v = (v + (1 << 32)) & 0xFFFFFFFF
-                f.write(f"{v:08x}\n")
+    path = data_dir / "w_init0.mem"
+    with open(path, "w", encoding="utf-8") as f:
+        for v in bank:
+            if v < 0:
+                v = (v + (1 << 32)) & 0xFFFFFFFF
+            f.write(f"{v:08x}\n")
 
     sum_abs = np.sum(np.abs(w_fp), axis=1).astype(np.int64)
     path = data_dir / "sum_abs.mem"

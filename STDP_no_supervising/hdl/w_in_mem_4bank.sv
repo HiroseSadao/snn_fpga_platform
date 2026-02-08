@@ -11,128 +11,184 @@ module w_in_mem_4bank #(
 
     input  wire                         r_en,
     input  wire [$clog2(N_NEURONS)-1:0] r_neuron0,
-    input  wire [$clog2(N_NEURONS)-1:0] r_neuron1,
-    input  wire [$clog2(N_NEURONS)-1:0] r_neuron2,
-    input  wire [$clog2(N_NEURONS)-1:0] r_neuron3,
     input  wire [$clog2(N_IN)-1:0]      r_in0,
-    input  wire [$clog2(N_IN)-1:0]      r_in1,
-    input  wire [$clog2(N_IN)-1:0]      r_in2,
-    input  wire [$clog2(N_IN)-1:0]      r_in3,
     output logic signed [31:0]          r_data0,
-    output logic signed [31:0]          r_data1,
-    output logic signed [31:0]          r_data2,
-    output logic signed [31:0]          r_data3,
 
     input  wire                         w_en0,
-    input  wire                         w_en1,
-    input  wire                         w_en2,
-    input  wire                         w_en3,
     input  wire [$clog2(N_NEURONS)-1:0] w_neuron0,
-    input  wire [$clog2(N_NEURONS)-1:0] w_neuron1,
-    input  wire [$clog2(N_NEURONS)-1:0] w_neuron2,
-    input  wire [$clog2(N_NEURONS)-1:0] w_neuron3,
     input  wire [$clog2(N_IN)-1:0]      w_in0,
-    input  wire [$clog2(N_IN)-1:0]      w_in1,
-    input  wire [$clog2(N_IN)-1:0]      w_in2,
-    input  wire [$clog2(N_IN)-1:0]      w_in3,
     input  wire signed [31:0]           w_data0,
-    input  wire signed [31:0]           w_data1,
-    input  wire signed [31:0]           w_data2,
-    input  wire signed [31:0]           w_data3,
 
     input  wire                         dbg_en,
     input  wire [$clog2(N_NEURONS)-1:0] dbg_neuron,
     input  wire [$clog2(N_IN)-1:0]      dbg_in,
     output logic                        dbg_valid,
-    output logic signed [31:0]          dbg_data
+    output logic signed [31:0]          dbg_data,
+
+    output logic                        init_done
 );
 
-    localparam int LANES = 4;
-    localparam int NEURON_GROUPS = (N_NEURONS + LANES - 1) / LANES;
-    localparam int DEPTH = NEURON_GROUPS * N_IN;
+    localparam int DEPTH = N_NEURONS * N_IN;
     localparam int ADDR_W = (DEPTH <= 1) ? 1 : $clog2(DEPTH);
 
-    (* ram_style = "block" *) logic signed [31:0] mem0 [0:DEPTH-1];
-    (* ram_style = "block" *) logic signed [31:0] mem1 [0:DEPTH-1];
-    (* ram_style = "block" *) logic signed [31:0] mem2 [0:DEPTH-1];
-    (* ram_style = "block" *) logic signed [31:0] mem3 [0:DEPTH-1];
+    localparam string MEM_INIT_FILE = "data/w_init0.mem";
 
-    initial begin
-        if (INIT_FROM_FILE) begin
-            $readmemh("data/w_init0.mem", mem0);
-            $readmemh("data/w_init1.mem", mem1);
-            $readmemh("data/w_init2.mem", mem2);
-            $readmemh("data/w_init3.mem", mem3);
-        end
-    end
-
+`ifndef SYNTHESIS
     logic dbg_pending;
-    logic [1:0] dbg_bank;
-    logic [ADDR_W-1:0] dbg_addr;
+    wire  [ADDR_W-1:0] dbg_addr_i = addr_from(dbg_neuron, dbg_in);
+`endif
 
     function automatic [ADDR_W-1:0] addr_from;
         input int neuron;
         input int in_idx;
         int row;
         begin
-            row = neuron >> 2; // divide by 4
+            row = neuron;
             addr_from = row * N_IN + in_idx;
         end
     endfunction
 
-    integer i;
+    logic init_active;
+    logic [ADDR_W-1:0] init_addr;
+    logic [ADDR_W-1:0] rd_addr;
+    logic rd_en;
+    logic [ADDR_W-1:0] wr_addr;
+    logic wr_en;
+    logic signed [31:0] wr_data;
+    logic signed [31:0] rd_data;
 
+    // Control/initialization FSM
     always_ff @(posedge clk) begin
         if (rst) begin
-            if (!INIT_FROM_FILE) begin
-                for (i = 0; i < DEPTH; i = i + 1) begin
-                    mem0[i] <= INIT_VAL;
-                    mem1[i] <= INIT_VAL;
-                    mem2[i] <= INIT_VAL;
-                    mem3[i] <= INIT_VAL;
-                end
-            end
-            r_data0 <= INIT_VAL;
-            r_data1 <= INIT_VAL;
-            r_data2 <= INIT_VAL;
-            r_data3 <= INIT_VAL;
             dbg_valid <= 1'b0;
             dbg_data <= INIT_VAL;
+`ifndef SYNTHESIS
             dbg_pending <= 1'b0;
-            dbg_bank <= 2'b0;
-            dbg_addr <= '0;
+`endif
+            init_active <= !INIT_FROM_FILE;
+            init_addr <= '0;
+            init_done <= INIT_FROM_FILE;
         end else begin
-            if (r_en) begin
-                r_data0 <= mem0[addr_from(r_neuron0, r_in0)];
-                r_data1 <= mem1[addr_from(r_neuron1, r_in1)];
-                r_data2 <= mem2[addr_from(r_neuron2, r_in2)];
-                r_data3 <= mem3[addr_from(r_neuron3, r_in3)];
-            end
+            if (init_active) begin
+                dbg_valid <= 1'b0;
+                dbg_data <= INIT_VAL;
+`ifndef SYNTHESIS
+                dbg_pending <= 1'b0;
+`endif
 
-            if (w_en0) mem0[addr_from(w_neuron0, w_in0)] <= w_data0;
-            if (w_en1) mem1[addr_from(w_neuron1, w_in1)] <= w_data1;
-            if (w_en2) mem2[addr_from(w_neuron2, w_in2)] <= w_data2;
-            if (w_en3) mem3[addr_from(w_neuron3, w_in3)] <= w_data3;
+                if (init_addr == DEPTH-1) begin
+                    init_active <= 1'b0;
+                    init_done <= 1'b1;
+                end else begin
+                    init_addr <= init_addr + 1'b1;
+                end
+            end else begin
+                dbg_valid <= 1'b0;
+`ifndef SYNTHESIS
+                if (dbg_pending) begin
+                    dbg_data <= rd_data;
+                    dbg_valid <= 1'b1;
+                end
 
-            dbg_valid <= 1'b0;
-            if (dbg_pending) begin
-                case (dbg_bank)
-                    2'd0: dbg_data <= mem0[dbg_addr];
-                    2'd1: dbg_data <= mem1[dbg_addr];
-                    2'd2: dbg_data <= mem2[dbg_addr];
-                    2'd3: dbg_data <= mem3[dbg_addr];
-                    default: dbg_data <= INIT_VAL;
-                endcase
-                dbg_valid <= 1'b1;
-            end
-
-            dbg_pending <= dbg_en;
-            if (dbg_en) begin
-                dbg_bank <= dbg_neuron[1:0];
-                dbg_addr <= addr_from(dbg_neuron, dbg_in);
+                dbg_pending <= dbg_en;
+`else
+                dbg_data <= '0;
+                dbg_valid <= 1'b0;
+`endif
             end
         end
     end
+
+    // Read port (sync). Kept separate from write for BRAM inference.
+    always_comb begin
+        rd_en = r_en;
+        rd_addr = addr_from(r_neuron0, r_in0);
+`ifndef SYNTHESIS
+        if (dbg_en) begin
+            rd_en = 1'b1;
+            rd_addr = dbg_addr_i;
+        end
+`endif
+    end
+
+    // Write port (sync). Kept separate from read for BRAM inference.
+    always_comb begin
+        if (init_active) begin
+            wr_en = 1'b1;
+            wr_addr = init_addr;
+            wr_data = INIT_VAL;
+        end else begin
+            wr_en = w_en0;
+            wr_addr = addr_from(w_neuron0, w_in0);
+            wr_data = w_data0;
+        end
+    end
+
+`ifdef SYNTHESIS
+    // XPM SDPRAM (1R1W) for BRAM inference in synthesis
+    xpm_memory_sdpram #(
+        .ADDR_WIDTH_A(ADDR_W),
+        .ADDR_WIDTH_B(ADDR_W),
+        .AUTO_SLEEP_TIME(0),
+        .BYTE_WRITE_WIDTH_A(32),
+        .CLOCKING_MODE("common_clock"),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE(MEM_INIT_FILE),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("block"),
+        .MEMORY_SIZE(DEPTH * 32),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_B(32),
+        .READ_LATENCY_B(1),
+        .READ_RESET_VALUE_B("00000000"),
+        .RST_MODE_A("SYNC"),
+        .RST_MODE_B("SYNC"),
+        .SIM_ASSERT_CHK(0),
+        .USE_MEM_INIT(INIT_FROM_FILE),
+        .WAKEUP_TIME("disable_sleep"),
+        .WRITE_DATA_WIDTH_A(32),
+        .WRITE_MODE_B("read_first")
+    ) u_wmem_xpm (
+        .clka(clk),
+        .ena(wr_en),
+        .wea(wr_en),
+        .addra(wr_addr),
+        .dina(wr_data),
+        .clkb(clk),
+        .enb(rd_en),
+        .addrb(rd_addr),
+        .doutb(rd_data),
+        .rstb(rst),
+        .regceb(1'b1),
+        .sleep(1'b0),
+        .injectsbiterra(1'b0),
+        .injectdbiterra(1'b0)
+    );
+`else
+    // Behavioral model for simulation
+    logic signed [31:0] mem0_sim [0:DEPTH-1];
+
+    initial begin
+        if (INIT_FROM_FILE) begin
+            $readmemh("data/w_init0.mem", mem0_sim);
+        end
+    end
+
+    always_ff @(posedge clk) begin
+        if (wr_en) begin
+            mem0_sim[wr_addr] <= wr_data;
+        end
+    end
+
+    always_ff @(posedge clk) begin
+        if (rd_en) begin
+            rd_data <= mem0_sim[rd_addr];
+        end
+    end
+`endif
+
+    assign r_data0 = rd_data;
 
 endmodule
 
