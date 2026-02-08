@@ -3,7 +3,7 @@
 module pipeline_small #(
         parameter int TSTEP_W = 16,
         parameter int N_IN = 784,
-        parameter int N_NEURONS = 100,
+        parameter int N_NEURONS = 50,
         parameter int UPDATE_NT = 350,
         parameter int NEURON_W = (N_NEURONS <= 1) ? 1 : $clog2(N_NEURONS),
         parameter int IN_W = (N_IN <= 1) ? 1 : $clog2(N_IN),
@@ -85,24 +85,24 @@ module pipeline_small #(
     logic [N_IN-1:0] s_in_reg;
     logic s_stdp_reg;
 
-    logic signed [31:0] r_exc  [0:N_NEURONS-1];
-    logic signed [31:0] r_inh  [0:N_NEURONS-1];
-    logic signed [31:0] x_in   [0:N_IN-1];
-    logic signed [31:0] x_exc  [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic signed [31:0] r_exc  [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic signed [31:0] r_inh  [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic signed [31:0] x_in   [0:N_IN-1];
+    (* ram_style = "block" *) logic signed [31:0] x_exc  [0:N_NEURONS-1];
 
-    logic signed [31:0] v_exc  [0:N_NEURONS-1];
-    logic signed [31:0] theta  [0:N_NEURONS-1];
-    logic signed [31:0] vthr   [0:N_NEURONS-1];
-    logic [15:0]        refr_exc [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic signed [31:0] v_exc  [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic signed [31:0] theta  [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic signed [31:0] vthr   [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic [15:0]        refr_exc [0:N_NEURONS-1];
 
-    logic signed [31:0] v_inh  [0:N_NEURONS-1];
-    logic [15:0]        refr_inh [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic signed [31:0] v_inh  [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic [15:0]        refr_inh [0:N_NEURONS-1];
 
     // g_in is maintained as a state (event-driven update)
-    logic signed [31:0] g_in_state [0:N_NEURONS-1];
-    logic signed [31:0] g_in_accum [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic signed [31:0] g_in_state [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic signed [31:0] g_in_accum [0:N_NEURONS-1];
 
-    logic signed [31:0] g_inh_state [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic signed [31:0] g_inh_state [0:N_NEURONS-1];
 
     localparam int DELAY_IN_DEPTH = DELAY_IN_STEPS * N_NEURONS;
     localparam int DELAY_E2I_DEPTH = DELAY_E2I_STEPS * N_NEURONS;
@@ -114,6 +114,12 @@ module pipeline_small #(
     logic [DELAY_E2I_ADDR_W-1:0] delay_e2i_rd_addr;
     logic signed [31:0] delay_in_rd_data;
     logic signed [31:0] delay_e2i_rd_data;
+    logic delay_in_wr_en;
+    logic delay_e2i_wr_en;
+    logic [DELAY_IN_ADDR_W-1:0] delay_in_wr_addr;
+    logic [DELAY_E2I_ADDR_W-1:0] delay_e2i_wr_addr;
+    logic signed [31:0] delay_in_wr_data;
+    logic signed [31:0] delay_e2i_wr_data;
     localparam int DELAY_IN_W = (DELAY_IN_STEPS <= 1) ? 1 : $clog2(DELAY_IN_STEPS);
     localparam int DELAY_E2I_W = (DELAY_E2I_STEPS <= 1) ? 1 : $clog2(DELAY_E2I_STEPS);
     logic [DELAY_IN_W-1:0] delay_in_wr_idx;
@@ -121,6 +127,9 @@ module pipeline_small #(
     logic [DELAY_IN_W-1:0] delay_in_clr_step;
     logic [DELAY_E2I_W-1:0] delay_e2i_clr_step;
     logic [NEURON_W-1:0] delay_clr_neuron;
+
+    logic signed [31:0] acc_inh_reg;
+    logic signed [31:0] g_inh_next_val_reg;
 
     function automatic [DELAY_IN_W-1:0] delay_in_rd_idx;
         begin
@@ -196,18 +205,24 @@ module pipeline_small #(
 
     // No history buffers for online STDP
 
-    typedef enum logic [3:0] {
+    typedef enum logic [4:0] {
         S_WAIT_WMEM_INIT,
         S_IDLE,
         S_SCAN,
+        S_SCAN_DIV_WAIT,
         S_GIN_WAIT,
         S_NEURON_PREP,
         S_NEURON_CALC1,
+        S_NEURON_DIV_WAIT,
         S_NEURON_CALC2,
         S_NEURON_COMMIT_RD,
         S_NEURON_COMMIT_WAIT,
         S_NEURON_COMMIT,
+        S_NEURON_COMMIT_DIV_WAIT,
+        S_NEURON_COMMIT_APPLY,
         S_OUT,
+        S_STDP_SCAN_PRE,
+        S_STDP_SCAN_POST,
         S_STDP_READ,
         S_STDP_WAIT,
         S_STDP_CALC,
@@ -222,31 +237,26 @@ module pipeline_small #(
         end
     endfunction
 
-    function automatic signed [31:0] fp_div_round(input signed [31:0] a, input int div);
-        begin
-            if (a >= 0)
-                fp_div_round = (a + (div >> 1)) / div;
-            else
-                fp_div_round = (a - (div >> 1)) / div;
-        end
-    endfunction
-
     always_ff @(posedge clk) begin
         if (rst) begin
             mul_result <= '0;
-            div_result <= '0;
         end else begin
             mul_result <= (mul_a * mul_b) >>> FP_SHIFT;
-            if (div_div != 0) begin
-                if (div_a >= 0)
-                    div_result <= (div_a + (div_div >> 1)) / div_div;
-                else
-                    div_result <= (div_a - (div_div >> 1)) / div_div;
-            end else begin
-                div_result <= '0;
-            end
         end
     end
+
+    divider2b #(.WIDTH(32)) u_divider(
+        .clk_in        (clk),
+        .rst_in        (rst),
+        .dividend_in   (div_dividend),
+        .divisor_in    (div_divisor),
+        .data_valid_in (div_valid_in),
+        .quotient_out  (div_quotient),
+        .remainder_out (div_remainder),
+        .data_valid_out(div_valid_out),
+        .error_out     (div_error),
+        .busy_out      (div_busy)
+    );
 
     // Memory interface for W_in (4-bank)
     logic mem_r_en;
@@ -293,6 +303,17 @@ module pipeline_small #(
     logic stdp_pending;
     logic [IN_W-1:0] stdp_j;
     logic [$clog2(NEURON_GROUPS):0] stdp_g;
+    localparam int PRE_CNT_W = (N_IN + 1 <= 1) ? 1 : $clog2(N_IN + 1);
+    localparam int POST_CNT_W = (N_NEURONS + 1 <= 1) ? 1 : $clog2(N_NEURONS + 1);
+    (* ram_style = "block" *) logic [IN_W-1:0] stdp_pre_idx [0:N_IN-1];
+    (* ram_style = "block" *) logic [NEURON_W-1:0] stdp_post_idx [0:N_NEURONS-1];
+    logic [PRE_CNT_W-1:0] stdp_pre_count;
+    logic [POST_CNT_W-1:0] stdp_post_count;
+    logic [IN_W-1:0] stdp_scan_in;
+    logic [NEURON_W-1:0] stdp_scan_neuron;
+    logic [PRE_CNT_W-1:0] stdp_pre_i;
+    logic [POST_CNT_W-1:0] stdp_post_i;
+    logic stdp_mode_post;
 
     // Per-neuron next-state storage: heavy 4 in BRAM, light 4 back to arrays
     localparam int NEXT_W = (32*4);
@@ -339,9 +360,19 @@ module pipeline_small #(
     logic signed [31:0] mul_a;
     logic signed [31:0] mul_b;
     logic signed [31:0] mul_result;
-    logic signed [31:0] div_a;
-    logic [31:0]        div_div;
+    logic [31:0]        div_dividend;
+    logic [31:0]        div_divisor;
+    logic              div_valid_in;
+    logic [31:0]        div_quotient;
+    logic [31:0]        div_remainder;
+    logic              div_valid_out;
+    logic              div_error;
+    logic              div_busy;
+    logic              div_sign_reg;
     logic signed [31:0] div_result;
+
+    logic signed [31:0] scan_x_in_val;
+    logic              scan_spike_val;
 
     logic signed [31:0] num_exc_val;
     logic signed [31:0] num_i_val;
@@ -361,16 +392,105 @@ module pipeline_small #(
     logic [15:0]        refr_inh_next_val;
     logic              s_exc_next_val;
 
-    // Delay line RAM read ports (1-cycle latency)
+    // Delay line RAM (XPM in synthesis, behavioral in sim)
+`ifdef SYNTHESIS
+    xpm_memory_sdpram #(
+        .ADDR_WIDTH_A(DELAY_IN_ADDR_W),
+        .ADDR_WIDTH_B(DELAY_IN_ADDR_W),
+        .AUTO_SLEEP_TIME(0),
+        .BYTE_WRITE_WIDTH_A(32),
+        .CLOCKING_MODE("common_clock"),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE("none"),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("block"),
+        .MEMORY_SIZE(DELAY_IN_DEPTH * 32),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_B(32),
+        .READ_LATENCY_B(1),
+        .READ_RESET_VALUE_B("0"),
+        .RST_MODE_A("SYNC"),
+        .RST_MODE_B("SYNC"),
+        .SIM_ASSERT_CHK(0),
+        .USE_MEM_INIT(0),
+        .WAKEUP_TIME("disable_sleep"),
+        .WRITE_DATA_WIDTH_A(32),
+        .WRITE_MODE_B("read_first")
+    ) u_delay_in (
+        .clka(clk),
+        .ena(delay_in_wr_en),
+        .wea(delay_in_wr_en),
+        .addra(delay_in_wr_addr),
+        .dina(delay_in_wr_data),
+        .clkb(clk),
+        .enb(1'b1),
+        .addrb(delay_in_rd_addr),
+        .doutb(delay_in_rd_data),
+        .rstb(rst),
+        .regceb(1'b1),
+        .sleep(1'b0),
+        .injectsbiterra(1'b0),
+        .injectdbiterra(1'b0)
+    );
+
+    xpm_memory_sdpram #(
+        .ADDR_WIDTH_A(DELAY_E2I_ADDR_W),
+        .ADDR_WIDTH_B(DELAY_E2I_ADDR_W),
+        .AUTO_SLEEP_TIME(0),
+        .BYTE_WRITE_WIDTH_A(32),
+        .CLOCKING_MODE("common_clock"),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE("none"),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("block"),
+        .MEMORY_SIZE(DELAY_E2I_DEPTH * 32),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_B(32),
+        .READ_LATENCY_B(1),
+        .READ_RESET_VALUE_B("0"),
+        .RST_MODE_A("SYNC"),
+        .RST_MODE_B("SYNC"),
+        .SIM_ASSERT_CHK(0),
+        .USE_MEM_INIT(0),
+        .WAKEUP_TIME("disable_sleep"),
+        .WRITE_DATA_WIDTH_A(32),
+        .WRITE_MODE_B("read_first")
+    ) u_delay_e2i (
+        .clka(clk),
+        .ena(delay_e2i_wr_en),
+        .wea(delay_e2i_wr_en),
+        .addra(delay_e2i_wr_addr),
+        .dina(delay_e2i_wr_data),
+        .clkb(clk),
+        .enb(1'b1),
+        .addrb(delay_e2i_rd_addr),
+        .doutb(delay_e2i_rd_data),
+        .rstb(rst),
+        .regceb(1'b1),
+        .sleep(1'b0),
+        .injectsbiterra(1'b0),
+        .injectdbiterra(1'b0)
+    );
+`else
+    // Behavioral delay memories
     always_ff @(posedge clk) begin
         if (rst) begin
             delay_in_rd_data <= '0;
             delay_e2i_rd_data <= '0;
         end else begin
+            if (delay_in_wr_en) begin
+                delay_in_mem[delay_in_wr_addr] <= delay_in_wr_data;
+            end
+            if (delay_e2i_wr_en) begin
+                delay_e2i_mem[delay_e2i_wr_addr] <= delay_e2i_wr_data;
+            end
             delay_in_rd_data <= delay_in_mem[delay_in_rd_addr];
             delay_e2i_rd_data <= delay_e2i_mem[delay_e2i_rd_addr];
         end
     end
+`endif
 
 `ifdef SYNTHESIS
     // Next-state BRAM (1R1W)
@@ -446,13 +566,27 @@ module pipeline_small #(
             stdp_pending <= 1'b0;
             stdp_j <= '0;
             stdp_g <= '0;
+            stdp_pre_count <= '0;
+            stdp_post_count <= '0;
+            stdp_scan_in <= '0;
+            stdp_scan_neuron <= '0;
+            stdp_pre_i <= '0;
+            stdp_post_i <= '0;
+            stdp_mode_post <= 1'b0;
             neuron_idx <= '0;
             sum_r_inh_reg <= '0;
             calc_phase <= P_GIN_DIV;
             mul_a <= '0;
             mul_b <= '0;
-            div_a <= '0;
-            div_div <= '0;
+            div_dividend <= '0;
+            div_divisor <= '0;
+            div_valid_in <= 1'b0;
+            div_sign_reg <= 1'b0;
+            div_result <= '0;
+            scan_x_in_val <= '0;
+            scan_spike_val <= 1'b0;
+            acc_inh_reg <= '0;
+            g_inh_next_val_reg <= '0;
             num_exc_val <= '0;
             num_i_val <= '0;
             i_syn_exc_val <= '0;
@@ -508,11 +642,20 @@ module pipeline_small #(
             delay_clr_neuron <= '0;
             delay_in_rd_addr <= '0;
             delay_e2i_rd_addr <= '0;
+            delay_in_wr_en <= 1'b0;
+            delay_e2i_wr_en <= 1'b0;
+            delay_in_wr_addr <= '0;
+            delay_e2i_wr_addr <= '0;
+            delay_in_wr_data <= '0;
+            delay_e2i_wr_data <= '0;
         end else begin
             // defaults
             mem_r_en <= 1'b0;
             next_wr_en <= 1'b0;
             next_rd_en <= 1'b0;
+            div_valid_in <= 1'b0;
+            delay_in_wr_en <= 1'b0;
+            delay_e2i_wr_en <= 1'b0;
             for (i = 0; i < LANES; i = i + 1) begin
                 mem_w_en[i] <= 1'b0;
             end
@@ -527,7 +670,9 @@ module pipeline_small #(
 
                 S_CLR_DELAY_IN: begin
                     s_tready <= 1'b0;
-                    delay_in_mem[delay_in_addr(delay_in_clr_step, delay_clr_neuron)] <= '0;
+                    delay_in_wr_en <= 1'b1;
+                    delay_in_wr_addr <= delay_in_addr(delay_in_clr_step, delay_clr_neuron);
+                    delay_in_wr_data <= '0;
                     if (delay_clr_neuron == N_NEURONS-1) begin
                         delay_clr_neuron <= '0;
                         if (delay_in_clr_step == DELAY_IN_STEPS-1) begin
@@ -543,7 +688,9 @@ module pipeline_small #(
 
                 S_CLR_DELAY_E2I: begin
                     s_tready <= 1'b0;
-                    delay_e2i_mem[delay_e2i_addr(delay_e2i_clr_step, delay_clr_neuron)] <= '0;
+                    delay_e2i_wr_en <= 1'b1;
+                    delay_e2i_wr_addr <= delay_e2i_addr(delay_e2i_clr_step, delay_clr_neuron);
+                    delay_e2i_wr_data <= '0;
                     if (delay_clr_neuron == N_NEURONS-1) begin
                         delay_clr_neuron <= '0;
                         if (delay_e2i_clr_step == DELAY_E2I_STEPS-1) begin
@@ -580,15 +727,32 @@ module pipeline_small #(
                 // Scan inputs; update x_in; if spike, read weights in groups of 4 neurons
                 S_SCAN: begin
                     if (scan_in_idx < N_IN) begin
-                        // update trace for this input
-                        begin : trace_update
-                            logic signed [31:0] x_next;
-                            x_next = x_in[scan_in_idx] - fp_div_round(x_in[scan_in_idx], TD_X_STEPS)
-                                   + (s_in_reg[scan_in_idx] ? TRACE_SPIKE_FP : 0);
-                            x_in[scan_in_idx] <= x_next;
-                        end
+                        logic signed [31:0] scan_val;
+                        logic signed [31:0] scan_abs;
+                        scan_val = x_in[scan_in_idx];
+                        scan_abs = scan_val[31] ? (~scan_val + 1'b1) : scan_val;
+                        scan_x_in_val <= scan_val;
+                        scan_spike_val <= s_in_reg[scan_in_idx];
+                        div_sign_reg <= scan_val[31];
+                        div_dividend <= scan_abs + (TD_X_STEPS >> 1);
+                        div_divisor <= TD_X_STEPS;
+                        div_valid_in <= 1'b1;
+                        state <= S_SCAN_DIV_WAIT;
+                    end else begin
+                        state <= S_NEURON_PREP;
+                    end
+                end
 
-                        if (s_in_reg[scan_in_idx]) begin
+                S_SCAN_DIV_WAIT: begin
+                    if (div_valid_out) begin
+                        logic signed [31:0] div_signed;
+                        logic signed [31:0] x_next;
+                        div_signed = div_sign_reg ? -$signed(div_quotient) : $signed(div_quotient);
+                        x_next = scan_x_in_val - div_signed
+                               + (scan_spike_val ? TRACE_SPIKE_FP : 0);
+                        x_in[scan_in_idx] <= x_next;
+
+                        if (scan_spike_val) begin
                             // start reading weights for this input
                             scan_group_idx <= '0;
                             scan_spike_active <= 1'b1;
@@ -600,9 +764,8 @@ module pipeline_small #(
                             state <= S_GIN_WAIT;
                         end else begin
                             scan_in_idx <= scan_in_idx + 1'b1;
+                            state <= S_SCAN;
                         end
-                    end else begin
-                        state <= S_NEURON_PREP;
                     end
                 end
 
@@ -651,11 +814,20 @@ module pipeline_small #(
 
                 S_NEURON_CALC1: begin
                     int n;
+                    logic do_div;
+                    logic signed [31:0] div_src;
+                    logic signed [31:0] div_abs;
+                    logic [31:0] div_den;
                     n = neuron_idx;
+                    do_div = 1'b0;
+                    div_src = '0;
+                    div_abs = '0;
+                    div_den = '0;
                     case (calc_phase)
                         P_GIN_DIV: begin
-                            div_a <= g_in_state[n];
-                            div_div <= TD_IN_STEPS;
+                            div_src = g_in_state[n];
+                            div_den = TD_IN_STEPS;
+                            do_div = 1'b1;
                         end
                         P_I_SYN_EXC_MUL: begin
                             mul_a <= delay_in_rd_data;
@@ -666,20 +838,24 @@ module pipeline_small #(
                             mul_b <= (EXC_E_INH*FP_SCALE) - v_exc[n];
                         end
                         P_DV_EXC_DIV: begin
-                            div_a <= num_exc_val;
-                            div_div <= EXC_TAU_M;
+                            div_src = num_exc_val;
+                            div_den = EXC_TAU_M;
+                            do_div = 1'b1;
                         end
                         P_THETA_DIV: begin
-                            div_a <= theta[n];
-                            div_div <= EXC_TC_THETA;
+                            div_src = theta[n];
+                            div_den = EXC_TC_THETA;
+                            do_div = 1'b1;
                         end
                         P_R_EXC_DIV: begin
-                            div_a <= r_exc[n];
-                            div_div <= TD_EXC_STEPS;
+                            div_src = r_exc[n];
+                            div_den = TD_EXC_STEPS;
+                            do_div = 1'b1;
                         end
                         P_X_EXC_DIV: begin
-                            div_a <= x_exc[n];
-                            div_div <= TD_X_STEPS;
+                            div_src = x_exc[n];
+                            div_den = TD_X_STEPS;
+                            do_div = 1'b1;
                         end
                         P_G_EXC_MUL: begin
                             mul_a <= WEXC_FP;
@@ -690,21 +866,37 @@ module pipeline_small #(
                             mul_b <= (INH_E_EXC*FP_SCALE) - v_inh[n];
                         end
                         P_DV_I_DIV: begin
-                            div_a <= num_i_val;
-                            div_div <= INH_TAU_M;
+                            div_src = num_i_val;
+                            div_den = INH_TAU_M;
+                            do_div = 1'b1;
                         end
                         P_R_INH_DIV: begin
-                            div_a <= r_inh[n];
-                            div_div <= TD_INH_STEPS;
+                            div_src = r_inh[n];
+                            div_den = TD_INH_STEPS;
+                            do_div = 1'b1;
                         end
                         default: begin
-                            div_a <= '0;
-                            div_div <= '0;
                             mul_a <= '0;
                             mul_b <= '0;
                         end
                     endcase
-                    state <= S_NEURON_CALC2;
+                    if (do_div) begin
+                        div_sign_reg <= div_src[31];
+                        div_abs = div_src[31] ? (~div_src + 1'b1) : div_src;
+                        div_dividend <= div_abs + (div_den >> 1);
+                        div_divisor <= div_den;
+                        div_valid_in <= 1'b1;
+                        state <= S_NEURON_DIV_WAIT;
+                    end else begin
+                        state <= S_NEURON_CALC2;
+                    end
+                end
+
+                S_NEURON_DIV_WAIT: begin
+                    if (div_valid_out) begin
+                        div_result <= div_sign_reg ? -$signed(div_quotient) : $signed(div_quotient);
+                        state <= S_NEURON_CALC2;
+                    end
                 end
 
                 S_NEURON_CALC2: begin
@@ -851,14 +1043,31 @@ module pipeline_small #(
                 S_NEURON_COMMIT: begin
                     int n;
                     logic signed [63:0] acc_inh;
-                    logic signed [31:0] g_inh_next_val;
                     n = neuron_idx;
                     acc_inh = sum_r_inh_reg - r_inh_next[n];
                     if (N_NEURONS > 1) begin
-                        g_inh_next_val = fp_mul(fp_div_round(WINH_FP, (N_NEURONS-1)), acc_inh[31:0]);
+                        acc_inh_reg <= acc_inh[31:0];
+                        div_sign_reg <= 1'b0;
+                        div_dividend <= WINH_FP + ((N_NEURONS-1) >> 1);
+                        div_divisor <= (N_NEURONS-1);
+                        div_valid_in <= 1'b1;
+                        state <= S_NEURON_COMMIT_DIV_WAIT;
                     end else begin
-                        g_inh_next_val = 0;
+                        g_inh_next_val_reg <= 0;
+                        state <= S_NEURON_COMMIT_APPLY;
                     end
+                end
+
+                S_NEURON_COMMIT_DIV_WAIT: begin
+                    if (div_valid_out) begin
+                        g_inh_next_val_reg <= fp_mul(div_quotient, acc_inh_reg);
+                        state <= S_NEURON_COMMIT_APPLY;
+                    end
+                end
+
+                S_NEURON_COMMIT_APPLY: begin
+                    int n;
+                    n = neuron_idx;
                     g_in_state[n] <= g_in_state_next_mem;
                     r_exc[n] <= r_exc_next_mem;
                     x_exc[n] <= x_exc_next_mem;
@@ -869,9 +1078,13 @@ module pipeline_small #(
                     refr_exc[n] <= refr_exc_next[n];
                     v_inh[n] <= v_inh_next[n];
                     refr_inh[n] <= refr_inh_next[n];
-                    g_inh_state[n] <= g_inh_next_val;
-                    delay_in_mem[delay_in_addr(delay_in_wr_idx, n[NEURON_W-1:0])] <= g_in_state_next_mem;
-                    delay_e2i_mem[delay_e2i_addr(delay_e2i_wr_idx, n[NEURON_W-1:0])] <= g_exc_next_mem;
+                    g_inh_state[n] <= g_inh_next_val_reg;
+                    delay_in_wr_en <= 1'b1;
+                    delay_in_wr_addr <= delay_in_addr(delay_in_wr_idx, n[NEURON_W-1:0]);
+                    delay_in_wr_data <= g_in_state_next_mem;
+                    delay_e2i_wr_en <= 1'b1;
+                    delay_e2i_wr_addr <= delay_e2i_addr(delay_e2i_wr_idx, n[NEURON_W-1:0]);
+                    delay_e2i_wr_data <= g_exc_next_mem;
 
                     if (neuron_idx == N_NEURONS-1) begin
                         delay_in_wr_idx <= delay_in_next_idx(delay_in_wr_idx);
@@ -892,23 +1105,79 @@ module pipeline_small #(
                 m_tvalid <= 1'b0;
                 if (stdp_pending) begin
                     stdp_pending <= 1'b0;
-                    // start online STDP update over all weights
-                    mem_r_en <= 1'b1;
-                    for (i = 0; i < LANES; i = i + 1) begin
-                        mem_r_neuron[i] <= stdp_g * LANES + i;
-                        mem_r_in[i] <= stdp_j;
-                    end
-                    state <= S_STDP_READ;
+                    stdp_pre_count <= '0;
+                    stdp_post_count <= '0;
+                    stdp_scan_in <= '0;
+                    stdp_scan_neuron <= '0;
+                    state <= S_STDP_SCAN_PRE;
                 end else begin
                     state <= S_IDLE;
                 end
             end
         end
 
+        S_STDP_SCAN_PRE: begin
+            if (stdp_scan_in == N_IN-1) begin
+                if (s_in_reg[stdp_scan_in]) begin
+                    stdp_pre_idx[stdp_pre_count] <= stdp_scan_in;
+                    stdp_pre_count <= stdp_pre_count + 1'b1;
+                end
+                stdp_scan_in <= '0;
+                state <= S_STDP_SCAN_POST;
+            end else begin
+                if (s_in_reg[stdp_scan_in]) begin
+                    stdp_pre_idx[stdp_pre_count] <= stdp_scan_in;
+                    stdp_pre_count <= stdp_pre_count + 1'b1;
+                end
+                stdp_scan_in <= stdp_scan_in + 1'b1;
+            end
+        end
+
+        S_STDP_SCAN_POST: begin
+            logic post_hit;
+            post_hit = s_exc_next[stdp_scan_neuron];
+            if (post_hit) begin
+                stdp_post_idx[stdp_post_count] <= stdp_scan_neuron[NEURON_W-1:0];
+                stdp_post_count <= stdp_post_count + 1'b1;
+            end
+            if (stdp_scan_neuron == N_NEURONS-1) begin
+                stdp_scan_neuron <= '0;
+                if ((stdp_post_count + post_hit) != 0) begin
+                    stdp_mode_post <= 1'b1;
+                    stdp_post_i <= '0;
+                    stdp_j <= '0;
+                    state <= S_STDP_READ;
+                end else if (stdp_pre_count != 0) begin
+                    stdp_mode_post <= 1'b0;
+                    stdp_pre_i <= '0;
+                    stdp_g <= '0;
+                    stdp_j <= stdp_pre_idx['0];
+                    state <= S_STDP_READ;
+                end else begin
+                    state <= S_IDLE;
+                end
+            end else begin
+                stdp_scan_neuron <= stdp_scan_neuron + 1'b1;
+            end
+        end
+
         // Online STDP update (4 weights per cycle)
         S_STDP_READ: begin
-            next_rd_en <= 1'b1;
-            next_rd_addr <= stdp_g[NEURON_W-1:0];
+            logic [NEURON_W-1:0] stdp_neuron_sel;
+            stdp_neuron_sel = stdp_mode_post ? stdp_post_idx[stdp_post_i]
+                                             : stdp_g[NEURON_W-1:0];
+            mem_r_en <= 1'b1;
+            for (i = 0; i < LANES; i = i + 1) begin
+                mem_r_neuron[i] <= stdp_neuron_sel;
+                mem_r_in[i] <= stdp_j;
+            end
+            if (!stdp_mode_post) begin
+                next_rd_en <= 1'b1;
+                next_rd_addr <= stdp_neuron_sel;
+            end else begin
+                next_rd_en <= 1'b0;
+                next_rd_addr <= '0;
+            end
             state <= S_STDP_WAIT;
         end
 
@@ -925,12 +1194,18 @@ module pipeline_small #(
                 logic signed [31:0] pre_term;
                 logic signed [31:0] post_term;
 
-                neuron_idx = stdp_g * LANES + i;
+                neuron_idx = stdp_mode_post ? stdp_post_idx[stdp_post_i]
+                                            : (stdp_g * LANES + i);
                 if (neuron_idx < N_NEURONS) begin
                     w_old = mem_r_data[i];
 
-                    pre_term = s_exc_next[neuron_idx] ? fp_mul(A_P_FP, x_in[stdp_j]) : 0;
-                    post_term = s_in_reg[stdp_j] ? fp_mul(A_M_FP, x_exc_next_mem) : 0;
+                    if (stdp_mode_post) begin
+                        pre_term = fp_mul(A_P_FP, x_in[stdp_j]);
+                        post_term = 0;
+                    end else begin
+                        pre_term = 0;
+                        post_term = fp_mul(A_M_FP, x_exc_next_mem);
+                    end
                     dW = pre_term - post_term;
 
                     w_new = w_old + dW;
@@ -944,27 +1219,41 @@ module pipeline_small #(
                 end
             end
 
-            if (stdp_g == NEURON_GROUPS-1) begin
-                stdp_g <= '0;
+            if (stdp_mode_post) begin
                 if (stdp_j == N_IN-1) begin
-                    state <= S_IDLE;
+                    stdp_j <= '0;
+                    if (stdp_post_i == stdp_post_count - 1'b1) begin
+                        if (stdp_pre_count != 0) begin
+                            stdp_mode_post <= 1'b0;
+                            stdp_pre_i <= '0;
+                            stdp_g <= '0;
+                            stdp_j <= stdp_pre_idx['0];
+                            state <= S_STDP_READ;
+                        end else begin
+                            state <= S_IDLE;
+                        end
+                    end else begin
+                        stdp_post_i <= stdp_post_i + 1'b1;
+                        state <= S_STDP_READ;
+                    end
                 end else begin
                     stdp_j <= stdp_j + 1'b1;
-                    mem_r_en <= 1'b1;
-                    for (i = 0; i < LANES; i = i + 1) begin
-                        mem_r_neuron[i] <= (stdp_g) * LANES + i;
-                        mem_r_in[i] <= stdp_j + 1'b1;
-                    end
                     state <= S_STDP_READ;
                 end
             end else begin
-                stdp_g <= stdp_g + 1'b1;
-                mem_r_en <= 1'b1;
-                for (i = 0; i < LANES; i = i + 1) begin
-                    mem_r_neuron[i] <= (stdp_g + 1'b1) * LANES + i;
-                    mem_r_in[i] <= stdp_j;
+                if (stdp_g == N_NEURONS-1) begin
+                    stdp_g <= '0;
+                    if (stdp_pre_i == stdp_pre_count - 1'b1) begin
+                        state <= S_IDLE;
+                    end else begin
+                        stdp_pre_i <= stdp_pre_i + 1'b1;
+                        stdp_j <= stdp_pre_idx[stdp_pre_i + 1'b1];
+                        state <= S_STDP_READ;
+                    end
+                end else begin
+                    stdp_g <= stdp_g + 1'b1;
+                    state <= S_STDP_READ;
                 end
-                state <= S_STDP_READ;
             end
         end
 

@@ -56,7 +56,7 @@ def write_mem_files(out_dir: Path, w_fp: np.ndarray) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate random STDP weights as .mem files.")
     parser.add_argument("--n-in", type=int, default=784)
-    parser.add_argument("--n-neurons", type=int, default=100)
+    parser.add_argument("--n-neurons", type=int, default=50)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--out-dir",

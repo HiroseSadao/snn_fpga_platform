@@ -64,7 +64,7 @@ async def assign_labels_basic_test(dut):
 
     # Larger example (MNIST-like scale, reduced)
     n_samples = 500
-    n_neurons = 100
+    n_neurons = 50
     n_labels = 10
     label_bits = 4
 

@@ -59,7 +59,7 @@ async def prediction_basic_test(dut):
 
     # MNIST-like scale (reduced)
     n_samples = 500
-    n_neurons = 100
+    n_neurons = 50
     n_labels = 10
     label_bits = 4
 

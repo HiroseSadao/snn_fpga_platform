@@ -9,6 +9,7 @@ from cocotb.triggers import RisingEdge, ClockCycles
 
 CLK_PERIOD_NS = 10  # 100 MHz
 MAX_WAIT_CYCLES = 200000
+MAX_WAIT_CYCLES_STDP = 800000
 FP_SHIFT = 16
 FP_SCALE = 1 << FP_SHIFT
 INIT_W_SCALE = 1e-3
@@ -16,7 +17,7 @@ INIT_VAL_FP = int(round(INIT_W_SCALE * FP_SCALE))
 
 # Match pipeline_small.sv defaults
 N_IN = 784
-N_NEURONS = 100
+N_NEURONS = 50
 UPDATE_NT = 8
 
 # Debug weight readback subset (to avoid huge export)
@@ -126,7 +127,7 @@ class RefModel:
         self.delay_e2i = [[0 for _ in range(N_NEURONS)] for _ in range(DELAY_E2I_STEPS)]
         self.tcount = 0
 
-    def step(self, s_in_bits, stdp_en):
+    def step(self, s_in_bits, stdp_en, dbg=None):
         s_in = [(s_in_bits >> i) & 1 for i in range(N_IN)]
 
         # input synapse + trace
@@ -262,6 +263,16 @@ class RefModel:
                         if w_new > WMAX_FP:
                             w_new = WMAX_FP
                         self.W_in[i][j] = w_new
+                    if dbg is not None and i == dbg[0] and j == dbg[1]:
+                        self.last_debug = {
+                            "post_spike": int(post_spike),
+                            "pre_spike": int(pre_spike),
+                            "x_pre": int(x_pre),
+                            "x_post": int(x_post),
+                            "dW": int(dW),
+                            "w_old": int(self.W_in[i][j] - dW),
+                            "w_new": int(self.W_in[i][j]),
+                        }
 
         # commit state
         self.r_in = r_in_next
@@ -316,6 +327,26 @@ async def reset_dut(dut):
     await ClockCycles(dut.clk, 2)
 
 
+async def dbg_read_weight(dut, ii, jj):
+    dut.dbg_neuron.value = ii
+    dut.dbg_in.value = jj
+    dut.dbg_en.value = 1
+    await RisingEdge(dut.clk)
+    dut.dbg_en.value = 0
+    await RisingEdge(dut.clk)
+    await RisingEdge(dut.clk)
+    if int(dut.dbg_valid.value) != 1:
+        dut._log.error(
+            "dbg_valid not asserted in dbg_read_weight: i=%d j=%d dbg_valid=%d dbg_data=0x%08x",
+            ii,
+            jj,
+            int(dut.dbg_valid.value),
+            int(dut.dbg_data.value.integer),
+        )
+        raise AssertionError("dbg_valid not asserted")
+    return int(dut.dbg_data.value.signed_integer)
+
+
 def bits_from_indices(indices):
     value = 0
     for idx in indices:
@@ -323,11 +354,11 @@ def bits_from_indices(indices):
     return value
 
 
-async def send_packet(dut, tstep_id, spikes_bits, stdp_en=1):
+async def send_packet(dut, tstep_id, spikes_bits, stdp_en=1, max_wait=MAX_WAIT_CYCLES):
     dut.s_tdata.value = (int(tstep_id) << N_IN) | int(spikes_bits)
     dut.s_tvalid.value = 1
     dut.s_stdp_en.value = stdp_en
-    for cycle in range(MAX_WAIT_CYCLES):
+    for cycle in range(max_wait):
         await RisingEdge(dut.clk)
         if int(dut.s_tready.value) == 1:
             if cycle > 0:
@@ -345,8 +376,8 @@ async def send_packet(dut, tstep_id, spikes_bits, stdp_en=1):
     dut.s_tvalid.value = 0
 
 
-async def recv_packet(dut):
-    for cycle in range(MAX_WAIT_CYCLES):
+async def recv_packet(dut, max_wait=MAX_WAIT_CYCLES):
+    for cycle in range(max_wait):
         await RisingEdge(dut.clk)
         if int(dut.m_tvalid.value) == 1 and int(dut.m_tready.value) == 1:
             data = int(dut.m_tdata.value)
@@ -363,6 +394,16 @@ async def recv_packet(dut):
                 f"m_tready={int(dut.m_tready.value)}"
             )
     raise AssertionError("Timeout waiting for m_tvalid&m_tready")
+
+
+async def wait_for_ready(dut, max_wait=MAX_WAIT_CYCLES):
+    for cycle in range(max_wait):
+        await RisingEdge(dut.clk)
+        if int(dut.s_tready.value) == 1:
+            if cycle > 0:
+                dut._log.info(f"s_tready asserted after {cycle} cycles")
+            return
+    raise AssertionError("Timeout waiting for s_tready after processing")
 
 
 @cocotb.test()
@@ -438,32 +479,13 @@ async def pipeline_small_reference_model(dut):
     dut.m_tready.value = 1
     dut.dbg_en.value = 0
 
-    async def dbg_read_weight(ii, jj):
-        dut.dbg_neuron.value = ii
-        dut.dbg_in.value = jj
-        dut.dbg_en.value = 1
-        await RisingEdge(dut.clk)
-        dut.dbg_en.value = 0
-        await RisingEdge(dut.clk)
-        await RisingEdge(dut.clk)
-        if int(dut.dbg_valid.value) != 1:
-            dut._log.error(
-                "dbg_valid not asserted in dbg_read_weight: i=%d j=%d dbg_valid=%d dbg_data=0x%08x",
-                ii,
-                jj,
-                int(dut.dbg_valid.value),
-                int(dut.dbg_data.value.integer),
-            )
-            raise AssertionError("dbg_valid not asserted")
-        return int(dut.dbg_data.value.signed_integer)
-
     # Fixed stimulus sequence
     patterns = [bits_from_indices([i]) for i in range(UPDATE_NT)]
 
     # Sanity-check initial weights for a small subset
     for i in range(min(N_NEURONS, 2)):
         for j in range(0, min(N_IN, 8), 4):
-            dut_w0 = await dbg_read_weight(i, j)
+            dut_w0 = await dbg_read_weight(dut, i, j)
             ref_w0 = model.W_in[i][j]
             if dut_w0 != ref_w0:
                 dut._log.error(
@@ -488,7 +510,7 @@ async def pipeline_small_reference_model(dut):
 
     for i in range(max_neurons):
         for j in range(0, max_in, DBG_IN_STRIDE):
-            dut_w = await dbg_read_weight(i, j)
+            dut_w = await dbg_read_weight(dut, i, j)
             ref_w = model.W_in[i][j]
             if dut_w != ref_w:
                 dut._log.error(
@@ -499,6 +521,165 @@ async def pipeline_small_reference_model(dut):
                     dut_w,
                 )
                 raise AssertionError(f"W_in mismatch [{i}][{j}]: exp={ref_w} got={dut_w}")
+
+
+@cocotb.test()
+async def pipeline_small_stdp_update(dut):
+    if not required_signals_present(dut):
+        dut._log.info("Skipping: DUT missing required AXI-stream ports.")
+        return
+
+    cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, units="ns").start())
+    await reset_dut(dut)
+
+    model = RefModel()
+    dut.m_tready.value = 1
+    dut.dbg_en.value = 0
+
+    # Optional internal signal debug (only if visible in sim)
+    def opt(obj, name):
+        return getattr(obj, name, None)
+
+    mem_w_en = opt(dut, "mem_w_en")
+    mem_w_neuron = opt(dut, "mem_w_neuron")
+    mem_w_in = opt(dut, "mem_w_in")
+    mem_w_data = opt(dut, "mem_w_data")
+    state_sig = opt(dut, "state")
+    stdp_j_sig = opt(dut, "stdp_j")
+    stdp_g_sig = opt(dut, "stdp_g")
+    s_in_reg_sig = opt(dut, "s_in_reg")
+    s_exc_next_sig = opt(dut, "s_exc_next")
+
+    rng = np.random.default_rng(1)
+    patterns = []
+    for _ in range(3):
+        active = rng.choice(N_IN, size=4, replace=False)
+        patterns.append(bits_from_indices(active))
+
+    # Debug: track specific weight before/after and expected delta
+    dbg_neuron = 0
+    dbg_in = 4
+    pre_w = await dbg_read_weight(dut, dbg_neuron, dbg_in)
+    model_pre_w = model.W_in[dbg_neuron][dbg_in]
+    dut._log.info(
+        "STDP debug pre: W[%d][%d] dut=%d model=%d",
+        dbg_neuron,
+        dbg_in,
+        pre_w,
+        model_pre_w,
+    )
+
+    # Debug: keep per-step expected W for the debug index
+    model_w_history = [model_pre_w]
+    dut_w_history = [pre_w]
+
+    # Monitor actual writes to the debug weight (if internal signals visible)
+    async def monitor_weight_writes():
+        while True:
+            await RisingEdge(dut.clk)
+            try:
+                if mem_w_en is None:
+                    continue
+                en0 = int(mem_w_en[0].value)
+                if en0 != 1:
+                    continue
+                w_neuron = int(mem_w_neuron[0].value)
+                w_in = int(mem_w_in[0].value)
+                if w_neuron == dbg_neuron and w_in == dbg_in:
+                    w_data = int(mem_w_data[0].value.signed_integer)
+                    st = int(state_sig.value) if state_sig is not None else -1
+                    stdp_j = int(stdp_j_sig.value) if stdp_j_sig is not None else -1
+                    stdp_g = int(stdp_g_sig.value) if stdp_g_sig is not None else -1
+                    s_in_bit = None
+                    s_exc_bit = None
+                    if s_in_reg_sig is not None:
+                        s_in_bit = int((int(s_in_reg_sig.value) >> dbg_in) & 1)
+                    if s_exc_next_sig is not None:
+                        s_exc_bit = int((int(s_exc_next_sig.value) >> dbg_neuron) & 1)
+                    dut._log.info(
+                        "STDP debug write W[%d][%d]=%d (state=%d stdp_j=%d stdp_g=%d s_in=%s s_exc=%s)",
+                        dbg_neuron,
+                        dbg_in,
+                        w_data,
+                        st,
+                        stdp_j,
+                        stdp_g,
+                        str(s_in_bit),
+                        str(s_exc_bit),
+                    )
+            except Exception as exc:
+                dut._log.info("STDP debug monitor error: %s", exc)
+                return
+
+    if mem_w_en is not None:
+        cocotb.start_soon(monitor_weight_writes())
+
+    for step_idx, bits in enumerate(patterns):
+        await send_packet(dut, step_idx, bits, stdp_en=1, max_wait=MAX_WAIT_CYCLES_STDP)
+        out_id, s_exc_bits = await recv_packet(dut, max_wait=MAX_WAIT_CYCLES_STDP)
+        ref_bits = model.step(int(bits), stdp_en=1, dbg=(dbg_neuron, dbg_in))
+        if hasattr(model, "last_debug"):
+            dbg = model.last_debug
+            dut._log.info(
+                "STDP debug model step %d: pre_spike=%d post_spike=%d x_pre=%d x_post=%d dW=%d w_old=%d w_new=%d",
+                step_idx,
+                dbg["pre_spike"],
+                dbg["post_spike"],
+                dbg["x_pre"],
+                dbg["x_post"],
+                dbg["dW"],
+                dbg["w_old"],
+                dbg["w_new"],
+            )
+        assert out_id == step_idx, f"tstep_id mismatch at {step_idx}"
+        assert s_exc_bits == ref_bits, (
+            f"s_exc mismatch at {step_idx}: exp={ref_bits:0{N_NEURONS}b} "
+            f"got={s_exc_bits:0{N_NEURONS}b}"
+        )
+        model_w_history.append(model.W_in[dbg_neuron][dbg_in])
+        dut_w = await dbg_read_weight(dut, dbg_neuron, dbg_in)
+        dut_w_history.append(dut_w)
+        dut._log.info(
+            "STDP debug step %d: W[%d][%d] dut=%d model=%d",
+            step_idx,
+            dbg_neuron,
+            dbg_in,
+            dut_w,
+            model.W_in[dbg_neuron][dbg_in],
+        )
+
+    # Wait for STDP update to finish (s_tready back high) before reading weights
+    await wait_for_ready(dut, max_wait=MAX_WAIT_CYCLES_STDP)
+
+    post_w = await dbg_read_weight(dut, dbg_neuron, dbg_in)
+    model_post_w = model.W_in[dbg_neuron][dbg_in]
+    dut._log.info(
+        "STDP debug post: W[%d][%d] dut=%d model=%d",
+        dbg_neuron,
+        dbg_in,
+        post_w,
+        model_post_w,
+    )
+    dut._log.info("STDP debug history dut=%s", dut_w_history)
+    dut._log.info("STDP debug history model=%s", model_w_history)
+
+    max_neurons = min(N_NEURONS, 2)
+    max_in = min(N_IN, 16)
+    for i in range(max_neurons):
+        for j in range(0, max_in, 4):
+            dut_w = await dbg_read_weight(dut, i, j)
+            ref_w = model.W_in[i][j]
+            if dut_w != ref_w:
+                dut._log.error(
+                    "STDP W_in mismatch [%d][%d]: exp=%d got=%d",
+                    i,
+                    j,
+                    ref_w,
+                    dut_w,
+                )
+                raise AssertionError(
+                    f"STDP W_in mismatch [{i}][{j}]: exp={ref_w} got={dut_w}"
+                )
 
 
 def pipeline_small_runner():

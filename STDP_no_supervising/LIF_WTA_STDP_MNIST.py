@@ -105,7 +105,7 @@ def prediction(spikes, assignments, n_labels):
 ####  Model  ####
 #################
 class DiehlAndCook2015Network:
-    def __init__(self, n_in=784, n_neurons=100, wexc=2.25, winh=0.875,
+    def __init__(self, n_in=784, n_neurons=50, wexc=2.25, winh=0.875,
                  dt=1e-3, wmin=0.0, wmax=5e-2, lr=(1e-2, 1e-4),
                  update_nt=100):
         """
@@ -245,7 +245,7 @@ if __name__ == '__main__':
     nt_inj = round(t_inj/dt)
     nt_blank = round(t_blank/dt)
     
-    n_neurons = 100 #興奮性/抑制性ニューロンの数
+    n_neurons = 50 #興奮性/抑制性ニューロンの数
     n_labels = 10 #ラベル数
     n_epoch = 30 #エポック数
     

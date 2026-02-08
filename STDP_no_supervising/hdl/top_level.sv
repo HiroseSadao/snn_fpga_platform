@@ -39,7 +39,7 @@ module top_level(
     wire clk_25mhz = clk_div[1];
 
     localparam int N_IN = 784;
-    localparam int N_NEURONS = 100;
+    localparam int N_NEURONS = 50;
     localparam int TSTEP_W = 16;
     localparam int BLANK_STEPS = 150;
     localparam int N_LABELS = 10;
@@ -200,7 +200,11 @@ module top_level(
     logic samples_done;
     logic assign_running;
     logic pred_running;
-    logic [LABEL_BITS-1:0] labels_mem [0:N_SAMPLES-1];
+    logic [LABEL_BITS-1:0] labels_mem_q;
+    logic [$clog2(N_SAMPLES)-1:0] labels_rd_addr;
+    logic [$clog2(N_SAMPLES)-1:0] labels_wr_addr;
+    logic [LABEL_BITS-1:0] labels_wr_data;
+    logic labels_wr_en;
     logic [31:0] tp_count;
     logic [31:0] tn_count;
     logic [31:0] fp_count;
@@ -209,6 +213,17 @@ module top_level(
     logic [3:0] disp_digits [0:3];
     logic [1:0] disp_sel;
     logic [15:0] disp_div;
+    typedef enum logic [2:0] {DISP_IDLE, DISP_DIV0, DISP_DIV1, DISP_DIV2, DISP_DIV3} disp_state_e;
+    disp_state_e disp_state;
+    logic [31:0] disp_value_reg;
+    logic [31:0] disp_dividend;
+    logic [31:0] disp_divisor;
+    logic        disp_div_valid_in;
+    logic [31:0] disp_quotient;
+    logic [31:0] disp_remainder;
+    logic        disp_div_valid_out;
+    logic        disp_div_error;
+    logic        disp_div_busy;
     logic train_done;
     logic eval_done;
     logic hold_input;
@@ -276,6 +291,47 @@ module top_level(
         .true_label(true_label)
     );
 
+    // Labels RAM (XPM, read latency = 1)
+    xpm_memory_sdpram #(
+        .ADDR_WIDTH_A($clog2(N_SAMPLES)),
+        .ADDR_WIDTH_B($clog2(N_SAMPLES)),
+        .AUTO_SLEEP_TIME(0),
+        .BYTE_WRITE_WIDTH_A(LABEL_BITS),
+        .CLOCKING_MODE("common_clock"),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE("none"),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("block"),
+        .MEMORY_SIZE(N_SAMPLES * LABEL_BITS),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_B(LABEL_BITS),
+        .READ_LATENCY_B(1),
+        .READ_RESET_VALUE_B("0"),
+        .RST_MODE_A("SYNC"),
+        .RST_MODE_B("SYNC"),
+        .SIM_ASSERT_CHK(0),
+        .USE_MEM_INIT(0),
+        .WAKEUP_TIME("disable_sleep"),
+        .WRITE_DATA_WIDTH_A(LABEL_BITS),
+        .WRITE_MODE_B("read_first")
+    ) u_labels_mem (
+        .clka(clk_25mhz),
+        .ena(labels_wr_en),
+        .wea(labels_wr_en),
+        .addra(labels_wr_addr),
+        .dina(labels_wr_data),
+        .clkb(clk_25mhz),
+        .enb(1'b1),
+        .addrb(labels_rd_addr),
+        .doutb(labels_mem_q),
+        .rstb(reset),
+        .regceb(1'b1),
+        .sleep(1'b0),
+        .injectsbiterra(1'b0),
+        .injectdbiterra(1'b0)
+    );
+
     // read control + parsing
     always_ff @(posedge clk_25mhz) begin
         if (reset) begin
@@ -298,7 +354,9 @@ module top_level(
             stream_state    <= S_IDLE;
             fifo_wr_en      <= 1'b0;
             fifo_wr_data    <= 8'd0;
-            // labels_mem initialized on read
+            labels_wr_en    <= 1'b0;
+            labels_wr_addr  <= '0;
+            labels_wr_data  <= '0;
             btn_sync <= 3'b0;
             btn_prev <= 3'b0;
             run_state <= RUN_IDLE;
@@ -308,6 +366,7 @@ module top_level(
         end else begin
             rd          <= 1'b0;
             fifo_wr_en  <= 1'b0;
+            labels_wr_en <= 1'b0;
 
             btn_sync <= {btn[2], btn[1], btn[0]};
             btn_prev <= btn_sync;
@@ -372,7 +431,9 @@ module top_level(
                             end
                         end else if (file_byte_index < (HEADER_BYTES + num_images_u32)) begin
                             // Labels area
-                            labels_mem[label_index[$clog2(N_SAMPLES)-1:0]] <= dout[LABEL_BITS-1:0];
+                            labels_wr_en <= 1'b1;
+                            labels_wr_addr <= label_index[$clog2(N_SAMPLES)-1:0];
+                            labels_wr_data <= dout[LABEL_BITS-1:0];
                             label_index <= label_index + 1'b1;
                         end else if (streaming) begin
                             // Spikes area (one byte per neuron per time step)
@@ -578,6 +639,14 @@ module top_level(
     // -----------------------------
     // Output accumulation + training/eval control
     // -----------------------------
+    always_ff @(posedge clk_25mhz) begin
+        if (reset) begin
+            labels_rd_addr <= '0;
+        end else begin
+            labels_rd_addr <= sample_idx_out[$clog2(N_SAMPLES)-1:0];
+        end
+    end
+
     integer nn;
     always_ff @(posedge clk_25mhz) begin
         if (reset) begin
@@ -680,8 +749,8 @@ module top_level(
                         end
                         write_counts_active <= 1'b1;
                         count_idx <= '0;
-                        assign_sample_label <= labels_mem[sample_idx_out];
-                        pred_sample_label <= labels_mem[sample_idx_out];
+                        assign_sample_label <= labels_mem_q;
+                        pred_sample_label <= labels_mem_q;
                     end else begin
                         time_idx_out <= time_idx_out + 1'b1;
                     end
@@ -785,13 +854,78 @@ module top_level(
         end
     end
 
-    always_comb begin
-        int val;
-        val = display_value;
-        disp_digits[0] = val % 10;
-        disp_digits[1] = (val / 10) % 10;
-        disp_digits[2] = (val / 100) % 10;
-        disp_digits[3] = (val / 1000) % 10;
+    divider2b #(.WIDTH(32)) u_disp_divider(
+        .clk_in        (clk_25mhz),
+        .rst_in        (reset),
+        .dividend_in   (disp_dividend),
+        .divisor_in    (disp_divisor),
+        .data_valid_in (disp_div_valid_in),
+        .quotient_out  (disp_quotient),
+        .remainder_out (disp_remainder),
+        .data_valid_out(disp_div_valid_out),
+        .error_out     (disp_div_error),
+        .busy_out      (disp_div_busy)
+    );
+
+    always_ff @(posedge clk_25mhz) begin
+        if (reset) begin
+            disp_value_reg <= '0;
+            disp_dividend <= '0;
+            disp_divisor <= '0;
+            disp_div_valid_in <= 1'b0;
+            disp_state <= DISP_IDLE;
+            disp_digits[0] <= '0;
+            disp_digits[1] <= '0;
+            disp_digits[2] <= '0;
+            disp_digits[3] <= '0;
+        end else begin
+            disp_div_valid_in <= 1'b0;
+            case (disp_state)
+                DISP_IDLE: begin
+                    if (display_value != disp_value_reg) begin
+                        disp_value_reg <= display_value;
+                        disp_dividend <= display_value;
+                        disp_divisor <= 32'd10;
+                        disp_div_valid_in <= 1'b1;
+                        disp_state <= DISP_DIV0;
+                    end
+                end
+                DISP_DIV0: begin
+                    if (disp_div_valid_out) begin
+                        disp_digits[0] <= disp_remainder[3:0];
+                        disp_dividend <= disp_quotient;
+                        disp_divisor <= 32'd10;
+                        disp_div_valid_in <= 1'b1;
+                        disp_state <= DISP_DIV1;
+                    end
+                end
+                DISP_DIV1: begin
+                    if (disp_div_valid_out) begin
+                        disp_digits[1] <= disp_remainder[3:0];
+                        disp_dividend <= disp_quotient;
+                        disp_divisor <= 32'd10;
+                        disp_div_valid_in <= 1'b1;
+                        disp_state <= DISP_DIV2;
+                    end
+                end
+                DISP_DIV2: begin
+                    if (disp_div_valid_out) begin
+                        disp_digits[2] <= disp_remainder[3:0];
+                        disp_dividend <= disp_quotient;
+                        disp_divisor <= 32'd10;
+                        disp_div_valid_in <= 1'b1;
+                        disp_state <= DISP_DIV3;
+                    end
+                end
+                DISP_DIV3: begin
+                    if (disp_div_valid_out) begin
+                        disp_digits[3] <= disp_remainder[3:0];
+                        disp_state <= DISP_IDLE;
+                    end
+                end
+                default: disp_state <= DISP_IDLE;
+            endcase
+        end
     end
 
     always_ff @(posedge clk_25mhz) begin

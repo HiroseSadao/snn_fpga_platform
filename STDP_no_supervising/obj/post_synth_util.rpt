@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Sat Feb  7 23:37:42 2026
-| Host         : eecs-digital-11 running 64-bit Ubuntu 24.04.3 LTS
+| Date         : Sun Feb  8 07:32:30 2026
+| Host         : eecs-digital-08 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_utilization -file obj/post_synth_util.rpt -hierarchical -hierarchical_depth 4
 | Design       : top_level
 | Device       : xc7s50csga324-1
@@ -22,25 +22,24 @@ Table of Contents
 +------------------------------+-----------------------------------+------------+------------+---------+------+-------+--------+--------+------------+
 |           Instance           |               Module              | Total LUTs | Logic LUTs | LUTRAMs | SRLs |  FFs  | RAMB36 | RAMB18 | DSP Blocks |
 +------------------------------+-----------------------------------+------------+------------+---------+------+-------+--------+--------+------------+
-| top_level                    |                             (top) |      55621 |      53703 |    1918 |    0 | 99741 |     98 |      0 |         11 |
-|   (top_level)                |                             (top) |       4396 |       3006 |    1390 |    0 |  3987 |      0 |      0 |          6 |
-|   u_assign_labels_stream     |              assign_labels_stream |      11049 |      11049 |       0 |    0 | 17035 |      0 |      0 |          0 |
-|     (u_assign_labels_stream) |              assign_labels_stream |      10897 |      10897 |       0 |    0 | 16900 |      0 |      0 |          0 |
-|     u_divider                |                       divider2b_0 |        152 |        152 |       0 |    0 |   135 |      0 |      0 |          0 |
-|   u_bto7s                    |                             bto7s |       2405 |       2405 |       0 |    0 |     0 |      0 |      0 |          0 |
-|   u_pipeline_small           |                    pipeline_small |      36719 |      36191 |     528 |    0 | 78003 |     98 |      0 |          5 |
-|     (u_pipeline_small)       |                    pipeline_small |      36122 |      35594 |     528 |    0 | 78001 |      0 |      0 |          3 |
-|     u_next_mem               | xpm_memory_sdpram__parameterized0 |        156 |        156 |       0 |    0 |     0 |      2 |      0 |          0 |
-|       (u_next_mem)           | xpm_memory_sdpram__parameterized0 |        155 |        155 |       0 |    0 |     0 |      0 |      0 |          0 |
-|     u_wmem                   |                    w_in_mem_4bank |        442 |        442 |       0 |    0 |     2 |     96 |      0 |          2 |
-|       (u_wmem)               |                    w_in_mem_4bank |        274 |        274 |       0 |    0 |     0 |      0 |      0 |          2 |
-|       u_wmem_xpm             |                 xpm_memory_sdpram |        168 |        168 |       0 |    0 |     2 |     96 |      0 |          0 |
-|         (u_wmem_xpm)         |                 xpm_memory_sdpram |         74 |         74 |       0 |    0 |     0 |      0 |      0 |          0 |
-|         xpm_memory_base_inst |                   xpm_memory_base |         94 |         94 |       0 |    0 |     2 |     96 |      0 |          0 |
-|   u_prediction_stream        |                 prediction_stream |        524 |        524 |       0 |    0 |   568 |      0 |      0 |          0 |
-|     (u_prediction_stream)    |                 prediction_stream |        376 |        376 |       0 |    0 |   449 |      0 |      0 |          0 |
-|     u_divider                |                         divider2b |        148 |        148 |       0 |    0 |   119 |      0 |      0 |          0 |
-|   u_sd                       |                     sd_controller |        528 |        528 |       0 |    0 |   148 |      0 |      0 |          0 |
+| top_level                    |                             (top) |      37395 |      36939 |     456 |    0 | 72757 |     68 |      2 |         14 |
+|   (top_level)                |                             (top) |       2322 |       1874 |     448 |    0 |  3278 |      0 |      0 |          6 |
+|   u_assign_labels_stream     |              assign_labels_stream |       5974 |       5974 |       0 |    0 |  8837 |      0 |      0 |          0 |
+|     (u_assign_labels_stream) |              assign_labels_stream |       5822 |       5822 |       0 |    0 |  8702 |      0 |      0 |          0 |
+|     u_divider                |                       divider2b_2 |        152 |        152 |       0 |    0 |   135 |      0 |      0 |          0 |
+|   u_disp_divider             |                         divider2b |        266 |        266 |       0 |    0 |   108 |      0 |      0 |          0 |
+|   u_pipeline_small           |                    pipeline_small |      27970 |      27962 |       8 |    0 | 59819 |     66 |      2 |          8 |
+|     (u_pipeline_small)       |                    pipeline_small |      26724 |      26716 |       8 |    0 | 59708 |      0 |      0 |          6 |
+|     u_divider                |                       divider2b_1 |        976 |        976 |       0 |    0 |   111 |      0 |      0 |          0 |
+|     u_next_mem               | xpm_memory_sdpram__parameterized2 |         91 |         91 |       0 |    0 |     0 |      2 |      0 |          0 |
+|       (u_next_mem)           | xpm_memory_sdpram__parameterized2 |         90 |         90 |       0 |    0 |     0 |      0 |      0 |          0 |
+|     u_wmem                   |                    w_in_mem_4bank |        148 |        148 |       0 |    0 |     0 |     64 |      0 |          2 |
+|       u_wmem_xpm             |                 xpm_memory_sdpram |        112 |        112 |       0 |    0 |     0 |     64 |      0 |          0 |
+|         (u_wmem_xpm)         |                 xpm_memory_sdpram |        108 |        108 |       0 |    0 |     0 |      0 |      0 |          0 |
+|   u_prediction_stream        |                 prediction_stream |        504 |        504 |       0 |    0 |   567 |      0 |      0 |          0 |
+|     (u_prediction_stream)    |                 prediction_stream |        357 |        357 |       0 |    0 |   448 |      0 |      0 |          0 |
+|     u_divider                |                       divider2b_0 |        147 |        147 |       0 |    0 |   119 |      0 |      0 |          0 |
+|   u_sd                       |                     sd_controller |        351 |        351 |       0 |    0 |   148 |      0 |      0 |          0 |
 +------------------------------+-----------------------------------+------------+------------+---------+------+-------+--------+--------+------------+
 
 
