@@ -204,9 +204,12 @@ module pipeline_small #(
         S_NEURON_PREP,
         S_NEURON_CALC1,
         S_NEURON_CALC2,
+        S_NEURON_COMMIT_RD,
+        S_NEURON_COMMIT_WAIT,
         S_NEURON_COMMIT,
         S_OUT,
         S_STDP_READ,
+        S_STDP_WAIT,
         S_STDP_CALC,
         S_CLR_DELAY_IN,
         S_CLR_DELAY_E2I
@@ -291,21 +294,29 @@ module pipeline_small #(
     logic [IN_W-1:0] stdp_j;
     logic [$clog2(NEURON_GROUPS):0] stdp_g;
 
-    // Per-neuron next-state storage (computed over multiple cycles)
-    (* ram_style = "block" *) logic signed [31:0] g_in_state_next [0:N_NEURONS-1];
-    (* ram_style = "block" *) logic signed [31:0] r_exc_next [0:N_NEURONS-1];
-    (* ram_style = "block" *) logic signed [31:0] x_exc_next [0:N_NEURONS-1];
-    (* ram_style = "block" *) logic signed [31:0] r_inh_next [0:N_NEURONS-1];
-    (* ram_style = "block" *) logic signed [31:0] v_exc_next [0:N_NEURONS-1];
-    (* ram_style = "block" *) logic signed [31:0] theta_next [0:N_NEURONS-1];
-    (* ram_style = "block" *) logic signed [31:0] vthr_next [0:N_NEURONS-1];
-    (* ram_style = "block" *) logic [15:0]        refr_exc_next [0:N_NEURONS-1];
+    // Per-neuron next-state storage: heavy 4 in BRAM, light 4 back to arrays
+    localparam int NEXT_W = (32*4);
+    logic [NEXT_W-1:0] next_wr_data;
+    logic [NEXT_W-1:0] next_rd_data;
+    logic next_wr_en;
+    logic next_rd_en;
+    logic [NEURON_W-1:0] next_wr_addr;
+    logic [NEURON_W-1:0] next_rd_addr;
 
-    (* ram_style = "block" *) logic signed [31:0] v_inh_next [0:N_NEURONS-1];
-    (* ram_style = "block" *) logic [15:0]        refr_inh_next [0:N_NEURONS-1];
+    logic [N_NEURONS-1:0] s_exc_next;
 
-    (* ram_style = "block" *) logic [N_NEURONS-1:0] s_exc_next;
-    (* ram_style = "block" *) logic signed [31:0] g_exc_next [0:N_NEURONS-1];
+    logic signed [31:0] r_inh_next  [0:N_NEURONS-1];
+    logic signed [31:0] v_exc_next  [0:N_NEURONS-1];
+    logic signed [31:0] v_inh_next  [0:N_NEURONS-1];
+    logic signed [31:0] theta_next  [0:N_NEURONS-1];
+    logic signed [31:0] vthr_next   [0:N_NEURONS-1];
+    logic [15:0]        refr_exc_next [0:N_NEURONS-1];
+    logic [15:0]        refr_inh_next [0:N_NEURONS-1];
+
+    wire signed [31:0] g_in_state_next_mem = next_rd_data[NEXT_W-1 -: 32];
+    wire signed [31:0] r_exc_next_mem      = next_rd_data[NEXT_W-33 -: 32];
+    wire signed [31:0] x_exc_next_mem      = next_rd_data[NEXT_W-65 -: 32];
+    wire signed [31:0] g_exc_next_mem      = next_rd_data[NEXT_W-97 -: 32];
 
     logic [$clog2(N_NEURONS):0] neuron_idx;
     logic signed [63:0] sum_r_inh_reg;
@@ -335,6 +346,7 @@ module pipeline_small #(
     logic signed [31:0] num_exc_val;
     logic signed [31:0] num_i_val;
     logic signed [31:0] i_syn_exc_val;
+    logic signed [31:0] g_in_state_next_val;
     logic signed [31:0] v_next_exc_val;
     logic signed [31:0] theta_decayed_val;
     logic signed [31:0] r_exc_next_val;
@@ -359,6 +371,64 @@ module pipeline_small #(
             delay_e2i_rd_data <= delay_e2i_mem[delay_e2i_rd_addr];
         end
     end
+
+`ifdef SYNTHESIS
+    // Next-state BRAM (1R1W)
+    xpm_memory_sdpram #(
+        .ADDR_WIDTH_A(NEURON_W),
+        .ADDR_WIDTH_B(NEURON_W),
+        .AUTO_SLEEP_TIME(0),
+        .BYTE_WRITE_WIDTH_A(NEXT_W),
+        .CLOCKING_MODE("common_clock"),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE("none"),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("block"),
+        .MEMORY_SIZE(N_NEURONS * NEXT_W),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_B(NEXT_W),
+        .READ_LATENCY_B(1),
+        .READ_RESET_VALUE_B("0"),
+        .RST_MODE_A("SYNC"),
+        .RST_MODE_B("SYNC"),
+        .SIM_ASSERT_CHK(0),
+        .USE_MEM_INIT(0),
+        .WAKEUP_TIME("disable_sleep"),
+        .WRITE_DATA_WIDTH_A(NEXT_W),
+        .WRITE_MODE_B("read_first")
+    ) u_next_mem (
+        .clka(clk),
+        .ena(next_wr_en),
+        .wea(next_wr_en),
+        .addra(next_wr_addr),
+        .dina(next_wr_data),
+        .clkb(clk),
+        .enb(next_rd_en),
+        .addrb(next_rd_addr),
+        .doutb(next_rd_data),
+        .rstb(rst),
+        .regceb(1'b1),
+        .sleep(1'b0),
+        .injectsbiterra(1'b0),
+        .injectdbiterra(1'b0)
+    );
+`else
+    // Behavioral next-state memory for simulation
+    logic [NEXT_W-1:0] next_mem_sim [0:N_NEURONS-1];
+    always_ff @(posedge clk) begin
+        if (rst) begin
+            next_rd_data <= '0;
+        end else begin
+            if (next_wr_en) begin
+                next_mem_sim[next_wr_addr] <= next_wr_data;
+            end
+            if (next_rd_en) begin
+                next_rd_data <= next_mem_sim[next_rd_addr];
+            end
+        end
+    end
+`endif
 
     // Sequential state updates
     always_ff @(posedge clk) begin
@@ -386,6 +456,7 @@ module pipeline_small #(
             num_exc_val <= '0;
             num_i_val <= '0;
             i_syn_exc_val <= '0;
+            g_in_state_next_val <= '0;
             v_next_exc_val <= '0;
             theta_decayed_val <= '0;
             r_exc_next_val <= '0;
@@ -399,6 +470,11 @@ module pipeline_small #(
             refr_exc_next_val <= '0;
             refr_inh_next_val <= '0;
             s_exc_next_val <= 1'b0;
+            next_wr_en <= 1'b0;
+            next_rd_en <= 1'b0;
+            next_wr_addr <= '0;
+            next_rd_addr <= '0;
+            next_wr_data <= '0;
 
             for (i = 0; i < N_IN; i = i + 1) begin
                 x_in[i] <= '0;
@@ -416,6 +492,14 @@ module pipeline_small #(
                 g_inh_state[i] <= '0;
                 g_in_state[i] <= '0;
                 g_in_accum[i] <= '0;
+                s_exc_next[i] <= 1'b0;
+                r_inh_next[i] <= '0;
+                v_exc_next[i] <= EXC_VRESET * FP_SCALE;
+                v_inh_next[i] <= INH_VRESET * FP_SCALE;
+                theta_next[i] <= '0;
+                vthr_next[i] <= EXC_INIT_VTHR * FP_SCALE;
+                refr_exc_next[i] <= '0;
+                refr_inh_next[i] <= '0;
             end
             delay_in_wr_idx <= '0;
             delay_e2i_wr_idx <= '0;
@@ -427,6 +511,8 @@ module pipeline_small #(
         end else begin
             // defaults
             mem_r_en <= 1'b0;
+            next_wr_en <= 1'b0;
+            next_rd_en <= 1'b0;
             for (i = 0; i < LANES; i = i + 1) begin
                 mem_w_en[i] <= 1'b0;
             end
@@ -630,7 +716,7 @@ module pipeline_small #(
 
                     case (calc_phase)
                         P_GIN_DIV: begin
-                            g_in_state_next[n] <= g_in_state[n] - div_result + g_in_accum[n];
+                            g_in_state_next_val <= g_in_state[n] - div_result + g_in_accum[n];
                             delay_in_rd_addr <= delay_in_addr(delay_in_rd_idx(), n[NEURON_W-1:0]);
                             calc_phase <= P_I_SYN_EXC_MUL;
                         end
@@ -717,22 +803,27 @@ module pipeline_small #(
                                         + (s_inh_local ? (FP_SCALE / TD_INH_STEPS) : 0);
 
                             s_exc_next[n] <= s_exc_next_val;
+                            next_wr_en <= 1'b1;
+                            next_wr_addr <= n[NEURON_W-1:0];
+                            next_wr_data <= {
+                                g_in_state_next_val,
+                                r_exc_next_val,
+                                x_exc_next_val,
+                                g_exc_next_val
+                            };
+                            r_inh_next[n] <= r_inh_local;
                             v_exc_next[n] <= v_exc_next_val;
                             v_inh_next[n] <= v_inh_next_val;
-                            refr_exc_next[n] <= refr_exc_next_val;
-                            refr_inh_next[n] <= refr_inh_next_val;
                             theta_next[n] <= theta_next_val;
                             vthr_next[n] <= vthr_next_val;
-                            r_exc_next[n] <= r_exc_next_val;
-                            x_exc_next[n] <= x_exc_next_val;
-                            g_exc_next[n] <= g_exc_next_val;
-                            r_inh_next[n] <= r_inh_local;
+                            refr_exc_next[n] <= refr_exc_next_val;
+                            refr_inh_next[n] <= refr_inh_next_val;
                             sum_r_inh_reg <= sum_r_inh_reg + r_inh_local;
 
                             if (neuron_idx == N_NEURONS-1) begin
                                 neuron_idx <= '0;
                                 calc_phase <= P_GIN_DIV;
-                                state <= S_NEURON_COMMIT;
+                                state <= S_NEURON_COMMIT_RD;
                             end else begin
                                 neuron_idx <= neuron_idx + 1'b1;
                                 calc_phase <= P_GIN_DIV;
@@ -746,6 +837,17 @@ module pipeline_small #(
                     endcase
                 end
 
+                S_NEURON_COMMIT_RD: begin
+                    next_rd_en <= 1'b1;
+                    next_rd_addr <= neuron_idx[NEURON_W-1:0];
+                    state <= S_NEURON_COMMIT_WAIT;
+                end
+
+                S_NEURON_COMMIT_WAIT: begin
+                    // wait one cycle for BRAM read latency
+                    state <= S_NEURON_COMMIT;
+                end
+
                 S_NEURON_COMMIT: begin
                     int n;
                     logic signed [63:0] acc_inh;
@@ -757,9 +859,9 @@ module pipeline_small #(
                     end else begin
                         g_inh_next_val = 0;
                     end
-                    g_in_state[n] <= g_in_state_next[n];
-                    r_exc[n] <= r_exc_next[n];
-                    x_exc[n] <= x_exc_next[n];
+                    g_in_state[n] <= g_in_state_next_mem;
+                    r_exc[n] <= r_exc_next_mem;
+                    x_exc[n] <= x_exc_next_mem;
                     r_inh[n] <= r_inh_next[n];
                     v_exc[n] <= v_exc_next[n];
                     theta[n] <= theta_next[n];
@@ -768,8 +870,8 @@ module pipeline_small #(
                     v_inh[n] <= v_inh_next[n];
                     refr_inh[n] <= refr_inh_next[n];
                     g_inh_state[n] <= g_inh_next_val;
-                    delay_in_mem[delay_in_addr(delay_in_wr_idx, n[NEURON_W-1:0])] <= g_in_state_next[n];
-                    delay_e2i_mem[delay_e2i_addr(delay_e2i_wr_idx, n[NEURON_W-1:0])] <= g_exc_next[n];
+                    delay_in_mem[delay_in_addr(delay_in_wr_idx, n[NEURON_W-1:0])] <= g_in_state_next_mem;
+                    delay_e2i_mem[delay_e2i_addr(delay_e2i_wr_idx, n[NEURON_W-1:0])] <= g_exc_next_mem;
 
                     if (neuron_idx == N_NEURONS-1) begin
                         delay_in_wr_idx <= delay_in_next_idx(delay_in_wr_idx);
@@ -781,6 +883,7 @@ module pipeline_small #(
                         neuron_idx <= '0;
                     end else begin
                         neuron_idx <= neuron_idx + 1'b1;
+                        state <= S_NEURON_COMMIT_RD;
                     end
                 end
 
@@ -804,6 +907,12 @@ module pipeline_small #(
 
         // Online STDP update (4 weights per cycle)
         S_STDP_READ: begin
+            next_rd_en <= 1'b1;
+            next_rd_addr <= stdp_g[NEURON_W-1:0];
+            state <= S_STDP_WAIT;
+        end
+
+        S_STDP_WAIT: begin
             state <= S_STDP_CALC;
         end
 
@@ -821,7 +930,7 @@ module pipeline_small #(
                     w_old = mem_r_data[i];
 
                     pre_term = s_exc_next[neuron_idx] ? fp_mul(A_P_FP, x_in[stdp_j]) : 0;
-                    post_term = s_in_reg[stdp_j] ? fp_mul(A_M_FP, x_exc_next[neuron_idx]) : 0;
+                    post_term = s_in_reg[stdp_j] ? fp_mul(A_M_FP, x_exc_next_mem) : 0;
                     dW = pre_term - post_term;
 
                     w_new = w_old + dW;
