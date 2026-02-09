@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Sun Feb  8 07:32:30 2026
-| Host         : eecs-digital-08 running 64-bit Ubuntu 24.04.3 LTS
+| Date         : Mon Feb  9 02:25:35 2026
+| Host         : eecs-digital-06 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_timing -file obj/post_synth_timing.rpt
 | Design       : top_level
 | Device       : 7s50-csga324
@@ -12,16 +12,16 @@ Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanc
 
 Timing Report
 
-Slack (MET) :             8.322ns  (required time - arrival time)
-  Source:                 clk_div_reg[0]/C
+Slack (MET) :             6.767ns  (required time - arrival time)
+  Source:                 por_cnt_100_reg[8]/C
                             (rising edge-triggered cell FDRE clocked by gclk  {rise@0.000ns fall@4.000ns period=10.000ns})
-  Destination:            clk_div_reg[1]/D
+  Destination:            por_cnt_100_reg[0]/CE
                             (rising edge-triggered cell FDRE clocked by gclk  {rise@0.000ns fall@4.000ns period=10.000ns})
   Path Group:             gclk
   Path Type:              Setup (Max at Slow Process Corner)
   Requirement:            10.000ns  (gclk rise@10.000ns - gclk rise@0.000ns)
-  Data Path Delay:        1.527ns  (logic 0.775ns (50.753%)  route 0.752ns (49.247%))
-  Logic Levels:           1  (LUT3=1)
+  Data Path Delay:        2.851ns  (logic 0.897ns (31.463%)  route 1.954ns (68.537%))
+  Logic Levels:           2  (LUT6=2)
   Clock Path Skew:        -0.145ns (DCD - SCD + CPR)
     Destination Clock Delay (DCD):    2.660ns = ( 12.660 - 10.000 ) 
     Source Clock Delay      (SCD):    2.920ns
@@ -40,14 +40,16 @@ Slack (MET) :             8.322ns  (required time - arrival time)
     N15                  IBUF (Prop_ibuf_I_O)         1.440     1.440 r  clk_100mhz_IBUF_inst/O
                          net (fo=1, unplaced)         0.800     2.240    clk_100mhz_IBUF
                          BUFG (Prop_bufg_I_O)         0.096     2.336 r  clk_100mhz_IBUF_BUFG_inst/O
-                         net (fo=2, unplaced)         0.584     2.920    clk_100mhz_IBUF_BUFG
-                         FDRE                                         r  clk_div_reg[0]/C
+                         net (fo=19, unplaced)        0.584     2.920    clk_100mhz_IBUF_BUFG
+                         FDRE                                         r  por_cnt_100_reg[8]/C
   -------------------------------------------------------------------    -------------------
-                         FDRE (Prop_fdre_C_Q)         0.456     3.376 r  clk_div_reg[0]/Q
-                         net (fo=2, unplaced)         0.752     4.128    clk_div[0]
-                         LUT3 (Prop_lut3_I0_O)        0.319     4.447 r  clk_div[1]_i_1/O
-                         net (fo=1, unplaced)         0.000     4.447    clk_div[1]_i_1_n_0
-                         FDRE                                         r  clk_div_reg[1]/D
+                         FDRE (Prop_fdre_C_Q)         0.478     3.398 r  por_cnt_100_reg[8]/Q
+                         net (fo=2, unplaced)         0.976     4.374    por_cnt_100_reg[8]
+                         LUT6 (Prop_lut6_I0_O)        0.295     4.669 r  por_reset_100_i_3/O
+                         net (fo=1, unplaced)         0.449     5.118    por_reset_100_i_3_n_0
+                         LUT6 (Prop_lut6_I5_O)        0.124     5.242 r  por_reset_100_i_1/O
+                         net (fo=17, unplaced)        0.529     5.771    sel
+                         FDRE                                         r  por_cnt_100_reg[0]/CE
   -------------------------------------------------------------------    -------------------
 
                          (clock gclk rise edge)      10.000    10.000 r  
@@ -56,16 +58,16 @@ Slack (MET) :             8.322ns  (required time - arrival time)
     N15                  IBUF (Prop_ibuf_I_O)         1.370    11.370 r  clk_100mhz_IBUF_inst/O
                          net (fo=1, unplaced)         0.760    12.130    clk_100mhz_IBUF
                          BUFG (Prop_bufg_I_O)         0.091    12.221 r  clk_100mhz_IBUF_BUFG_inst/O
-                         net (fo=2, unplaced)         0.439    12.660    clk_100mhz_IBUF_BUFG
-                         FDRE                                         r  clk_div_reg[1]/C
+                         net (fo=19, unplaced)        0.439    12.660    clk_100mhz_IBUF_BUFG
+                         FDRE                                         r  por_cnt_100_reg[0]/C
                          clock pessimism              0.115    12.775    
                          clock uncertainty           -0.035    12.740    
-                         FDRE (Setup_fdre_C_D)        0.029    12.769    clk_div_reg[1]
+                         FDRE (Setup_fdre_C_CE)      -0.202    12.538    por_cnt_100_reg[0]
   -------------------------------------------------------------------
-                         required time                         12.769    
-                         arrival time                          -4.447    
+                         required time                         12.538    
+                         arrival time                          -5.771    
   -------------------------------------------------------------------
-                         slack                                  8.322    
+                         slack                                  6.767    
 
 
 

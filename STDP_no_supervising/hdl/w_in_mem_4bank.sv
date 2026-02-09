@@ -2,7 +2,7 @@
 
 module w_in_mem_4bank #(
     parameter int N_IN = 784,
-    parameter int N_NEURONS = 50,
+    parameter int N_NEURONS = 100,
     parameter logic signed [31:0] INIT_VAL = 32'sd66,
     parameter bit INIT_FROM_FILE = 0
 ) (

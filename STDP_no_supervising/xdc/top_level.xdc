@@ -37,7 +37,7 @@ set_property -dict {PACKAGE_PIN B11 IOSTANDARD LVCMOS33} [get_ports {rgb1[2]}];
 set_property -dict {PACKAGE_PIN J2  IOSTANDARD LVCMOS33} [ get_ports "btn[0]" ]
 set_property -dict {PACKAGE_PIN J1  IOSTANDARD LVCMOS33} [ get_ports "btn[1]" ]
 set_property -dict {PACKAGE_PIN G2  IOSTANDARD LVCMOS33} [ get_ports "btn[2]" ]
-set_property -dict {PACKAGE_PIN H2  IOSTANDARD LVCMOS33} [ get_ports "btn[3]" ]
+# set_property -dict {PACKAGE_PIN H2  IOSTANDARD LVCMOS33} [ get_ports "btn[3]" ]
 
 ## USER SLIDE SWITCH
 set_property -dict {PACKAGE_PIN G1  IOSTANDARD LVCMOS33} [ get_ports "sw[0]" ]

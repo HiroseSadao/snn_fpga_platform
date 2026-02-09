@@ -17,7 +17,7 @@ INIT_VAL_FP = int(round(INIT_W_SCALE * FP_SCALE))
 
 # Match pipeline_small.sv defaults
 N_IN = 784
-N_NEURONS = 50
+N_NEURONS = 100
 UPDATE_NT = 8
 
 # Debug weight readback subset (to avoid huge export)

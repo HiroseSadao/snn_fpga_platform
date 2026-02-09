@@ -1,7 +1,7 @@
 `default_nettype none
 
 module prediction_stream #(
-        parameter int N_NEURONS = 50,
+        parameter int N_NEURONS = 100,
         parameter int N_LABELS  = 10,
         parameter int LABEL_BITS = 4
     )(

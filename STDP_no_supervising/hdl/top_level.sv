@@ -3,7 +3,7 @@
 module top_level(
         input  wire        clk_100mhz,
         input  wire [15:0] sw,  // unused
-        input  wire [3:0]  btn, // btn[3] used as reset
+        input  wire [2:0]  btn,
         output logic [15:0] led,
         output logic [2:0] rgb0,
         output logic [2:0] rgb1,
@@ -25,12 +25,23 @@ module top_level(
     // -----------------------------
     // Clocks and reset
     // -----------------------------
-    wire reset = btn[3];
+    // Power-on reset in 100 MHz domain (no external reset pin)
+    localparam int POR_CYCLES = 16'd1024;
+    logic [15:0] por_cnt_100;
+    logic por_reset_100;
+    always_ff @(posedge clk_100mhz) begin
+        if (por_cnt_100 != POR_CYCLES) begin
+            por_cnt_100 <= por_cnt_100 + 1'b1;
+            por_reset_100 <= 1'b1;
+        end else begin
+            por_reset_100 <= 1'b0;
+        end
+    end
 
     // 25 MHz clock from 100 MHz input (divide by 4)
     logic [1:0] clk_div;
     always_ff @(posedge clk_100mhz) begin
-        if (reset) begin
+        if (por_reset_100) begin
             clk_div <= 2'b0;
         end else begin
             clk_div <= clk_div + 2'b1;
@@ -38,8 +49,21 @@ module top_level(
     end
     wire clk_25mhz = clk_div[1];
 
+    // Synchronize reset into 25 MHz domain
+    logic [1:0] por_sync_25;
+    always_ff @(posedge clk_25mhz) begin
+        por_sync_25 <= {por_sync_25[0], por_reset_100};
+    end
+    wire reset_por = por_sync_25[1];
+
+    // Soft reset from btn[0] (synchronous, stretched)
+    logic [7:0] soft_reset_cnt;
+    logic soft_reset;
+
+    wire reset = reset_por | soft_reset;
+
     localparam int N_IN = 784;
-    localparam int N_NEURONS = 50;
+    localparam int N_NEURONS = 100;
     localparam int TSTEP_W = 16;
     localparam int BLANK_STEPS = 150;
     localparam int N_LABELS = 10;
@@ -105,12 +129,30 @@ module top_level(
 
     logic        streaming;
 
-    // Buttons (sync + edge)
+    // Buttons (sync + edge) in clk_25mhz domain
     logic [2:0] btn_sync;
     logic [2:0] btn_prev;
     wire btn0_rise = btn_sync[0] & ~btn_prev[0];
     wire btn1_rise = btn_sync[1] & ~btn_prev[1];
     wire btn2_rise = btn_sync[2] & ~btn_prev[2];
+
+    always_ff @(posedge clk_25mhz) begin
+        if (reset_por) begin
+            btn_sync <= 3'b0;
+            btn_prev <= 3'b0;
+            soft_reset_cnt <= 8'd0;
+            soft_reset <= 1'b0;
+        end else begin
+            btn_sync <= {btn[2], btn[1], btn[0]};
+            btn_prev <= btn_sync;
+            if (btn0_rise) begin
+                soft_reset_cnt <= 8'd64;
+            end else if (soft_reset_cnt != 0) begin
+                soft_reset_cnt <= soft_reset_cnt - 1'b1;
+            end
+            soft_reset <= (soft_reset_cnt != 0);
+        end
+    end
 
     typedef enum logic [2:0] {
         RUN_IDLE,
@@ -357,8 +399,6 @@ module top_level(
             labels_wr_en    <= 1'b0;
             labels_wr_addr  <= '0;
             labels_wr_data  <= '0;
-            btn_sync <= 3'b0;
-            btn_prev <= 3'b0;
             run_state <= RUN_IDLE;
             stats_sel <= 2'b0;
             train_start_pulse <= 1'b0;
@@ -368,8 +408,6 @@ module top_level(
             fifo_wr_en  <= 1'b0;
             labels_wr_en <= 1'b0;
 
-            btn_sync <= {btn[2], btn[1], btn[0]};
-            btn_prev <= btn_sync;
             train_start_pulse <= 1'b0;
             eval_start_pulse <= 1'b0;
 
