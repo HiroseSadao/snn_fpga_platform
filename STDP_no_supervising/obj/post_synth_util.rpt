@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Mon Feb  9 02:25:34 2026
-| Host         : eecs-digital-06 running 64-bit Ubuntu 24.04.3 LTS
+| Date         : Mon Feb  9 09:09:14 2026
+| Host         : eecs-digital-10 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_utilization -file obj/post_synth_util.rpt -hierarchical -hierarchical_depth 4
 | Design       : top_level
 | Device       : xc7s50csga324-1
@@ -22,27 +22,30 @@ Table of Contents
 +------------------------------+-----------------------------------+------------+------------+---------+------+-------+--------+--------+------------+
 |           Instance           |               Module              | Total LUTs | Logic LUTs | LUTRAMs | SRLs |  FFs  | RAMB36 | RAMB18 | DSP Blocks |
 +------------------------------+-----------------------------------+------------+------------+---------+------+-------+--------+--------+------------+
-| top_level                    |                             (top) |      28290 |      27822 |     468 |    0 | 44387 |    103 |      3 |         27 |
-|   (top_level)                |                             (top) |       3305 |       2857 |     448 |    0 |  4084 |      0 |      0 |          6 |
+| top_level                    |                             (top) |      11969 |      11501 |     468 |    0 | 16040 |    104 |      4 |         27 |
+|   (top_level)                |                             (top) |       2686 |       2238 |     448 |    0 |  4074 |      0 |      0 |          6 |
 |   u_assign_labels_stream     |              assign_labels_stream |       1085 |       1085 |       0 |    0 |  1027 |      1 |      0 |          0 |
 |     (u_assign_labels_stream) |              assign_labels_stream |        741 |        741 |       0 |    0 |   892 |      0 |      0 |          0 |
 |     u_divider                |                       divider2b_1 |        151 |        151 |       0 |    0 |   135 |      0 |      0 |          0 |
-|     u_sum_spikes             | xpm_memory_sdpram__parameterized3 |        193 |        193 |       0 |    0 |     0 |      1 |      0 |          0 |
-|       (u_sum_spikes)         | xpm_memory_sdpram__parameterized3 |        192 |        192 |       0 |    0 |     0 |      0 |      0 |          0 |
-|   u_disp_divider             |                         divider2b |        267 |        267 |       0 |    0 |   108 |      0 |      0 |          0 |
-|   u_pipeline_small           |                    pipeline_small |      22739 |      22719 |      20 |    0 | 38452 |    100 |      3 |         21 |
-|     (u_pipeline_small)       |                    pipeline_small |      20896 |      20876 |      20 |    0 | 38450 |      0 |      0 |         19 |
-|     u_state_mem              |                 xpm_memory_sdpram |       1365 |       1365 |       0 |    0 |     0 |      4 |      1 |          0 |
-|       (u_state_mem)          |                 xpm_memory_sdpram |       1364 |       1364 |       0 |    0 |     0 |      0 |      0 |          0 |
-|     u_wmem                   |                    w_in_mem_4bank |        462 |        462 |       0 |    0 |     2 |     96 |      0 |          2 |
-|       (u_wmem)               |                    w_in_mem_4bank |        258 |        258 |       0 |    0 |     0 |      0 |      0 |          2 |
-|       u_wmem_xpm             | xpm_memory_sdpram__parameterized0 |        204 |        204 |       0 |    0 |     2 |     96 |      0 |          0 |
-|         (u_wmem_xpm)         | xpm_memory_sdpram__parameterized0 |        110 |        110 |       0 |    0 |     0 |      0 |      0 |          0 |
-|         xpm_memory_base_inst |   xpm_memory_base__parameterized0 |         94 |         94 |       0 |    0 |     2 |     96 |      0 |          0 |
-|   u_prediction_stream        |                 prediction_stream |        524 |        524 |       0 |    0 |   568 |      0 |      0 |          0 |
-|     (u_prediction_stream)    |                 prediction_stream |        376 |        376 |       0 |    0 |   449 |      0 |      0 |          0 |
+|     u_sum_spikes             | xpm_memory_sdpram__parameterized5 |        193 |        193 |       0 |    0 |     0 |      1 |      0 |          0 |
+|       (u_sum_spikes)         | xpm_memory_sdpram__parameterized5 |        192 |        192 |       0 |    0 |     0 |      0 |      0 |          0 |
+|   u_disp_divider             |                         divider2b |        266 |        266 |       0 |    0 |   108 |      0 |      0 |          0 |
+|   u_pipeline_small           |                    pipeline_small |       7031 |       7011 |      20 |    0 | 10115 |    101 |      4 |         21 |
+|     (u_pipeline_small)       |                    pipeline_small |       5041 |       5021 |      20 |    0 | 10113 |      0 |      0 |         19 |
+|     u_g_in_accum             | xpm_memory_sdpram__parameterized2 |         52 |         52 |       0 |    0 |     0 |      0 |      1 |          0 |
+|       (u_g_in_accum)         | xpm_memory_sdpram__parameterized2 |         51 |         51 |       0 |    0 |     0 |      0 |      0 |          0 |
+|     u_state_mem              |                 xpm_memory_sdpram |       1347 |       1347 |       0 |    0 |     0 |      4 |      1 |          0 |
+|       (u_state_mem)          |                 xpm_memory_sdpram |       1346 |       1346 |       0 |    0 |     0 |      0 |      0 |          0 |
+|     u_wmem                   |                    w_in_mem_4bank |        348 |        348 |       0 |    0 |     2 |     96 |      0 |          2 |
+|       (u_wmem)               |                    w_in_mem_4bank |        245 |        245 |       0 |    0 |     0 |      0 |      0 |          2 |
+|       u_wmem_xpm             | xpm_memory_sdpram__parameterized0 |        103 |        103 |       0 |    0 |     2 |     96 |      0 |          0 |
+|         xpm_memory_base_inst |   xpm_memory_base__parameterized0 |         86 |         86 |       0 |    0 |     2 |     96 |      0 |          0 |
+|     u_x_in                   | xpm_memory_sdpram__parameterized1 |        229 |        229 |       0 |    0 |     0 |      1 |      0 |          0 |
+|       (u_x_in)               | xpm_memory_sdpram__parameterized1 |        228 |        228 |       0 |    0 |     0 |      0 |      0 |          0 |
+|   u_prediction_stream        |                 prediction_stream |        523 |        523 |       0 |    0 |   568 |      0 |      0 |          0 |
+|     (u_prediction_stream)    |                 prediction_stream |        375 |        375 |       0 |    0 |   449 |      0 |      0 |          0 |
 |     u_divider                |                       divider2b_0 |        148 |        148 |       0 |    0 |   119 |      0 |      0 |          0 |
-|   u_sd                       |                     sd_controller |        362 |        362 |       0 |    0 |   148 |      0 |      0 |          0 |
+|   u_sd                       |                     sd_controller |        370 |        370 |       0 |    0 |   148 |      0 |      0 |          0 |
 +------------------------------+-----------------------------------+------------+------------+---------+------+-------+--------+--------+------------+
 
 

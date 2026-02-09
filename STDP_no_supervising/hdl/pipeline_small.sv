@@ -103,9 +103,27 @@ module pipeline_small #(
     logic [N_IN-1:0] s_in_reg;
     logic s_stdp_reg;
 
-    (* ram_style = "block" *) logic signed [31:0] x_in   [0:N_IN-1];
-    // g_in_accum is maintained per neuron during scan; keep separate RAM
-    (* ram_style = "block" *) logic signed [31:0] g_in_accum [0:N_NEURONS-1];
+    // x_in and g_in_accum are explicit 1R1W RAMs (XPM in synthesis)
+    localparam int X_IN_ADDR_W = (N_IN <= 1) ? 1 : $clog2(N_IN);
+    localparam int GIN_ADDR_W  = (N_NEURONS <= 1) ? 1 : $clog2(N_NEURONS);
+    logic x_in_rd_en;
+    logic [X_IN_ADDR_W-1:0] x_in_rd_addr;
+    logic signed [31:0] x_in_rd_data;
+    logic x_in_wr_en;
+    logic [X_IN_ADDR_W-1:0] x_in_wr_addr;
+    logic signed [31:0] x_in_wr_data;
+
+    logic g_in_rd_en;
+    logic [GIN_ADDR_W-1:0] g_in_rd_addr;
+    logic signed [31:0] g_in_rd_data;
+    logic g_in_wr_en;
+    logic [GIN_ADDR_W-1:0] g_in_wr_addr;
+    logic signed [31:0] g_in_wr_data;
+
+    logic [X_IN_ADDR_W-1:0] x_in_clr_idx;
+    logic [GIN_ADDR_W-1:0] g_in_clr_idx;
+    logic signed [31:0] g_in_add_val_reg;
+    logic [GIN_ADDR_W-1:0] g_in_add_neuron_reg;
 
     // Packed per-neuron state RAM
     localparam int STATE_W = (32*9) + 32; // 9x32 + 2x16
@@ -153,6 +171,7 @@ module pipeline_small #(
     logic [NEURON_W-1:0] delay_clr_neuron;
 
     logic signed [31:0] g_inh_next_val_reg;
+    logic g_in_clr_go_scan;
 
     function automatic [DELAY_IN_W-1:0] delay_in_rd_idx;
         begin
@@ -233,7 +252,9 @@ module pipeline_small #(
         S_INIT_STATE_MEM,
         S_IDLE,
         S_SCAN,
+        S_SCAN_WAIT,
         S_GIN_WAIT,
+        S_GIN_ACCUM_WAIT,
         S_NEURON_PREP,
         S_NEURON_RD_WAIT,
         S_NEURON_CALC1,
@@ -249,7 +270,9 @@ module pipeline_small #(
         S_STDP_WAIT,
         S_STDP_CALC,
         S_CLR_DELAY_IN,
-        S_CLR_DELAY_E2I
+        S_CLR_DELAY_E2I,
+        S_CLR_XIN,
+        S_CLR_GINACCUM
     } state_e;
     state_e state;
 
@@ -436,6 +459,106 @@ module pipeline_small #(
     logic [15:0]        refr_inh_next_val;
     logic              s_exc_next_val;
 
+    // x_in RAM (XPM in synthesis, behavioral in sim)
+`ifdef SYNTHESIS
+    xpm_memory_sdpram #(
+        .ADDR_WIDTH_A(X_IN_ADDR_W),
+        .ADDR_WIDTH_B(X_IN_ADDR_W),
+        .AUTO_SLEEP_TIME(0),
+        .BYTE_WRITE_WIDTH_A(32),
+        .CLOCKING_MODE("common_clock"),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE("none"),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("block"),
+        .MEMORY_SIZE(N_IN * 32),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_B(32),
+        .READ_LATENCY_B(1),
+        .READ_RESET_VALUE_B("0"),
+        .RST_MODE_A("SYNC"),
+        .RST_MODE_B("SYNC"),
+        .SIM_ASSERT_CHK(0),
+        .USE_MEM_INIT(0),
+        .WAKEUP_TIME("disable_sleep"),
+        .WRITE_DATA_WIDTH_A(32),
+        .WRITE_MODE_B("read_first")
+    ) u_x_in (
+        .clka(clk),
+        .ena(x_in_wr_en),
+        .wea(x_in_wr_en),
+        .addra(x_in_wr_addr),
+        .dina(x_in_wr_data),
+        .clkb(clk),
+        .enb(x_in_rd_en),
+        .addrb(x_in_rd_addr),
+        .doutb(x_in_rd_data),
+        .rstb(rst),
+        .regceb(1'b1),
+        .sleep(1'b0),
+        .injectsbiterra(1'b0),
+        .injectdbiterra(1'b0)
+    );
+
+    xpm_memory_sdpram #(
+        .ADDR_WIDTH_A(GIN_ADDR_W),
+        .ADDR_WIDTH_B(GIN_ADDR_W),
+        .AUTO_SLEEP_TIME(0),
+        .BYTE_WRITE_WIDTH_A(32),
+        .CLOCKING_MODE("common_clock"),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE("none"),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("block"),
+        .MEMORY_SIZE(N_NEURONS * 32),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_B(32),
+        .READ_LATENCY_B(1),
+        .READ_RESET_VALUE_B("0"),
+        .RST_MODE_A("SYNC"),
+        .RST_MODE_B("SYNC"),
+        .SIM_ASSERT_CHK(0),
+        .USE_MEM_INIT(0),
+        .WAKEUP_TIME("disable_sleep"),
+        .WRITE_DATA_WIDTH_A(32),
+        .WRITE_MODE_B("read_first")
+    ) u_g_in_accum (
+        .clka(clk),
+        .ena(g_in_wr_en),
+        .wea(g_in_wr_en),
+        .addra(g_in_wr_addr),
+        .dina(g_in_wr_data),
+        .clkb(clk),
+        .enb(g_in_rd_en),
+        .addrb(g_in_rd_addr),
+        .doutb(g_in_rd_data),
+        .rstb(rst),
+        .regceb(1'b1),
+        .sleep(1'b0),
+        .injectsbiterra(1'b0),
+        .injectdbiterra(1'b0)
+    );
+`else
+    logic signed [31:0] x_in_mem_sim [0:N_IN-1];
+    logic signed [31:0] g_in_accum_sim [0:N_NEURONS-1];
+    always_ff @(posedge clk) begin
+        if (x_in_wr_en) begin
+            x_in_mem_sim[x_in_wr_addr] <= x_in_wr_data;
+        end
+        if (x_in_rd_en) begin
+            x_in_rd_data <= x_in_mem_sim[x_in_rd_addr];
+        end
+        if (g_in_wr_en) begin
+            g_in_accum_sim[g_in_wr_addr] <= g_in_wr_data;
+        end
+        if (g_in_rd_en) begin
+            g_in_rd_data <= g_in_accum_sim[g_in_rd_addr];
+        end
+    end
+`endif
+
     // Delay line RAM (XPM in synthesis, behavioral in sim)
 `ifdef SYNTHESIS
     xpm_memory_sdpram #(
@@ -567,6 +690,7 @@ module pipeline_small #(
             mul_b <= '0;
             div_result <= '0;
             g_inh_next_val_reg <= '0;
+            g_in_clr_go_scan <= 1'b0;
             state_wr_en <= 1'b0;
             state_rd_en <= 1'b0;
             state_wr_addr <= '0;
@@ -590,12 +714,21 @@ module pipeline_small #(
             refr_exc_next_val <= '0;
             refr_inh_next_val <= '0;
             s_exc_next_val <= 1'b0;
-
-            for (i = 0; i < N_IN; i = i + 1) begin
-                x_in[i] <= '0;
-            end
+            x_in_rd_en <= 1'b0;
+            x_in_rd_addr <= '0;
+            x_in_wr_en <= 1'b0;
+            x_in_wr_addr <= '0;
+            x_in_wr_data <= '0;
+            g_in_rd_en <= 1'b0;
+            g_in_rd_addr <= '0;
+            g_in_wr_en <= 1'b0;
+            g_in_wr_addr <= '0;
+            g_in_wr_data <= '0;
+            x_in_clr_idx <= '0;
+            g_in_clr_idx <= '0;
+            g_in_add_val_reg <= '0;
+            g_in_add_neuron_reg <= '0;
             for (i = 0; i < N_NEURONS; i = i + 1) begin
-                g_in_accum[i] <= '0;
                 s_exc_next[i] <= 1'b0;
             end
             delay_in_wr_idx <= '0;
@@ -614,6 +747,10 @@ module pipeline_small #(
         end else begin
             // defaults
             mem_r_en <= 1'b0;
+            x_in_rd_en <= 1'b0;
+            x_in_wr_en <= 1'b0;
+            g_in_rd_en <= 1'b0;
+            g_in_wr_en <= 1'b0;
             delay_in_wr_en <= 1'b0;
             delay_e2i_wr_en <= 1'b0;
             state_wr_en <= 1'b0;
@@ -683,12 +820,46 @@ module pipeline_small #(
                         delay_clr_neuron <= '0;
                         if (delay_e2i_clr_step == DELAY_E2I_STEPS-1) begin
                             delay_e2i_clr_step <= '0;
-                            state <= S_IDLE;
+                            state <= S_CLR_XIN;
                         end else begin
                             delay_e2i_clr_step <= delay_e2i_clr_step + 1'b1;
                         end
                     end else begin
                         delay_clr_neuron <= delay_clr_neuron + 1'b1;
+                    end
+                end
+
+                S_CLR_XIN: begin
+                    s_tready <= 1'b0;
+                    x_in_wr_en <= 1'b1;
+                    x_in_wr_addr <= x_in_clr_idx;
+                    x_in_wr_data <= '0;
+                    if (x_in_clr_idx == N_IN-1) begin
+                        x_in_clr_idx <= '0;
+                        g_in_clr_go_scan <= 1'b0;
+                        state <= S_CLR_GINACCUM;
+                    end else begin
+                        x_in_clr_idx <= x_in_clr_idx + 1'b1;
+                    end
+                end
+
+                S_CLR_GINACCUM: begin
+                    s_tready <= 1'b0;
+                    g_in_wr_en <= 1'b1;
+                    g_in_wr_addr <= g_in_clr_idx;
+                    g_in_wr_data <= '0;
+                    if (g_in_clr_idx == N_NEURONS-1) begin
+                        g_in_clr_idx <= '0;
+                        if (g_in_clr_go_scan) begin
+                            scan_in_idx <= '0;
+                            scan_group_idx <= '0;
+                            scan_spike_active <= 1'b0;
+                            state <= S_SCAN;
+                        end else begin
+                            state <= S_IDLE;
+                        end
+                    end else begin
+                        g_in_clr_idx <= g_in_clr_idx + 1'b1;
                     end
                 end
 
@@ -698,75 +869,87 @@ module pipeline_small #(
                         tstep_id_reg <= s_tdata[TSTEP_W+N_IN-1 -: TSTEP_W];
                         s_in_reg <= s_tdata[N_IN-1:0];
                         s_stdp_reg <= s_stdp_en;
-                        // clear accumulators
-                        for (i = 0; i < N_NEURONS; i = i + 1) begin
-                            g_in_accum[i] <= '0;
-                        end
-
-                        scan_in_idx <= '0;
-                        scan_group_idx <= '0;
-                        scan_spike_active <= 1'b0;
+                        g_in_clr_go_scan <= 1'b1;
+                        g_in_clr_idx <= '0;
                         s_tready <= 1'b0;
-                        state <= S_SCAN;
+                        state <= S_CLR_GINACCUM;
                     end
                 end
 
-                // Scan inputs; update x_in; if spike, read weights in groups of 4 neurons
+                // Scan inputs; update x_in; if spike, read weights
                 S_SCAN: begin
                     if (scan_in_idx < N_IN) begin
-                        logic signed [31:0] scan_val;
-                        logic signed [31:0] div_signed;
-                        scan_val = x_in[scan_in_idx];
-                        div_signed = div_const_q32(scan_val, INV_TD_X_Q32);
-                        x_in[scan_in_idx] <= scan_val - div_signed
-                                           + (s_in_reg[scan_in_idx] ? TRACE_SPIKE_FP : 0);
-
-                        if (s_in_reg[scan_in_idx]) begin
-                            // start reading weights for this input
-                            scan_group_idx <= '0;
-                            scan_spike_active <= 1'b1;
-                            mem_r_en <= 1'b1;
-                            for (i = 0; i < LANES; i = i + 1) begin
-                                mem_r_neuron[i] <= scan_group_idx * LANES + i;
-                                mem_r_in[i] <= scan_in_idx;
-                            end
-                            state <= S_GIN_WAIT;
-                        end else begin
-                            scan_in_idx <= scan_in_idx + 1'b1;
-                            state <= S_SCAN;
-                        end
+                        x_in_rd_en <= 1'b1;
+                        x_in_rd_addr <= scan_in_idx;
+                        state <= S_SCAN_WAIT;
                     end else begin
                         state <= S_NEURON_PREP;
+                    end
+                end
+
+                S_SCAN_WAIT: begin
+                    logic signed [31:0] scan_val;
+                    logic signed [31:0] div_signed;
+                    scan_val = x_in_rd_data;
+                    div_signed = div_const_q32(scan_val, INV_TD_X_Q32);
+                    x_in_wr_en <= 1'b1;
+                    x_in_wr_addr <= scan_in_idx;
+                    x_in_wr_data <= scan_val - div_signed
+                                   + (s_in_reg[scan_in_idx] ? TRACE_SPIKE_FP : 0);
+
+                    if (s_in_reg[scan_in_idx]) begin
+                        scan_group_idx <= '0;
+                        scan_spike_active <= 1'b1;
+                        mem_r_en <= 1'b1;
+                        for (i = 0; i < LANES; i = i + 1) begin
+                            mem_r_neuron[i] <= scan_group_idx * LANES + i;
+                            mem_r_in[i] <= scan_in_idx;
+                        end
+                        state <= S_GIN_WAIT;
+                    end else begin
+                        scan_in_idx <= scan_in_idx + 1'b1;
+                        state <= S_SCAN;
                     end
                 end
 
                 // Wait for W_in read, accumulate g_in for this spike
                 S_GIN_WAIT: begin
                     if (scan_spike_active) begin
-                        for (i = 0; i < LANES; i = i + 1) begin
-                            int neuron_idx;
-                            neuron_idx = scan_group_idx * LANES + i;
-                            if (neuron_idx < N_NEURONS) begin
-                                g_in_accum[neuron_idx] <= g_in_accum[neuron_idx]
-                                    + fp_mul(mem_r_data[i], INPUT_SPIKE_FP);
-                            end
-                        end
-
-                        if (scan_group_idx == NEURON_GROUPS-1) begin
+                        int neuron_idx;
+                        neuron_idx = scan_group_idx * LANES;
+                        if (neuron_idx < N_NEURONS) begin
+                            g_in_add_val_reg <= fp_mul(mem_r_data[0], INPUT_SPIKE_FP);
+                            g_in_add_neuron_reg <= neuron_idx[GIN_ADDR_W-1:0];
+                            g_in_rd_en <= 1'b1;
+                            g_in_rd_addr <= neuron_idx[GIN_ADDR_W-1:0];
+                            state <= S_GIN_ACCUM_WAIT;
+                        end else begin
                             scan_spike_active <= 1'b0;
                             scan_in_idx <= scan_in_idx + 1'b1;
                             state <= S_SCAN;
-                        end else begin
-                            scan_group_idx <= scan_group_idx + 1'b1;
-                            mem_r_en <= 1'b1;
-                            for (i = 0; i < LANES; i = i + 1) begin
-                                mem_r_neuron[i] <= (scan_group_idx + 1'b1) * LANES + i;
-                                mem_r_in[i] <= scan_in_idx;
-                            end
-                            state <= S_GIN_WAIT;
                         end
                     end else begin
                         state <= S_SCAN;
+                    end
+                end
+
+                S_GIN_ACCUM_WAIT: begin
+                    g_in_wr_en <= 1'b1;
+                    g_in_wr_addr <= g_in_add_neuron_reg;
+                    g_in_wr_data <= g_in_rd_data + g_in_add_val_reg;
+
+                    if (scan_group_idx == NEURON_GROUPS-1) begin
+                        scan_spike_active <= 1'b0;
+                        scan_in_idx <= scan_in_idx + 1'b1;
+                        state <= S_SCAN;
+                    end else begin
+                        scan_group_idx <= scan_group_idx + 1'b1;
+                        mem_r_en <= 1'b1;
+                        for (i = 0; i < LANES; i = i + 1) begin
+                            mem_r_neuron[i] <= (scan_group_idx + 1'b1) * LANES + i;
+                            mem_r_in[i] <= scan_in_idx;
+                        end
+                        state <= S_GIN_WAIT;
                     end
                 end
 
@@ -782,6 +965,8 @@ module pipeline_small #(
                     end
                     state_rd_en <= 1'b1;
                     state_rd_addr <= '0;
+                    g_in_rd_en <= 1'b1;
+                    g_in_rd_addr <= '0;
                     state <= S_NEURON_RD_WAIT;
                 end
 
@@ -880,7 +1065,7 @@ module pipeline_small #(
 
                     case (calc_phase)
                         P_GIN_DIV: begin
-                            g_in_state_next_val <= st_g_in_state - div_result + g_in_accum[n];
+                            g_in_state_next_val <= st_g_in_state - div_result + g_in_rd_data;
                             delay_in_rd_addr <= delay_in_addr(delay_in_rd_idx(), n[NEURON_W-1:0]);
                             calc_phase <= P_I_SYN_EXC_MUL;
                         end
@@ -999,6 +1184,8 @@ module pipeline_small #(
                                 calc_phase <= P_GIN_DIV;
                                 state_rd_en <= 1'b1;
                                 state_rd_addr <= neuron_idx[NEURON_W-1:0] + 1'b1;
+                                g_in_rd_en <= 1'b1;
+                                g_in_rd_addr <= neuron_idx[NEURON_W-1:0] + 1'b1;
                                 state <= S_NEURON_RD_WAIT;
                             end
                         end
@@ -1139,6 +1326,8 @@ module pipeline_small #(
             end
             state_rd_en <= 1'b1;
             state_rd_addr <= stdp_neuron_sel;
+            x_in_rd_en <= 1'b1;
+            x_in_rd_addr <= stdp_j;
             state <= S_STDP_WAIT;
         end
 
@@ -1161,7 +1350,7 @@ module pipeline_small #(
                     w_old = mem_r_data[i];
 
                     if (stdp_mode_post) begin
-                        pre_term = fp_mul(A_P_FP, x_in[stdp_j]);
+                        pre_term = fp_mul(A_P_FP, x_in_rd_data);
                         post_term = 0;
                     end else begin
                         pre_term = 0;
