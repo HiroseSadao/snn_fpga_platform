@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 -------------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version     : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date             : Tue Feb 10 02:14:07 2026
-| Host             : eecs-digital-05 running 64-bit Ubuntu 24.04.3 LTS
+| Date             : Tue Feb 10 02:43:37 2026
+| Host             : eecs-digital-17 running 64-bit Ubuntu 24.04.3 LTS
 | Command          : report_power -file obj/post_route_power.rpt
 | Design           : top_level
 | Device           : xc7s50csga324-1
@@ -53,15 +53,15 @@ Table of Contents
 | On-Chip                  | Power (W) | Used     | Available | Utilization (%) |
 +--------------------------+-----------+----------+-----------+-----------------+
 | Clocks                   |    <0.001 |        3 |       --- |             --- |
-| Slice Logic              |     0.002 |    40879 |       --- |             --- |
-|   LUT as Logic           |     0.002 |    14114 |     32600 |           43.29 |
-|   CARRY4                 |    <0.001 |     1051 |      8150 |           12.90 |
-|   Register               |    <0.001 |    19393 |     65200 |           29.74 |
-|   F7/F8 Muxes            |    <0.001 |     3484 |     32600 |           10.69 |
+| Slice Logic              |     0.002 |    47650 |       --- |             --- |
+|   LUT as Logic           |     0.002 |    18222 |     32600 |           55.90 |
+|   CARRY4                 |    <0.001 |     1658 |      8150 |           20.34 |
+|   Register               |    <0.001 |    20278 |     65200 |           31.10 |
 |   Others                 |     0.000 |       49 |       --- |             --- |
 |   LUT as Distributed RAM |     0.000 |      468 |      9600 |            4.88 |
+|   F7/F8 Muxes            |     0.000 |     3503 |     32600 |           10.75 |
 |   BUFG                   |     0.000 |        1 |        32 |            3.13 |
-| Signals                  |     0.003 |    30702 |       --- |             --- |
+| Signals                  |     0.003 |    36506 |       --- |             --- |
 | Block RAM                |     0.000 |     63.5 |        75 |           84.67 |
 | DSPs                     |     0.002 |       27 |       120 |           22.50 |
 | I/O                      |     0.011 |       62 |       210 |           29.52 |
@@ -145,7 +145,7 @@ Table of Contents
 +--------------------+-----------+
 | top_level          |     0.019 |
 |   u_pipeline_small |     0.004 |
-|   u_sd             |     0.002 |
+|   u_sd             |     0.001 |
 +--------------------+-----------+
 
 

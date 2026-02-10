@@ -164,7 +164,7 @@ module top_level(
     } run_state_e;
     run_state_e run_state;
 
-    logic [1:0] stats_sel;
+    logic [4:0] stats_sel;
     logic train_start_pulse;
     logic eval_start_pulse;
 
@@ -252,6 +252,16 @@ module top_level(
     logic [31:0] tn_count;
     logic [31:0] fp_count;
     logic [31:0] fn_count;
+    logic [31:0] pred_count_by_label [0:N_LABELS-1];
+    logic [31:0] true_count_by_label [0:N_LABELS-1];
+    logic [31:0] tp_count_by_label [0:N_LABELS-1];
+    logic [31:0] total_correct;
+    logic [3:0]  stats_label;
+    logic        stats_is_recall;
+    logic [31:0] stats_tp;
+    logic [31:0] stats_pred;
+    logic [31:0] stats_true;
+    logic [31:0] stats_value;
     logic [31:0] display_value_hi;
     logic [31:0] display_value_lo;
     logic [3:0] disp_digits_hi [0:3];
@@ -413,7 +423,7 @@ module top_level(
             labels_wr_addr  <= '0;
             labels_wr_data  <= '0;
             run_state <= RUN_IDLE;
-            stats_sel <= 2'b0;
+            stats_sel <= 5'd0;
             train_start_pulse <= 1'b0;
             eval_start_pulse <= 1'b0;
         end else begin
@@ -428,17 +438,20 @@ module top_level(
                 if (btn3_rise) begin
                     run_state <= RUN_TRAIN;
                     train_start_pulse <= 1'b1;
-                    stats_sel <= 2'b0;
+                    stats_sel <= 5'd0;
                 end
             end else if (run_state == RUN_TRAIN_DONE) begin
                 if (btn1_rise) begin
                     run_state <= RUN_EVAL;
                     eval_start_pulse <= 1'b1;
-                    stats_sel <= 2'b0;
+                    stats_sel <= 5'd0;
                 end
             end else if (run_state == RUN_EVAL_DONE) begin
                 if (btn2_rise) begin
-                    stats_sel <= stats_sel + 1'b1;
+                    if (stats_sel == 5'd20)
+                        stats_sel <= 5'd0;
+                    else
+                        stats_sel <= stats_sel + 1'b1;
                 end
             end
 
@@ -733,6 +746,11 @@ module top_level(
             tn_count <= 32'd0;
             fp_count <= 32'd0;
             fn_count <= 32'd0;
+            for (nn = 0; nn < N_LABELS; nn = nn + 1) begin
+                pred_count_by_label[nn] <= 32'd0;
+                true_count_by_label[nn] <= 32'd0;
+                tp_count_by_label[nn] <= 32'd0;
+            end
         end else begin
             assign_start <= 1'b0;
             pred_start <= 1'b0;
@@ -761,6 +779,11 @@ module top_level(
                 tn_count <= 32'd0;
                 fp_count <= 32'd0;
                 fn_count <= 32'd0;
+                for (nn = 0; nn < N_LABELS; nn = nn + 1) begin
+                    pred_count_by_label[nn] <= 32'd0;
+                    true_count_by_label[nn] <= 32'd0;
+                    tp_count_by_label[nn] <= 32'd0;
+                end
             end else if (eval_start_pulse) begin
                 for (nn = 0; nn < N_NEURONS; nn = nn + 1) begin
                     exc_counts[nn] <= '0;
@@ -774,6 +797,11 @@ module top_level(
                 tn_count <= 32'd0;
                 fp_count <= 32'd0;
                 fn_count <= 32'd0;
+                for (nn = 0; nn < N_LABELS; nn = nn + 1) begin
+                    pred_count_by_label[nn] <= 32'd0;
+                    true_count_by_label[nn] <= 32'd0;
+                    tp_count_by_label[nn] <= 32'd0;
+                end
                 pred_start <= 1'b1;
                 pred_running <= 1'b1;
             end
@@ -868,6 +896,12 @@ module top_level(
                 end else begin
                     fn_count <= fn_count + 1'b1;
                 end
+
+                pred_count_by_label[pred_label] <= pred_count_by_label[pred_label] + 1'b1;
+                true_count_by_label[true_label] <= true_count_by_label[true_label] + 1'b1;
+                if (pred_label == true_label) begin
+                    tp_count_by_label[pred_label] <= tp_count_by_label[pred_label] + 1'b1;
+                end
             end
         end
     end
@@ -944,7 +978,25 @@ module top_level(
         rgb1 = 3'b000;
     end
 
+    integer ii;
     always_comb begin
+        stats_label = (stats_sel == 5'd20) ? 4'd0 : stats_sel[4:1];
+        stats_is_recall = stats_sel[0];
+        stats_tp = tp_count_by_label[stats_label];
+        stats_pred = pred_count_by_label[stats_label];
+        stats_true = true_count_by_label[stats_label];
+        total_correct = 32'd0;
+        for (ii = 0; ii < N_LABELS; ii = ii + 1) begin
+            total_correct = total_correct + tp_count_by_label[ii];
+        end
+        if (stats_sel == 5'd20) begin
+            stats_value = total_correct;
+        end else if (stats_is_recall) begin
+            stats_value = (stats_true != 0) ? ((stats_tp * 32'd100) / stats_true) : 32'd0;
+        end else begin
+            stats_value = (stats_pred != 0) ? ((stats_tp * 32'd100) / stats_pred) : 32'd0;
+        end
+
         display_value_hi = 32'd0;
         display_value_lo = 32'd0;
 
@@ -956,12 +1008,7 @@ module top_level(
             if (sample_idx_out >= TRAIN_SAMPLES)
                 display_value_hi = (sample_idx_out - TRAIN_SAMPLES) + 1;
         end else if (run_state == RUN_EVAL_DONE) begin
-            case (stats_sel)
-                2'd0: display_value_hi = tp_count;
-                2'd1: display_value_hi = tn_count;
-                2'd2: display_value_hi = fp_count;
-                default: display_value_hi = fn_count;
-            endcase
+            display_value_hi = stats_value;
         end
     end
 
