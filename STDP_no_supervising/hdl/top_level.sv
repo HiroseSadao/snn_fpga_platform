@@ -69,7 +69,7 @@ module top_level(
     localparam int N_LABELS = 10;
     localparam int LABEL_BITS = 4;
     localparam int N_SAMPLES = 10000;
-    localparam int TRAIN_SAMPLES = 9000;
+    localparam int TRAIN_SAMPLES = 1000;
     localparam int EVAL_SAMPLES = 1000;
     localparam int POS_LABEL = 0;
 
@@ -252,21 +252,33 @@ module top_level(
     logic [31:0] tn_count;
     logic [31:0] fp_count;
     logic [31:0] fn_count;
-    logic [31:0] display_value;
-    logic [3:0] disp_digits [0:3];
+    logic [31:0] display_value_hi;
+    logic [31:0] display_value_lo;
+    logic [3:0] disp_digits_hi [0:3];
+    logic [3:0] disp_digits_lo [0:3];
     logic [1:0] disp_sel;
     logic [15:0] disp_div;
     typedef enum logic [2:0] {DISP_IDLE, DISP_DIV0, DISP_DIV1, DISP_DIV2, DISP_DIV3} disp_state_e;
-    disp_state_e disp_state;
-    logic [31:0] disp_value_reg;
-    logic [31:0] disp_dividend;
-    logic [31:0] disp_divisor;
-    logic        disp_div_valid_in;
-    logic [31:0] disp_quotient;
-    logic [31:0] disp_remainder;
-    logic        disp_div_valid_out;
-    logic        disp_div_error;
-    logic        disp_div_busy;
+    disp_state_e disp_state_hi;
+    disp_state_e disp_state_lo;
+    logic [31:0] disp_value_reg_hi;
+    logic [31:0] disp_value_reg_lo;
+    logic [31:0] disp_dividend_hi;
+    logic [31:0] disp_divisor_hi;
+    logic        disp_div_valid_in_hi;
+    logic [31:0] disp_quotient_hi;
+    logic [31:0] disp_remainder_hi;
+    logic        disp_div_valid_out_hi;
+    logic        disp_div_error_hi;
+    logic        disp_div_busy_hi;
+    logic [31:0] disp_dividend_lo;
+    logic [31:0] disp_divisor_lo;
+    logic        disp_div_valid_in_lo;
+    logic [31:0] disp_quotient_lo;
+    logic [31:0] disp_remainder_lo;
+    logic        disp_div_valid_out_lo;
+    logic        disp_div_error_lo;
+    logic        disp_div_busy_lo;
     logic train_done;
     logic eval_done;
     logic hold_input;
@@ -430,10 +442,10 @@ module top_level(
                 end
             end
 
-            if (train_done) begin
+            if (train_done && (run_state == RUN_TRAIN)) begin
                 run_state <= RUN_TRAIN_DONE;
             end
-            if (eval_done) begin
+            if (eval_done && (run_state == RUN_EVAL)) begin
                 run_state <= RUN_EVAL_DONE;
             end
 
@@ -910,10 +922,10 @@ module top_level(
                 led[9]    = byte_available;         // SD byte available
                 led[10]   = fifo_wr_en;             // spike FIFO write
                 led[11]   = fifo_rd_en;             // spike FIFO read
-                led[12]   = bfifo_wr_en;            // blank FIFO write
-                led[13]   = bfifo_rd_en;            // blank FIFO read
-                led[14]   = ps_s_tvalid;            // input valid
-                led[15]   = ps_m_tvalid;            // output valid
+                led[12]   = btn1_rise;              // eval button edge
+                led[13]   = eval_start_pulse;       // eval start pulse
+                led[14]   = pred_ready;             // prediction ready
+                led[15]   = pred_running;           // prediction running
             end
             2'd2: begin
                 led[7:0]  = fifo_count[7:0];        // spike FIFO fill (LSB)
@@ -933,97 +945,170 @@ module top_level(
     end
 
     always_comb begin
+        display_value_hi = 32'd0;
+        display_value_lo = 32'd0;
+
         if (run_state == RUN_TRAIN) begin
-            display_value = sample_idx_out + 1;
+            display_value_lo = sample_idx_out + 1;
         end else if (run_state == RUN_TRAIN_DONE) begin
-            display_value = TRAIN_SAMPLES;
+            display_value_lo = TRAIN_SAMPLES;
         end else if (run_state == RUN_EVAL) begin
             if (sample_idx_out >= TRAIN_SAMPLES)
-                display_value = (sample_idx_out - TRAIN_SAMPLES) + 1;
-            else
-                display_value = 0;
+                display_value_hi = (sample_idx_out - TRAIN_SAMPLES) + 1;
         end else if (run_state == RUN_EVAL_DONE) begin
             case (stats_sel)
-                2'd0: display_value = tp_count;
-                2'd1: display_value = tn_count;
-                2'd2: display_value = fp_count;
-                default: display_value = fn_count;
+                2'd0: display_value_hi = tp_count;
+                2'd1: display_value_hi = tn_count;
+                2'd2: display_value_hi = fp_count;
+                default: display_value_hi = fn_count;
             endcase
-        end else begin
-            display_value = 0;
         end
     end
 
-    divider2b #(.WIDTH(32)) u_disp_divider(
+    divider2b #(.WIDTH(32)) u_disp_divider_hi(
         .clk_in        (clk_25mhz),
         .rst_in        (reset),
-        .dividend_in   (disp_dividend),
-        .divisor_in    (disp_divisor),
-        .data_valid_in (disp_div_valid_in),
-        .quotient_out  (disp_quotient),
-        .remainder_out (disp_remainder),
-        .data_valid_out(disp_div_valid_out),
-        .error_out     (disp_div_error),
-        .busy_out      (disp_div_busy)
+        .dividend_in   (disp_dividend_hi),
+        .divisor_in    (disp_divisor_hi),
+        .data_valid_in (disp_div_valid_in_hi),
+        .quotient_out  (disp_quotient_hi),
+        .remainder_out (disp_remainder_hi),
+        .data_valid_out(disp_div_valid_out_hi),
+        .error_out     (disp_div_error_hi),
+        .busy_out      (disp_div_busy_hi)
+    );
+
+    divider2b #(.WIDTH(32)) u_disp_divider_lo(
+        .clk_in        (clk_25mhz),
+        .rst_in        (reset),
+        .dividend_in   (disp_dividend_lo),
+        .divisor_in    (disp_divisor_lo),
+        .data_valid_in (disp_div_valid_in_lo),
+        .quotient_out  (disp_quotient_lo),
+        .remainder_out (disp_remainder_lo),
+        .data_valid_out(disp_div_valid_out_lo),
+        .error_out     (disp_div_error_lo),
+        .busy_out      (disp_div_busy_lo)
     );
 
     always_ff @(posedge clk_25mhz) begin
         if (reset) begin
-            disp_value_reg <= '0;
-            disp_dividend <= '0;
-            disp_divisor <= '0;
-            disp_div_valid_in <= 1'b0;
-            disp_state <= DISP_IDLE;
-            disp_digits[0] <= '0;
-            disp_digits[1] <= '0;
-            disp_digits[2] <= '0;
-            disp_digits[3] <= '0;
+            disp_value_reg_hi <= '0;
+            disp_dividend_hi <= '0;
+            disp_divisor_hi <= '0;
+            disp_div_valid_in_hi <= 1'b0;
+            disp_state_hi <= DISP_IDLE;
+            disp_digits_hi[0] <= '0;
+            disp_digits_hi[1] <= '0;
+            disp_digits_hi[2] <= '0;
+            disp_digits_hi[3] <= '0;
         end else begin
-            disp_div_valid_in <= 1'b0;
-            case (disp_state)
+            disp_div_valid_in_hi <= 1'b0;
+            case (disp_state_hi)
                 DISP_IDLE: begin
-                    if (display_value != disp_value_reg) begin
-                        disp_value_reg <= display_value;
-                        disp_dividend <= display_value;
-                        disp_divisor <= 32'd10;
-                        disp_div_valid_in <= 1'b1;
-                        disp_state <= DISP_DIV0;
+                    if (display_value_hi != disp_value_reg_hi) begin
+                        disp_value_reg_hi <= display_value_hi;
+                        disp_dividend_hi <= display_value_hi;
+                        disp_divisor_hi <= 32'd10;
+                        disp_div_valid_in_hi <= 1'b1;
+                        disp_state_hi <= DISP_DIV0;
                     end
                 end
                 DISP_DIV0: begin
-                    if (disp_div_valid_out) begin
-                        disp_digits[0] <= disp_remainder[3:0];
-                        disp_dividend <= disp_quotient;
-                        disp_divisor <= 32'd10;
-                        disp_div_valid_in <= 1'b1;
-                        disp_state <= DISP_DIV1;
+                    if (disp_div_valid_out_hi) begin
+                        disp_digits_hi[0] <= disp_remainder_hi[3:0];
+                        disp_dividend_hi <= disp_quotient_hi;
+                        disp_divisor_hi <= 32'd10;
+                        disp_div_valid_in_hi <= 1'b1;
+                        disp_state_hi <= DISP_DIV1;
                     end
                 end
                 DISP_DIV1: begin
-                    if (disp_div_valid_out) begin
-                        disp_digits[1] <= disp_remainder[3:0];
-                        disp_dividend <= disp_quotient;
-                        disp_divisor <= 32'd10;
-                        disp_div_valid_in <= 1'b1;
-                        disp_state <= DISP_DIV2;
+                    if (disp_div_valid_out_hi) begin
+                        disp_digits_hi[1] <= disp_remainder_hi[3:0];
+                        disp_dividend_hi <= disp_quotient_hi;
+                        disp_divisor_hi <= 32'd10;
+                        disp_div_valid_in_hi <= 1'b1;
+                        disp_state_hi <= DISP_DIV2;
                     end
                 end
                 DISP_DIV2: begin
-                    if (disp_div_valid_out) begin
-                        disp_digits[2] <= disp_remainder[3:0];
-                        disp_dividend <= disp_quotient;
-                        disp_divisor <= 32'd10;
-                        disp_div_valid_in <= 1'b1;
-                        disp_state <= DISP_DIV3;
+                    if (disp_div_valid_out_hi) begin
+                        disp_digits_hi[2] <= disp_remainder_hi[3:0];
+                        disp_dividend_hi <= disp_quotient_hi;
+                        disp_divisor_hi <= 32'd10;
+                        disp_div_valid_in_hi <= 1'b1;
+                        disp_state_hi <= DISP_DIV3;
                     end
                 end
                 DISP_DIV3: begin
-                    if (disp_div_valid_out) begin
-                        disp_digits[3] <= disp_remainder[3:0];
-                        disp_state <= DISP_IDLE;
+                    if (disp_div_valid_out_hi) begin
+                        disp_digits_hi[3] <= disp_remainder_hi[3:0];
+                        disp_state_hi <= DISP_IDLE;
                     end
                 end
-                default: disp_state <= DISP_IDLE;
+                default: disp_state_hi <= DISP_IDLE;
+            endcase
+        end
+    end
+
+    always_ff @(posedge clk_25mhz) begin
+        if (reset) begin
+            disp_value_reg_lo <= '0;
+            disp_dividend_lo <= '0;
+            disp_divisor_lo <= '0;
+            disp_div_valid_in_lo <= 1'b0;
+            disp_state_lo <= DISP_IDLE;
+            disp_digits_lo[0] <= '0;
+            disp_digits_lo[1] <= '0;
+            disp_digits_lo[2] <= '0;
+            disp_digits_lo[3] <= '0;
+        end else begin
+            disp_div_valid_in_lo <= 1'b0;
+            case (disp_state_lo)
+                DISP_IDLE: begin
+                    if (display_value_lo != disp_value_reg_lo) begin
+                        disp_value_reg_lo <= display_value_lo;
+                        disp_dividend_lo <= display_value_lo;
+                        disp_divisor_lo <= 32'd10;
+                        disp_div_valid_in_lo <= 1'b1;
+                        disp_state_lo <= DISP_DIV0;
+                    end
+                end
+                DISP_DIV0: begin
+                    if (disp_div_valid_out_lo) begin
+                        disp_digits_lo[0] <= disp_remainder_lo[3:0];
+                        disp_dividend_lo <= disp_quotient_lo;
+                        disp_divisor_lo <= 32'd10;
+                        disp_div_valid_in_lo <= 1'b1;
+                        disp_state_lo <= DISP_DIV1;
+                    end
+                end
+                DISP_DIV1: begin
+                    if (disp_div_valid_out_lo) begin
+                        disp_digits_lo[1] <= disp_remainder_lo[3:0];
+                        disp_dividend_lo <= disp_quotient_lo;
+                        disp_divisor_lo <= 32'd10;
+                        disp_div_valid_in_lo <= 1'b1;
+                        disp_state_lo <= DISP_DIV2;
+                    end
+                end
+                DISP_DIV2: begin
+                    if (disp_div_valid_out_lo) begin
+                        disp_digits_lo[2] <= disp_remainder_lo[3:0];
+                        disp_dividend_lo <= disp_quotient_lo;
+                        disp_divisor_lo <= 32'd10;
+                        disp_div_valid_in_lo <= 1'b1;
+                        disp_state_lo <= DISP_DIV3;
+                    end
+                end
+                DISP_DIV3: begin
+                    if (disp_div_valid_out_lo) begin
+                        disp_digits_lo[3] <= disp_remainder_lo[3:0];
+                        disp_state_lo <= DISP_IDLE;
+                    end
+                end
+                default: disp_state_lo <= DISP_IDLE;
             endcase
         end
     end
@@ -1038,15 +1123,18 @@ module top_level(
         end
     end
 
-    logic [6:0] seg_raw;
-    bto7s u_bto7s(.x(disp_digits[disp_sel]), .s(seg_raw));
+    logic [6:0] seg_raw_hi;
+    logic [6:0] seg_raw_lo;
+    bto7s u_bto7s_hi(.x(disp_digits_hi[disp_sel]), .s(seg_raw_hi));
+    bto7s u_bto7s_lo(.x(disp_digits_lo[disp_sel]), .s(seg_raw_lo));
 
     always_comb begin
         ss0_an = 4'b1111;
         ss0_an[disp_sel] = 1'b0;
-        ss0_c = ~seg_raw;
-        ss1_an = 4'hF;
-        ss1_c = 7'h7F;
+        ss0_c = ~seg_raw_hi;
+        ss1_an = 4'b1111;
+        ss1_an[disp_sel] = 1'b0;
+        ss1_c = ~seg_raw_lo;
     end
 
 endmodule
