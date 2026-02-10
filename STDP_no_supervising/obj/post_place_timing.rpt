@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Mon Feb  9 20:46:17 2026
-| Host         : eecs-digital-05 running 64-bit Ubuntu 24.04.3 LTS
+| Date         : Mon Feb  9 21:04:56 2026
+| Host         : eecs-digital-16 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_timing -file obj/post_place_timing.rpt
 | Design       : top_level
 | Device       : 7s50-csga324
@@ -12,19 +12,19 @@ Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanc
 
 Timing Report
 
-Slack (MET) :             6.879ns  (required time - arrival time)
-  Source:                 por_cnt_100_reg[15]/C
+Slack (MET) :             6.805ns  (required time - arrival time)
+  Source:                 por_cnt_100_reg[14]/C
                             (rising edge-triggered cell FDRE clocked by gclk  {rise@0.000ns fall@4.000ns period=10.000ns})
-  Destination:            por_reset_100_reg/D
+  Destination:            por_cnt_100_reg[12]/CE
                             (rising edge-triggered cell FDRE clocked by gclk  {rise@0.000ns fall@4.000ns period=10.000ns})
   Path Group:             gclk
   Path Type:              Setup (Max at Slow Process Corner)
   Requirement:            10.000ns  (gclk rise@10.000ns - gclk rise@0.000ns)
-  Data Path Delay:        2.984ns  (logic 0.704ns (23.592%)  route 2.280ns (76.408%))
+  Data Path Delay:        2.930ns  (logic 0.704ns (24.027%)  route 2.226ns (75.973%))
   Logic Levels:           2  (LUT6=2)
-  Clock Path Skew:        -0.021ns (DCD - SCD + CPR)
-    Destination Clock Delay (DCD):    4.767ns = ( 14.767 - 10.000 ) 
-    Source Clock Delay      (SCD):    5.055ns
+  Clock Path Skew:        -0.025ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    4.841ns = ( 14.841 - 10.000 ) 
+    Source Clock Delay      (SCD):    5.133ns
     Clock Pessimism Removal (CPR):    0.268ns
   Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
     Total System Jitter     (TSJ):    0.071ns
@@ -40,16 +40,16 @@ Slack (MET) :             6.879ns  (required time - arrival time)
     N15                  IBUF (Prop_ibuf_I_O)         1.440     1.440 r  clk_100mhz_IBUF_inst/O
                          net (fo=1, estimated)        1.972     3.412    clk_100mhz_IBUF
     BUFGCTRL_X0Y1        BUFG (Prop_bufg_I_O)         0.096     3.508 r  clk_100mhz_IBUF_BUFG_inst/O
-                         net (fo=19, estimated)       1.547     5.055    clk_100mhz_IBUF_BUFG
-    SLICE_X33Y62         FDRE                                         r  por_cnt_100_reg[15]/C
+                         net (fo=19, estimated)       1.625     5.133    clk_100mhz_IBUF_BUFG
+    SLICE_X0Y51          FDRE                                         r  por_cnt_100_reg[14]/C
   -------------------------------------------------------------------    -------------------
-    SLICE_X33Y62         FDRE (Prop_fdre_C_Q)         0.456     5.511 r  por_cnt_100_reg[15]/Q
-                         net (fo=2, estimated)        0.980     6.491    por_cnt_100_reg[15]
-    SLICE_X32Y61         LUT6 (Prop_lut6_I1_O)        0.124     6.615 r  por_reset_100_i_2/O
-                         net (fo=1, estimated)        0.568     7.183    por_reset_100_i_2_n_0
-    SLICE_X32Y59         LUT6 (Prop_lut6_I4_O)        0.124     7.307 r  por_reset_100_i_1/O
-                         net (fo=17, estimated)       0.732     8.039    sel
-    SLICE_X32Y51         FDRE                                         r  por_reset_100_reg/D
+    SLICE_X0Y51          FDRE (Prop_fdre_C_Q)         0.456     5.589 r  por_cnt_100_reg[14]/Q
+                         net (fo=2, estimated)        1.009     6.598    por_cnt_100_reg[14]
+    SLICE_X1Y51          LUT6 (Prop_lut6_I0_O)        0.124     6.722 r  por_reset_100_i_2/O
+                         net (fo=1, estimated)        0.547     7.269    por_reset_100_i_2_n_0
+    SLICE_X1Y48          LUT6 (Prop_lut6_I4_O)        0.124     7.393 r  por_reset_100_i_1/O
+                         net (fo=17, estimated)       0.670     8.063    sel
+    SLICE_X0Y51          FDRE                                         r  por_cnt_100_reg[12]/CE
   -------------------------------------------------------------------    -------------------
 
                          (clock gclk rise edge)      10.000    10.000 r  
@@ -58,16 +58,16 @@ Slack (MET) :             6.879ns  (required time - arrival time)
     N15                  IBUF (Prop_ibuf_I_O)         1.370    11.370 r  clk_100mhz_IBUF_inst/O
                          net (fo=1, estimated)        1.873    13.244    clk_100mhz_IBUF
     BUFGCTRL_X0Y1        BUFG (Prop_bufg_I_O)         0.091    13.335 r  clk_100mhz_IBUF_BUFG_inst/O
-                         net (fo=19, estimated)       1.432    14.767    clk_100mhz_IBUF_BUFG
-    SLICE_X32Y51         FDRE                                         r  por_reset_100_reg/C
-                         clock pessimism              0.268    15.034    
-                         clock uncertainty           -0.035    14.999    
-    SLICE_X32Y51         FDRE (Setup_fdre_C_D)       -0.081    14.918    por_reset_100_reg
+                         net (fo=19, estimated)       1.506    14.841    clk_100mhz_IBUF_BUFG
+    SLICE_X0Y51          FDRE                                         r  por_cnt_100_reg[12]/C
+                         clock pessimism              0.268    15.108    
+                         clock uncertainty           -0.035    15.073    
+    SLICE_X0Y51          FDRE (Setup_fdre_C_CE)      -0.205    14.868    por_cnt_100_reg[12]
   -------------------------------------------------------------------
-                         required time                         14.918    
-                         arrival time                          -8.039    
+                         required time                         14.868    
+                         arrival time                          -8.063    
   -------------------------------------------------------------------
-                         slack                                  6.879    
+                         slack                                  6.805    
 
 
 

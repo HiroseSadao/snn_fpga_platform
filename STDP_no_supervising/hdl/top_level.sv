@@ -864,8 +864,22 @@ module top_level(
     // -----------------------------
     always_comb begin
         led = 16'b0;
-        led[0] = train_done;
-        led[1] = eval_done;
+        led[0]  = train_done;               // training finished
+        led[1]  = eval_done;                // eval finished
+        led[2]  = ready;                    // SD controller ready
+        led[3]  = (SD_CD_N == 1'b0);         // SD card inserted
+        led[4]  = header_done;              // header parsed
+        led[5]  = streaming;                // streaming active
+        led[6]  = (run_state != RUN_IDLE);  // run active
+        led[7]  = ps_s_tvalid;              // input to pipeline valid
+        led[8]  = ps_s_tready;              // pipeline ready
+        led[9]  = ps_m_tvalid;              // pipeline output valid
+        led[10] = (fifo_count != 0);        // spike FIFO not empty
+        led[11] = in_read;                  // SD read in progress
+        led[12] = byte_available;           // SD byte available
+        led[13] = assign_running;           // assign_labels running
+        led[14] = pred_running;             // prediction running
+        led[15] = samples_done;             // samples done flag
         rgb0 = 3'b000;
         rgb1 = 3'b000;
     end
