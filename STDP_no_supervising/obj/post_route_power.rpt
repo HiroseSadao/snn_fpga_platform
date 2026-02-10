@@ -1,7 +1,7 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 -------------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version     : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date             : Tue Feb 10 04:09:09 2026
+| Date             : Tue Feb 10 04:31:48 2026
 | Host             : eecs-digital-09 running 64-bit Ubuntu 24.04.3 LTS
 | Command          : report_power -file obj/post_route_power.rpt
 | Design           : top_level
@@ -53,17 +53,17 @@ Table of Contents
 | On-Chip                  | Power (W) | Used     | Available | Utilization (%) |
 +--------------------------+-----------+----------+-----------+-----------------+
 | Clocks                   |    <0.001 |        3 |       --- |             --- |
-| Slice Logic              |     0.002 |    46649 |       --- |             --- |
-|   LUT as Logic           |     0.002 |    17490 |     32600 |           53.65 |
-|   CARRY4                 |    <0.001 |     1654 |      8150 |           20.29 |
-|   Register               |    <0.001 |    20270 |     65200 |           31.09 |
-|   F7/F8 Muxes            |    <0.001 |     3447 |     32600 |           10.57 |
+| Slice Logic              |     0.002 |    47536 |       --- |             --- |
+|   LUT as Logic           |     0.002 |    17777 |     32600 |           54.53 |
+|   CARRY4                 |    <0.001 |     1667 |      8150 |           20.45 |
+|   Register               |    <0.001 |    20331 |     65200 |           31.18 |
 |   Others                 |     0.000 |       50 |       --- |             --- |
+|   F7/F8 Muxes            |     0.000 |     3458 |     32600 |           10.61 |
 |   LUT as Distributed RAM |     0.000 |      468 |      9600 |            4.88 |
 |   BUFG                   |     0.000 |        1 |        32 |            3.13 |
-| Signals                  |     0.003 |    35642 |       --- |             --- |
-| Block RAM                |     0.000 |     63.5 |        75 |           84.67 |
-| DSPs                     |     0.002 |       27 |       120 |           22.50 |
+| Signals                  |     0.003 |    36722 |       --- |             --- |
+| Block RAM                |     0.000 |     65.5 |        75 |           87.33 |
+| DSPs                     |     0.002 |       35 |       120 |           29.17 |
 | I/O                      |     0.011 |       62 |       210 |           29.52 |
 | Static Power             |     0.075 |          |           |                 |
 | Total                    |     0.094 |          |           |                 |

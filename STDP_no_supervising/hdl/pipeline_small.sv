@@ -38,7 +38,8 @@ module pipeline_small #(
     localparam int TD_EXC_STEPS  = 1;   // 1e-3 / 1e-3
     localparam int TD_INH_STEPS  = 2;   // 2e-3 / 1e-3
     localparam int TD_X_STEPS    = 20;  // 2e-2 / 1e-3
-    localparam int DELAY_IN_STEPS = 5; // 5e-3 / 1e-3
+    localparam int TD_X2_STEPS   = 40;  // 4e-2 / 1e-3 (post2)
+    localparam int DELAY_IN_STEPS = 11; // 0..10 ms random delay (approx)
     localparam int DELAY_E2I_STEPS = 2; // 2e-3 / 1e-3
 
     localparam int WEXC_FP = 147456; // 2.25
@@ -46,9 +47,9 @@ module pipeline_small #(
 
     localparam int WMIN_FP = 0;
     localparam int WMAX_FP = 3277;   // 0.05
-    // Online STDP (stdp3.py): A_p=0.01, A_m=1.05*A_p
+    // Online STDP (Brian2 Diehl_Cook_2015): A_p=0.01, A_m=0.0001
     localparam int A_P_FP = 655;     // 0.01
-    localparam int A_M_FP = 688;     // 0.0105
+    localparam int A_M_FP = 7;       // 0.0001
 
     // Exc LIF params
     localparam int EXC_VREST = -65;
@@ -77,7 +78,7 @@ module pipeline_small #(
     localparam int NEURON_GROUPS = (N_NEURONS + LANES - 1) / LANES;
 
     localparam int INPUT_SPIKE_FP = FP_SCALE / TD_IN_STEPS;
-    localparam int TRACE_SPIKE_FP = FP_SCALE / TD_X_STEPS;
+    localparam int TRACE_SPIKE_FP = FP_SCALE; // event-driven traces set to 1.0 on spike
     localparam int EXC_SPIKE_FP = (TD_EXC_STEPS == 1) ? FP_SCALE
                                   : (TD_EXC_STEPS == 2) ? (FP_SCALE >>> 1)
                                   : (FP_SCALE / TD_EXC_STEPS);
@@ -87,6 +88,8 @@ module pipeline_small #(
     localparam longint unsigned Q32_ONE = 64'h1_0000_0000;
     localparam int INV_TD_X_Q32       = (TD_X_STEPS <= 1) ? 32'hFFFF_FFFF
                                  : (Q32_ONE + (TD_X_STEPS/2)) / TD_X_STEPS;
+    localparam int INV_TD_X2_Q32      = (TD_X2_STEPS <= 1) ? 32'hFFFF_FFFF
+                                 : (Q32_ONE + (TD_X2_STEPS/2)) / TD_X2_STEPS;
     localparam int INV_EXC_TAU_M_Q32  = (EXC_TAU_M <= 1) ? 32'hFFFF_FFFF
                                  : (Q32_ONE + (EXC_TAU_M/2)) / EXC_TAU_M;
     localparam int INV_INH_TAU_M_Q32  = (INH_TAU_M <= 1) ? 32'hFFFF_FFFF
@@ -118,7 +121,7 @@ module pipeline_small #(
     (* ram_style = "distributed" *) logic signed [31:0] g_in_accum [0:N_NEURONS-1];
 
     // Packed per-neuron state RAM
-    localparam int STATE_W = (32*9) + 32; // 9x32 + 2x16
+    localparam int STATE_W = (32*10) + 32; // 10x32 + 2x16
     logic [STATE_W-1:0] state_wr_data;
     logic [STATE_W-1:0] state_rd_data;
     logic state_wr_en;
@@ -129,14 +132,15 @@ module pipeline_small #(
     wire signed [31:0] st_g_in_state = state_rd_data[STATE_W-1   -: 32];
     wire signed [31:0] st_r_exc      = state_rd_data[STATE_W-33  -: 32];
     wire signed [31:0] st_x_exc      = state_rd_data[STATE_W-65  -: 32];
-    wire signed [31:0] st_g_inh_state= state_rd_data[STATE_W-97  -: 32];
-    wire signed [31:0] st_r_inh      = state_rd_data[STATE_W-129 -: 32];
-    wire signed [31:0] st_v_exc      = state_rd_data[STATE_W-161 -: 32];
-    wire signed [31:0] st_v_inh      = state_rd_data[STATE_W-193 -: 32];
-    wire signed [31:0] st_theta      = state_rd_data[STATE_W-225 -: 32];
-    wire signed [31:0] st_vthr       = state_rd_data[STATE_W-257 -: 32];
-    wire [15:0]        st_refr_exc   = state_rd_data[STATE_W-289 -: 16];
-    wire [15:0]        st_refr_inh   = state_rd_data[STATE_W-305 -: 16];
+    wire signed [31:0] st_x_exc2     = state_rd_data[STATE_W-97  -: 32];
+    wire signed [31:0] st_g_inh_state= state_rd_data[STATE_W-129 -: 32];
+    wire signed [31:0] st_r_inh      = state_rd_data[STATE_W-161 -: 32];
+    wire signed [31:0] st_v_exc      = state_rd_data[STATE_W-193 -: 32];
+    wire signed [31:0] st_v_inh      = state_rd_data[STATE_W-225 -: 32];
+    wire signed [31:0] st_theta      = state_rd_data[STATE_W-257 -: 32];
+    wire signed [31:0] st_vthr       = state_rd_data[STATE_W-289 -: 32];
+    wire [15:0]        st_refr_exc   = state_rd_data[STATE_W-321 -: 16];
+    wire [15:0]        st_refr_inh   = state_rd_data[STATE_W-337 -: 16];
 
     localparam int DELAY_IN_DEPTH = DELAY_IN_STEPS * N_NEURONS;
     localparam int DELAY_E2I_DEPTH = DELAY_E2I_STEPS * N_NEURONS;
@@ -162,16 +166,32 @@ module pipeline_small #(
     logic [DELAY_E2I_W-1:0] delay_e2i_clr_step;
     logic [NEURON_W-1:0] delay_clr_neuron;
 
+    // LFSR for random input delay selection (0..10 ms)
+    logic [15:0] lfsr;
+    logic [DELAY_IN_W-1:0] delay_in_rand;
+
+    function automatic [15:0] lfsr_next(input [15:0] v);
+        begin
+            lfsr_next = {v[14:0], v[15]^v[13]^v[12]^v[10]};
+        end
+    endfunction
+
     logic signed [31:0] g_inh_next_val_reg;
 
-    function automatic [DELAY_IN_W-1:0] delay_in_rd_idx;
+    function automatic [DELAY_IN_W-1:0] delay_in_rd_idx_rand(
+        input [DELAY_IN_W-1:0] wr_idx,
+        input [DELAY_IN_W-1:0] delay
+    );
         begin
             if (DELAY_IN_STEPS <= 1) begin
-                delay_in_rd_idx = '0;
-            end else if (delay_in_wr_idx == 0) begin
-                delay_in_rd_idx = DELAY_IN_STEPS-1;
+                delay_in_rd_idx_rand = '0;
+            end else if (delay == 0) begin
+                // Avoid reading the slot being written this step
+                delay_in_rd_idx_rand = (wr_idx == 0) ? DELAY_IN_STEPS-1 : (wr_idx - 1'b1);
+            end else if (wr_idx >= delay) begin
+                delay_in_rd_idx_rand = wr_idx - delay;
             end else begin
-                delay_in_rd_idx = delay_in_wr_idx - 1'b1;
+                delay_in_rd_idx_rand = wr_idx + DELAY_IN_STEPS - delay;
             end
         end
     endfunction
@@ -419,6 +439,7 @@ module pipeline_small #(
         P_THETA_DIV,
         P_R_EXC_DIV,
         P_X_EXC_DIV,
+        P_X_EXC2_DIV,
         P_G_EXC_MUL,
         P_I_SYN_I_MUL,
         P_DV_I_DIV,
@@ -439,6 +460,7 @@ module pipeline_small #(
     logic signed [31:0] theta_decayed_val;
     logic signed [31:0] r_exc_next_val;
     logic signed [31:0] x_exc_next_val;
+    logic signed [31:0] x_exc2_next_val;
     logic signed [31:0] g_exc_next_val;
     logic signed [31:0] v_next_i_val;
     logic signed [31:0] theta_next_val;
@@ -647,6 +669,7 @@ module pipeline_small #(
             theta_decayed_val <= '0;
             r_exc_next_val <= '0;
             x_exc_next_val <= '0;
+            x_exc2_next_val <= '0;
             g_exc_next_val <= '0;
             v_next_i_val <= '0;
             theta_next_val <= '0;
@@ -679,6 +702,8 @@ module pipeline_small #(
             delay_e2i_wr_addr <= '0;
             delay_in_wr_data <= '0;
             delay_e2i_wr_data <= '0;
+            lfsr <= 16'hACE1;
+            delay_in_rand <= '0;
         end else begin
             // defaults
             mem_r_en <= 1'b0;
@@ -709,6 +734,7 @@ module pipeline_small #(
                         32'sd0,                             // g_in_state
                         32'sd0,                             // r_exc
                         32'sd0,                             // x_exc
+                        32'sd0,                             // x_exc2
                         32'sd0,                             // g_inh_state
                         32'sd0,                             // r_inh
                         EXC_VRESET * FP_SCALE,              // v_exc
@@ -807,12 +833,18 @@ module pipeline_small #(
                 S_SCAN_WAIT: begin
                     logic signed [31:0] scan_val;
                     logic signed [31:0] div_signed;
+                    logic signed [31:0] decayed;
                     scan_val = x_in_rd_data;
                     div_signed = div_const_q32(scan_val, INV_TD_X_Q32);
                     x_in_wr_en <= 1'b1;
                     x_in_wr_addr <= scan_in_idx;
-                    x_in_wr_data <= scan_val - div_signed
-                                   + (s_in_reg[scan_in_idx] ? TRACE_SPIKE_FP : 0);
+                    if (s_in_reg[scan_in_idx]) begin
+                        x_in_wr_data <= TRACE_SPIKE_FP;
+                    end else begin
+                        decayed = scan_val - div_signed;
+                        if (decayed < 0) decayed = 0;
+                        x_in_wr_data <= decayed;
+                    end
 
                     if (s_in_reg[scan_in_idx]) begin
                         scan_group_idx <= '0;
@@ -892,6 +924,8 @@ module pipeline_small #(
                                 div_result <= div_const_q32(st_g_in_state,
                                                             (Q32_ONE + (TD_IN_STEPS/2)) / TD_IN_STEPS);
                             end
+                            delay_in_rand <= lfsr % DELAY_IN_STEPS;
+                            lfsr <= lfsr_next(lfsr);
                             state <= S_NEURON_CALC2;
                         end
                         P_I_SYN_EXC_MUL: begin
@@ -925,6 +959,10 @@ module pipeline_small #(
                         end
                         P_X_EXC_DIV: begin
                             div_result <= div_const_q32(st_x_exc, INV_TD_X_Q32);
+                            state <= S_NEURON_CALC2;
+                        end
+                        P_X_EXC2_DIV: begin
+                            div_result <= div_const_q32(st_x_exc2, INV_TD_X2_Q32);
                             state <= S_NEURON_CALC2;
                         end
                         P_G_EXC_MUL: begin
@@ -970,7 +1008,10 @@ module pipeline_small #(
                     case (calc_phase)
                         P_GIN_DIV: begin
                             g_in_state_next_val <= st_g_in_state - div_result + g_in_accum[n];
-                            delay_in_rd_addr <= delay_in_addr(delay_in_rd_idx(), n[NEURON_W-1:0]);
+                            delay_in_rd_addr <= delay_in_addr(
+                                delay_in_rd_idx_rand(delay_in_wr_idx, delay_in_rand),
+                                n[NEURON_W-1:0]
+                            );
                             calc_phase <= P_I_SYN_EXC_MUL;
                         end
                         P_I_SYN_EXC_MUL: begin
@@ -1018,8 +1059,25 @@ module pipeline_small #(
                             calc_phase <= P_X_EXC_DIV;
                         end
                         P_X_EXC_DIV: begin
-                            x_exc_next_val <= st_x_exc - div_result
-                                            + (s_exc_next_val ? TRACE_SPIKE_FP : 0);
+                            if (s_exc_next_val) begin
+                                x_exc_next_val <= TRACE_SPIKE_FP;
+                            end else begin
+                                logic signed [31:0] decayed_x;
+                                decayed_x = st_x_exc - div_result;
+                                if (decayed_x < 0) decayed_x = 0;
+                                x_exc_next_val <= decayed_x;
+                            end
+                            calc_phase <= P_X_EXC2_DIV;
+                        end
+                        P_X_EXC2_DIV: begin
+                            if (s_exc_next_val) begin
+                                x_exc2_next_val <= TRACE_SPIKE_FP;
+                            end else begin
+                                logic signed [31:0] decayed_x2;
+                                decayed_x2 = st_x_exc2 - div_result;
+                                if (decayed_x2 < 0) decayed_x2 = 0;
+                                x_exc2_next_val <= decayed_x2;
+                            end
                             calc_phase <= P_G_EXC_MUL;
                         end
                         P_G_EXC_MUL: begin
@@ -1062,6 +1120,7 @@ module pipeline_small #(
                                 g_in_state_next_val,
                                 r_exc_next_val,
                                 x_exc_next_val,
+                                x_exc2_next_val,
                                 st_g_inh_state,
                                 r_inh_local,
                                 v_exc_next_val,
@@ -1131,6 +1190,7 @@ module pipeline_small #(
                         st_g_in_state,
                         st_r_exc,
                         st_x_exc,
+                        st_x_exc2,
                         g_inh_next_val_reg,
                         st_r_inh,
                         st_v_exc,
@@ -1197,9 +1257,15 @@ module pipeline_small #(
             end
             if (stdp_scan_neuron == N_NEURONS-1) begin
                 stdp_scan_neuron <= '0;
-                if ((stdp_post_count + post_hit) != 0 && (stdp_pre_count != 0)) begin
+                if ((stdp_post_count + post_hit) != 0) begin
+                    stdp_mode_post <= 1'b1;
                     stdp_post_i <= '0;
+                    stdp_j <= '0;
+                    state <= S_STDP_READ;
+                end else if (stdp_pre_count != 0) begin
+                    stdp_mode_post <= 1'b0;
                     stdp_pre_i <= '0;
+                    stdp_g <= '0;
                     stdp_j <= stdp_pre_idx['0];
                     state <= S_STDP_READ;
                 end else begin
@@ -1210,10 +1276,11 @@ module pipeline_small #(
             end
         end
 
-        // Online STDP update (pre/post co-activation pairs only)
+        // Online STDP update (Brian2-style: pre or post spike events)
         S_STDP_READ: begin
             logic [NEURON_W-1:0] stdp_neuron_sel;
-            stdp_neuron_sel = stdp_post_idx[stdp_post_i];
+            stdp_neuron_sel = stdp_mode_post ? stdp_post_idx[stdp_post_i]
+                                             : stdp_g[NEURON_W-1:0];
             mem_r_en <= 1'b1;
             for (i = 0; i < LANES; i = i + 1) begin
                 mem_r_neuron[i] <= stdp_neuron_sel;
@@ -1239,12 +1306,18 @@ module pipeline_small #(
                 logic signed [31:0] pre_term;
                 logic signed [31:0] post_term;
 
-                neuron_idx = stdp_post_idx[stdp_post_i];
+                neuron_idx = stdp_mode_post ? stdp_post_idx[stdp_post_i]
+                                            : (stdp_g * LANES + i);
                 if (neuron_idx < N_NEURONS) begin
                     w_old = $signed(mem_r_data[i]);
 
-                    pre_term = fp_mul(A_P_FP, x_in_rd_data);
-                    post_term = fp_mul(A_M_FP, st_x_exc);
+                    if (stdp_mode_post) begin
+                        pre_term = fp_mul(A_P_FP, fp_mul(x_in_rd_data, st_x_exc2));
+                        post_term = 0;
+                    end else begin
+                        pre_term = 0;
+                        post_term = fp_mul(A_M_FP, st_x_exc);
+                    end
                     dW = pre_term - post_term;
 
                     w_new = w_old + dW;
@@ -1258,19 +1331,41 @@ module pipeline_small #(
                 end
             end
 
-            if (stdp_pre_i == stdp_pre_count - 1'b1) begin
-                stdp_pre_i <= '0;
-                if (stdp_post_i == stdp_post_count - 1'b1) begin
-                    state <= S_IDLE;
+            if (stdp_mode_post) begin
+                if (stdp_j == N_IN-1) begin
+                    stdp_j <= '0;
+                    if (stdp_post_i == stdp_post_count - 1'b1) begin
+                        if (stdp_pre_count != 0) begin
+                            stdp_mode_post <= 1'b0;
+                            stdp_pre_i <= '0;
+                            stdp_g <= '0;
+                            stdp_j <= stdp_pre_idx['0];
+                            state <= S_STDP_READ;
+                        end else begin
+                            state <= S_IDLE;
+                        end
+                    end else begin
+                        stdp_post_i <= stdp_post_i + 1'b1;
+                        state <= S_STDP_READ;
+                    end
                 end else begin
-                    stdp_post_i <= stdp_post_i + 1'b1;
-                    stdp_j <= stdp_pre_idx['0];
+                    stdp_j <= stdp_j + 1'b1;
                     state <= S_STDP_READ;
                 end
             end else begin
-                stdp_pre_i <= stdp_pre_i + 1'b1;
-                stdp_j <= stdp_pre_idx[stdp_pre_i + 1'b1];
-                state <= S_STDP_READ;
+                if (stdp_g == N_NEURONS-1) begin
+                    stdp_g <= '0;
+                    if (stdp_pre_i == stdp_pre_count - 1'b1) begin
+                        state <= S_IDLE;
+                    end else begin
+                        stdp_pre_i <= stdp_pre_i + 1'b1;
+                        stdp_j <= stdp_pre_idx[stdp_pre_i + 1'b1];
+                        state <= S_STDP_READ;
+                    end
+                end else begin
+                    stdp_g <= stdp_g + 1'b1;
+                    state <= S_STDP_READ;
+                end
             end
         end
 
