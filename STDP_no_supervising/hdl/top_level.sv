@@ -3,7 +3,7 @@
 module top_level(
         input  wire        clk_100mhz,
         input  wire [15:0] sw,  // unused
-        input  wire [2:0]  btn,
+        input  wire [3:0]  btn,
         output logic [15:0] led,
         output logic [2:0] rgb0,
         output logic [2:0] rgb1,
@@ -130,20 +130,21 @@ module top_level(
     logic        streaming;
 
     // Buttons (sync + edge) in clk_25mhz domain
-    logic [2:0] btn_sync;
-    logic [2:0] btn_prev;
+    logic [3:0] btn_sync;
+    logic [3:0] btn_prev;
     wire btn0_rise = btn_sync[0] & ~btn_prev[0];
     wire btn1_rise = btn_sync[1] & ~btn_prev[1];
     wire btn2_rise = btn_sync[2] & ~btn_prev[2];
+    wire btn3_rise = btn_sync[3] & ~btn_prev[3];
 
     always_ff @(posedge clk_25mhz) begin
         if (reset_por) begin
-            btn_sync <= 3'b0;
-            btn_prev <= 3'b0;
+            btn_sync <= 4'b0;
+            btn_prev <= 4'b0;
             soft_reset_cnt <= 8'd0;
             soft_reset <= 1'b0;
         end else begin
-            btn_sync <= {btn[2], btn[1], btn[0]};
+            btn_sync <= {btn[3], btn[2], btn[1], btn[0]};
             btn_prev <= btn_sync;
             if (btn0_rise) begin
                 soft_reset_cnt <= 8'd64;
@@ -412,7 +413,7 @@ module top_level(
             eval_start_pulse <= 1'b0;
 
             if (run_state == RUN_IDLE) begin
-                if (btn0_rise) begin
+                if (btn3_rise) begin
                     run_state <= RUN_TRAIN;
                     train_start_pulse <= 1'b1;
                     stats_sel <= 2'b0;
@@ -862,24 +863,71 @@ module top_level(
     // -----------------------------
     // LED + 7seg status display
     // -----------------------------
+    // Debug LED bank select
+    // sw[1:0] = bank
+    // sw[5:2] = header byte select (bank 3)
+    logic [1:0] led_bank;
+    logic [3:0] hdr_sel;
+    logic [7:0] hdr_byte;
+    assign led_bank = sw[1:0];
+    assign hdr_sel = sw[5:2];
+
+    always_comb begin
+        if (hdr_sel <= 4'd11) begin
+            hdr_byte = header_bytes[hdr_sel + 4'd8];
+        end else begin
+            hdr_byte = 8'h00;
+        end
+    end
+
     always_comb begin
         led = 16'b0;
-        led[0]  = train_done;               // training finished
-        led[1]  = eval_done;                // eval finished
-        led[2]  = ready;                    // SD controller ready
-        led[3]  = (SD_CD_N == 1'b0);         // SD card inserted
-        led[4]  = header_done;              // header parsed
-        led[5]  = streaming;                // streaming active
-        led[6]  = (run_state != RUN_IDLE);  // run active
-        led[7]  = ps_s_tvalid;              // input to pipeline valid
-        led[8]  = ps_s_tready;              // pipeline ready
-        led[9]  = ps_m_tvalid;              // pipeline output valid
-        led[10] = (fifo_count != 0);        // spike FIFO not empty
-        led[11] = in_read;                  // SD read in progress
-        led[12] = byte_available;           // SD byte available
-        led[13] = assign_running;           // assign_labels running
-        led[14] = pred_running;             // prediction running
-        led[15] = samples_done;             // samples done flag
+        case (led_bank)
+            2'd0: begin
+                led[0]  = train_done;               // training finished
+                led[1]  = eval_done;                // eval finished
+                led[2]  = ready;                    // SD controller ready
+                led[3]  = (SD_CD_N == 1'b0);         // SD card inserted
+                led[4]  = header_done;              // header parsed
+                led[5]  = streaming;                // streaming active
+                led[6]  = (run_state != RUN_IDLE);  // run active
+                led[7]  = ps_s_tvalid;              // input to pipeline valid
+                led[8]  = ps_s_tready;              // pipeline ready
+                led[9]  = ps_m_tvalid;              // pipeline output valid
+                led[10] = (fifo_count != 0);        // spike FIFO not empty
+                led[11] = in_read;                  // SD read in progress
+                led[12] = byte_available;           // SD byte available
+                led[13] = assign_running;           // assign_labels running
+                led[14] = pred_running;             // prediction running
+                led[15] = samples_done;             // samples done flag
+            end
+            2'd1: begin
+                led[2:0]  = stream_state;           // stream FSM
+                led[5:3]  = run_state;              // run FSM
+                led[6]    = reset;                  // global reset
+                led[7]    = hold_input;             // input hold
+                led[8]    = in_read;                // SD read in progress
+                led[9]    = byte_available;         // SD byte available
+                led[10]   = fifo_wr_en;             // spike FIFO write
+                led[11]   = fifo_rd_en;             // spike FIFO read
+                led[12]   = bfifo_wr_en;            // blank FIFO write
+                led[13]   = bfifo_rd_en;            // blank FIFO read
+                led[14]   = ps_s_tvalid;            // input valid
+                led[15]   = ps_m_tvalid;            // output valid
+            end
+            2'd2: begin
+                led[7:0]  = fifo_count[7:0];        // spike FIFO fill (LSB)
+                led[15:8] = bfifo_count[7:0];       // blank FIFO fill (LSB)
+            end
+            default: begin
+                led[7:0]  = hdr_byte;               // header byte (sw[5:2])
+                led[8]    = header_done;            // header parsed
+                led[9]    = streaming;              // streaming active
+                led[10]   = ready;                  // SD ready
+                led[11]   = (SD_CD_N == 1'b0);       // SD present
+                led[15:12]= status[4:1];            // SD status (upper 4)
+            end
+        endcase
         rgb0 = 3'b000;
         rgb1 = 3'b000;
     end
@@ -996,7 +1044,7 @@ module top_level(
     always_comb begin
         ss0_an = 4'b1111;
         ss0_an[disp_sel] = 1'b0;
-        ss0_c = seg_raw;
+        ss0_c = ~seg_raw;
         ss1_an = 4'hF;
         ss1_c = 7'h7F;
     end
