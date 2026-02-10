@@ -3,7 +3,8 @@
 module w_in_mem_4bank #(
     parameter int N_IN = 784,
     parameter int N_NEURONS = 100,
-    parameter logic signed [31:0] INIT_VAL = 32'sd66,
+    parameter int W_W = 18, // S2.16
+    parameter logic signed [W_W-1:0] INIT_VAL = 18'sd66,
     parameter bit INIT_FROM_FILE = 0
 ) (
     input  wire                         clk,
@@ -12,12 +13,12 @@ module w_in_mem_4bank #(
     input  wire                         r_en,
     input  wire [$clog2(N_NEURONS)-1:0] r_neuron0,
     input  wire [$clog2(N_IN)-1:0]      r_in0,
-    output logic signed [31:0]          r_data0,
+    output logic signed [W_W-1:0]       r_data0,
 
     input  wire                         w_en0,
     input  wire [$clog2(N_NEURONS)-1:0] w_neuron0,
     input  wire [$clog2(N_IN)-1:0]      w_in0,
-    input  wire signed [31:0]           w_data0,
+    input  wire signed [W_W-1:0]        w_data0,
 
     input  wire                         dbg_en,
     input  wire [$clog2(N_NEURONS)-1:0] dbg_neuron,
@@ -54,14 +55,15 @@ module w_in_mem_4bank #(
     logic rd_en;
     logic [ADDR_W-1:0] wr_addr;
     logic wr_en;
-    logic signed [31:0] wr_data;
-    logic signed [31:0] rd_data;
+    logic signed [W_W-1:0] wr_data;
+    logic signed [W_W-1:0] rd_data;
+    wire  signed [31:0] rd_data_ext = {{(32-W_W){rd_data[W_W-1]}}, rd_data};
 
     // Control/initialization FSM
     always_ff @(posedge clk) begin
         if (rst) begin
             dbg_valid <= 1'b0;
-            dbg_data <= INIT_VAL;
+            dbg_data <= {{(32-W_W){INIT_VAL[W_W-1]}}, INIT_VAL};
 `ifndef SYNTHESIS
             dbg_pending <= 1'b0;
 `endif
@@ -71,7 +73,7 @@ module w_in_mem_4bank #(
         end else begin
             if (init_active) begin
                 dbg_valid <= 1'b0;
-                dbg_data <= INIT_VAL;
+                dbg_data <= {{(32-W_W){INIT_VAL[W_W-1]}}, INIT_VAL};
 `ifndef SYNTHESIS
                 dbg_pending <= 1'b0;
 `endif
@@ -86,7 +88,7 @@ module w_in_mem_4bank #(
                 dbg_valid <= 1'b0;
 `ifndef SYNTHESIS
                 if (dbg_pending) begin
-                    dbg_data <= rd_data;
+                    dbg_data <= rd_data_ext;
                     dbg_valid <= 1'b1;
                 end
 
@@ -130,24 +132,24 @@ module w_in_mem_4bank #(
         .ADDR_WIDTH_A(ADDR_W),
         .ADDR_WIDTH_B(ADDR_W),
         .AUTO_SLEEP_TIME(0),
-        .BYTE_WRITE_WIDTH_A(32),
+        .BYTE_WRITE_WIDTH_A(W_W),
         .CLOCKING_MODE("common_clock"),
         .ECC_MODE("no_ecc"),
         .MEMORY_INIT_FILE(MEM_INIT_FILE),
         .MEMORY_INIT_PARAM("0"),
         .MEMORY_OPTIMIZATION("true"),
         .MEMORY_PRIMITIVE("block"),
-        .MEMORY_SIZE(DEPTH * 32),
+        .MEMORY_SIZE(DEPTH * W_W),
         .MESSAGE_CONTROL(0),
-        .READ_DATA_WIDTH_B(32),
+        .READ_DATA_WIDTH_B(W_W),
         .READ_LATENCY_B(1),
-        .READ_RESET_VALUE_B("00000000"),
+        .READ_RESET_VALUE_B("0"),
         .RST_MODE_A("SYNC"),
         .RST_MODE_B("SYNC"),
         .SIM_ASSERT_CHK(0),
         .USE_MEM_INIT(INIT_FROM_FILE),
         .WAKEUP_TIME("disable_sleep"),
-        .WRITE_DATA_WIDTH_A(32),
+        .WRITE_DATA_WIDTH_A(W_W),
         .WRITE_MODE_B("read_first")
     ) u_wmem_xpm (
         .clka(clk),
@@ -167,7 +169,7 @@ module w_in_mem_4bank #(
     );
 `else
     // Behavioral model for simulation
-    logic signed [31:0] mem0_sim [0:DEPTH-1];
+    logic signed [W_W-1:0] mem0_sim [0:DEPTH-1];
 
     initial begin
         if (INIT_FROM_FILE) begin
