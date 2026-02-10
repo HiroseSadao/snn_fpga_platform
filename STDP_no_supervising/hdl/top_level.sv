@@ -69,7 +69,7 @@ module top_level(
     localparam int N_LABELS = 10;
     localparam int LABEL_BITS = 4;
     localparam int N_SAMPLES = 10000;
-    localparam int TRAIN_SAMPLES = 9000;
+    localparam int TRAIN_SAMPLES = 1000;
     localparam int EVAL_SAMPLES = 1000;
     localparam int POS_LABEL = 0;
 

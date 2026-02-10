@@ -1197,15 +1197,9 @@ module pipeline_small #(
             end
             if (stdp_scan_neuron == N_NEURONS-1) begin
                 stdp_scan_neuron <= '0;
-                if ((stdp_post_count + post_hit) != 0) begin
-                    stdp_mode_post <= 1'b1;
+                if ((stdp_post_count + post_hit) != 0 && (stdp_pre_count != 0)) begin
                     stdp_post_i <= '0;
-                    stdp_j <= '0;
-                    state <= S_STDP_READ;
-                end else if (stdp_pre_count != 0) begin
-                    stdp_mode_post <= 1'b0;
                     stdp_pre_i <= '0;
-                    stdp_g <= '0;
                     stdp_j <= stdp_pre_idx['0];
                     state <= S_STDP_READ;
                 end else begin
@@ -1216,11 +1210,10 @@ module pipeline_small #(
             end
         end
 
-        // Online STDP update (4 weights per cycle)
+        // Online STDP update (pre/post co-activation pairs only)
         S_STDP_READ: begin
             logic [NEURON_W-1:0] stdp_neuron_sel;
-            stdp_neuron_sel = stdp_mode_post ? stdp_post_idx[stdp_post_i]
-                                             : stdp_g[NEURON_W-1:0];
+            stdp_neuron_sel = stdp_post_idx[stdp_post_i];
             mem_r_en <= 1'b1;
             for (i = 0; i < LANES; i = i + 1) begin
                 mem_r_neuron[i] <= stdp_neuron_sel;
@@ -1246,18 +1239,12 @@ module pipeline_small #(
                 logic signed [31:0] pre_term;
                 logic signed [31:0] post_term;
 
-                neuron_idx = stdp_mode_post ? stdp_post_idx[stdp_post_i]
-                                            : (stdp_g * LANES + i);
+                neuron_idx = stdp_post_idx[stdp_post_i];
                 if (neuron_idx < N_NEURONS) begin
                     w_old = $signed(mem_r_data[i]);
 
-                    if (stdp_mode_post) begin
-                        pre_term = fp_mul(A_P_FP, x_in_rd_data);
-                        post_term = 0;
-                    end else begin
-                        pre_term = 0;
-                        post_term = fp_mul(A_M_FP, st_x_exc);
-                    end
+                    pre_term = fp_mul(A_P_FP, x_in_rd_data);
+                    post_term = fp_mul(A_M_FP, st_x_exc);
                     dW = pre_term - post_term;
 
                     w_new = w_old + dW;
@@ -1271,41 +1258,19 @@ module pipeline_small #(
                 end
             end
 
-            if (stdp_mode_post) begin
-                if (stdp_j == N_IN-1) begin
-                    stdp_j <= '0;
-                    if (stdp_post_i == stdp_post_count - 1'b1) begin
-                        if (stdp_pre_count != 0) begin
-                            stdp_mode_post <= 1'b0;
-                            stdp_pre_i <= '0;
-                            stdp_g <= '0;
-                            stdp_j <= stdp_pre_idx['0];
-                            state <= S_STDP_READ;
-                        end else begin
-                            state <= S_IDLE;
-                        end
-                    end else begin
-                        stdp_post_i <= stdp_post_i + 1'b1;
-                        state <= S_STDP_READ;
-                    end
+            if (stdp_pre_i == stdp_pre_count - 1'b1) begin
+                stdp_pre_i <= '0;
+                if (stdp_post_i == stdp_post_count - 1'b1) begin
+                    state <= S_IDLE;
                 end else begin
-                    stdp_j <= stdp_j + 1'b1;
+                    stdp_post_i <= stdp_post_i + 1'b1;
+                    stdp_j <= stdp_pre_idx['0];
                     state <= S_STDP_READ;
                 end
             end else begin
-                if (stdp_g == N_NEURONS-1) begin
-                    stdp_g <= '0;
-                    if (stdp_pre_i == stdp_pre_count - 1'b1) begin
-                        state <= S_IDLE;
-                    end else begin
-                        stdp_pre_i <= stdp_pre_i + 1'b1;
-                        stdp_j <= stdp_pre_idx[stdp_pre_i + 1'b1];
-                        state <= S_STDP_READ;
-                    end
-                end else begin
-                    stdp_g <= stdp_g + 1'b1;
-                    state <= S_STDP_READ;
-                end
+                stdp_pre_i <= stdp_pre_i + 1'b1;
+                stdp_j <= stdp_pre_idx[stdp_pre_i + 1'b1];
+                state <= S_STDP_READ;
             end
         end
 
