@@ -818,11 +818,19 @@ module top_level(
 
                     if (time_idx_out + 1 >= n_time_u32) begin
                         time_idx_out <= 32'd0;
-                        sample_idx_out <= sample_idx_out + 1'b1;
+                        if (sample_idx_out < num_images_u32[$clog2(N_SAMPLES)-1:0]) begin
+                            sample_idx_out <= sample_idx_out + 1'b1;
+                        end
                         if (run_state == RUN_TRAIN) begin
-                            samples_done <= (sample_idx_out + 1 >= TRAIN_SAMPLES);
+                            if (num_images_u32 < TRAIN_SAMPLES)
+                                samples_done <= (sample_idx_out + 1 >= num_images_u32[$clog2(N_SAMPLES)-1:0]);
+                            else
+                                samples_done <= (sample_idx_out + 1 >= TRAIN_SAMPLES);
                         end else if (run_state == RUN_EVAL) begin
-                            samples_done <= (sample_idx_out + 1 >= (TRAIN_SAMPLES + EVAL_SAMPLES));
+                            if (num_images_u32 < (TRAIN_SAMPLES + EVAL_SAMPLES))
+                                samples_done <= (sample_idx_out + 1 >= num_images_u32[$clog2(N_SAMPLES)-1:0]);
+                            else
+                                samples_done <= (sample_idx_out + 1 >= (TRAIN_SAMPLES + EVAL_SAMPLES));
                         end else begin
                             samples_done <= 1'b0;
                         end
