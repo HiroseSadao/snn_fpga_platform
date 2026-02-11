@@ -262,6 +262,7 @@ module top_level(
     logic [31:0] stats_pred;
     logic [31:0] stats_true;
     logic [31:0] stats_value;
+    logic [31:0] display_label;
     logic [31:0] display_value_hi;
     logic [31:0] display_value_lo;
     logic [3:0] disp_digits_hi [0:3];
@@ -1005,16 +1006,19 @@ module top_level(
             stats_value = (stats_pred != 0) ? ((stats_tp * 32'd100) / stats_pred) : 32'd0;
         end
 
+        display_label = {28'd0, labels_mem_q};
         display_value_hi = 32'd0;
         display_value_lo = 32'd0;
 
         if (run_state == RUN_TRAIN) begin
             display_value_lo = sample_idx_out + 1;
+            display_value_hi = display_label;
         end else if (run_state == RUN_TRAIN_DONE) begin
             display_value_lo = TRAIN_SAMPLES;
         end else if (run_state == RUN_EVAL) begin
             if (sample_idx_out >= TRAIN_SAMPLES)
                 display_value_hi = (sample_idx_out - TRAIN_SAMPLES) + 1;
+            display_value_lo = display_label;
         end else if (run_state == RUN_EVAL_DONE) begin
             display_value_hi = stats_value;
         end
