@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Sat Feb 21 04:44:54 2026
-| Host         : eecs-digital-08 running 64-bit Ubuntu 24.04.3 LTS
+| Date         : Sat Feb 21 05:02:30 2026
+| Host         : eecs-digital-03 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_utilization -file obj/post_synth_util.rpt -hierarchical -hierarchical_depth 4
 | Design       : top_level
 | Device       : xc7s50csga324-1
@@ -19,13 +19,13 @@ Table of Contents
 1. Utilization by Hierarchy
 ---------------------------
 
-+-------------------+---------------+------------+------------+---------+------+-----+--------+--------+------------+
-|      Instance     |     Module    | Total LUTs | Logic LUTs | LUTRAMs | SRLs | FFs | RAMB36 | RAMB18 | DSP Blocks |
-+-------------------+---------------+------------+------------+---------+------+-----+--------+--------+------------+
-| top_level         |         (top) |        845 |        845 |       0 |    0 | 778 |      0 |      0 |          3 |
-|   (top_level)     |         (top) |         23 |         23 |       0 |    0 | 564 |      0 |      0 |          3 |
-|   u_sd_controller | sd_controller |        560 |        560 |       0 |    0 | 148 |      0 |      0 |          0 |
-|   u_uart_rx       |       uart_rx |        234 |        234 |       0 |    0 |  41 |      0 |      0 |          0 |
-+-------------------+---------------+------------+------------+---------+------+-----+--------+--------+------------+
++-------------------+---------------+------------+------------+---------+------+------+--------+--------+------------+
+|      Instance     |     Module    | Total LUTs | Logic LUTs | LUTRAMs | SRLs |  FFs | RAMB36 | RAMB18 | DSP Blocks |
++-------------------+---------------+------------+------------+---------+------+------+--------+--------+------------+
+| top_level         |         (top) |       7598 |       7598 |       0 |    0 | 6584 |      0 |      0 |          3 |
+|   (top_level)     |         (top) |       4410 |       4410 |       0 |    0 | 6370 |      0 |      0 |          3 |
+|   u_sd_controller | sd_controller |        707 |        707 |       0 |    0 |  148 |      0 |      0 |          0 |
+|   u_uart_rx       |       uart_rx |       2453 |       2453 |       0 |    0 |   41 |      0 |      0 |          0 |
++-------------------+---------------+------------+------------+---------+------+------+--------+--------+------------+
 
 
