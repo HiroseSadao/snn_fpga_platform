@@ -34,7 +34,7 @@ def load_mnist():
         ) from exc
 
 
-def write_raw_image_file(out_path, num_images=10000, threshold=0.5):
+def write_raw_image_file(out_path, num_images=10000, fmt="u8", threshold=0.5):
     x_train, y_train = load_mnist()
     x_train = x_train.astype(np.float32)
     if x_train.max() > 1.0:
@@ -44,9 +44,17 @@ def write_raw_image_file(out_path, num_images=10000, threshold=0.5):
     images = x_train[:num_images].reshape(num_images, 784)
     labels = np.array(y_train[:num_images], dtype=np.uint8)
 
-    # 784-bit image per sample: binarize and pack bits (8 pixels/byte) => 98 bytes/image.
-    images_bin = (images >= threshold).astype(np.uint8)
-    images_packed = np.packbits(images_bin, axis=1, bitorder="little")
+    if fmt == "u8":
+        # Poisson化前の濃淡データ(0..255)をそのまま保存。
+        images_payload = np.clip(np.rint(images * 255.0), 0, 255).astype(np.uint8)
+        bytes_per_image = 784
+    elif fmt == "bin1":
+        # 旧形式: 2値化ビット列(784bit=98byte)。
+        images_bin = (images >= threshold).astype(np.uint8)
+        images_payload = np.packbits(images_bin, axis=1, bitorder="little")
+        bytes_per_image = 98
+    else:
+        raise ValueError(f"Unsupported format: {fmt}")
 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -55,16 +63,16 @@ def write_raw_image_file(out_path, num_images=10000, threshold=0.5):
     # magic(4) = b"RAW1"
     # version(4) = 1
     # num_images(4)
-    # n_bits(4) = 784
-    # bytes_per_image(4) = 98
-    header = struct.pack("<4sIIII", b"RAW1", 1, num_images, 784, 98)
+    # n_features(4) = 784
+    # bytes_per_image(4) = 784 (u8) or 98 (bin1)
+    header = struct.pack("<4sIIII", b"RAW1", 1, num_images, 784, bytes_per_image)
 
     with out_path.open("wb") as f:
         f.write(header)
         f.write(labels.tobytes(order="C"))
-        f.write(images_packed.tobytes(order="C"))
+        f.write(images_payload.tobytes(order="C"))
 
-    return out_path, labels, images_packed.shape[1]
+    return out_path, labels, bytes_per_image
 
 
 def write_raw_to_physical_drive(
@@ -129,8 +137,9 @@ def write_raw_to_physical_drive(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="MNIST raw-image (784-bit) generator and SD writer")
+    parser = argparse.ArgumentParser(description="MNIST raw-image generator and SD writer")
     parser.add_argument("--num-images", type=int, default=10000)
+    parser.add_argument("--format", type=str, choices=["u8", "bin1"], default="u8")
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--out", type=str, default="raw_samples.bin")
     parser.add_argument("--write-raw", action="store_true")
@@ -144,21 +153,25 @@ if __name__ == "__main__":
     if x_train.max() > 1.0:
         x_train = x_train / 255.0
 
-    first_bin = (x_train[0].reshape(784) >= args.threshold).astype(np.uint8).reshape(28, 28)
+    if args.format == "u8":
+        first_img = np.clip(np.rint(x_train[0] * 255.0), 0, 255).astype(np.uint8)
+    else:
+        first_img = (x_train[0].reshape(784) >= args.threshold).astype(np.uint8).reshape(28, 28) * 255
 
     if not args.no_plot:
-        plt.imshow(first_bin, cmap="gray")
+        plt.imshow(first_img, cmap="gray", vmin=0, vmax=255)
         plt.title(f"label={y_train[0]}")
         plt.show()
 
     out_path, labels, bytes_per_image = write_raw_image_file(
         out_path=args.out,
         num_images=args.num_images,
+        fmt=args.format,
         threshold=args.threshold,
     )
     print(
         f"Wrote {out_path} "
-        f"(labels={labels[:10].tolist()}, bytes_per_image={bytes_per_image}, threshold={args.threshold})"
+        f"(labels={labels[:10].tolist()}, format={args.format}, bytes_per_image={bytes_per_image}, threshold={args.threshold})"
     )
 
     if args.write_raw:

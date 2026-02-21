@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 -------------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version     : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date             : Sat Feb 21 05:02:51 2026
-| Host             : eecs-digital-03 running 64-bit Ubuntu 24.04.3 LTS
+| Date             : Sat Feb 21 09:47:15 2026
+| Host             : eecs-digital-16 running 64-bit Ubuntu 24.04.3 LTS
 | Command          : report_power -file obj/post_route_power.rpt
 | Design           : top_level
 | Device           : xc7s50csga324-1
@@ -30,10 +30,10 @@ Table of Contents
 ----------
 
 +--------------------------+--------------+
-| Total On-Chip Power (W)  | 0.094        |
+| Total On-Chip Power (W)  | 0.108        |
 | Design Power Budget (W)  | Unspecified* |
 | Power Budget Margin (W)  | NA           |
-| Dynamic (W)              | 0.022        |
+| Dynamic (W)              | 0.036        |
 | Device Static (W)        | 0.072        |
 | Effective TJA (C/W)      | 4.9          |
 | Max Ambient (C)          | 84.5         |
@@ -53,18 +53,18 @@ Table of Contents
 | On-Chip        | Power (W) | Used     | Available | Utilization (%) |
 +----------------+-----------+----------+-----------+-----------------+
 | Clocks         |    <0.001 |        3 |       --- |             --- |
-| Slice Logic    |     0.008 |    17138 |       --- |             --- |
-|   LUT as Logic |     0.008 |     7536 |     32600 |           23.12 |
-|   CARRY4       |    <0.001 |      186 |      8150 |            2.28 |
-|   Register     |    <0.001 |     6585 |     65200 |           10.10 |
+| Slice Logic    |     0.014 |    51550 |       --- |             --- |
+|   LUT as Logic |     0.013 |    19678 |     32600 |           60.36 |
+|   CARRY4       |    <0.001 |      286 |      8150 |            3.51 |
+|   Register     |    <0.001 |    22413 |     65200 |           34.38 |
 |   BUFG         |    <0.001 |        1 |        32 |            3.13 |
-|   F7/F8 Muxes  |    <0.001 |     1166 |     32600 |            3.58 |
-|   Others       |     0.000 |        9 |       --- |             --- |
-| Signals        |     0.010 |     9628 |       --- |             --- |
-| DSPs           |     0.001 |        3 |       120 |            2.50 |
+|   F7/F8 Muxes  |    <0.001 |     6929 |     32600 |           21.25 |
+|   Others       |     0.000 |       11 |       --- |             --- |
+| Signals        |     0.017 |    31579 |       --- |             --- |
+| DSPs           |     0.002 |        6 |       120 |            5.00 |
 | I/O            |     0.002 |       20 |       210 |            9.52 |
 | Static Power   |     0.072 |          |           |                 |
-| Total          |     0.094 |          |           |                 |
+| Total          |     0.108 |          |           |                 |
 +----------------+-----------+----------+-----------+-----------------+
 
 
@@ -74,7 +74,7 @@ Table of Contents
 +-----------+-------------+-----------+-------------+------------+-------------+-------------+------------+
 | Source    | Voltage (V) | Total (A) | Dynamic (A) | Static (A) | Powerup (A) | Budget (A)  | Margin (A) |
 +-----------+-------------+-----------+-------------+------------+-------------+-------------+------------+
-| Vccint    |       1.000 |     0.030 |       0.020 |      0.010 |       NA    | Unspecified | NA         |
+| Vccint    |       1.000 |     0.044 |       0.034 |      0.010 |       NA    | Unspecified | NA         |
 | Vccaux    |       1.800 |     0.013 |       0.000 |      0.013 |       NA    | Unspecified | NA         |
 | Vcco33    |       3.300 |     0.002 |       0.001 |      0.001 |       NA    | Unspecified | NA         |
 | Vcco25    |       2.500 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
@@ -138,12 +138,13 @@ Table of Contents
 3.1 By Hierarchy
 ----------------
 
-+-------------------+-----------+
-| Name              | Power (W) |
-+-------------------+-----------+
-| top_level         |     0.022 |
-|   u_sd_controller |     0.002 |
-|   u_uart_rx       |     0.006 |
-+-------------------+-----------+
++---------------------+-----------+
+| Name                | Power (W) |
++---------------------+-----------+
+| top_level           |     0.036 |
+|   u_poisson_divider |     0.002 |
+|   u_sd_controller   |     0.003 |
+|   u_uart_rx         |     0.008 |
++---------------------+-----------+
 
 

@@ -28,19 +28,34 @@ module top_level(
     localparam logic [7:0] OP_SD_TO_DDR_COPY = 8'h11;
     localparam logic [7:0] OP_RUN_SAMPLE_INFER = 8'h20;
     localparam logic [7:0] OP_READ_SPIKE_COUNT = 8'h21;
+    localparam logic [7:0] OP_READ_RAW_U8 = 8'h22;
+    localparam logic [7:0] OP_READ_POISSON_THRESH = 8'h23;
+    localparam logic [7:0] OP_READ_INFER_DEBUG = 8'h24;
     localparam logic [31:0] DDR_ADDR_WORD_LIMIT = 32'd16777216; // 64MiB / 4
     localparam logic [7:0] MAX_SUPPORTED_NARGS = 8'd2;
-    localparam int RX_TIMEOUT_CLKS = CLKS_PER_BIT * 20; // timeout while waiting for remaining bytes
+    // Increase RX timeout margin to tolerate host-side inter-byte gaps on UART.
+    localparam int RX_TIMEOUT_CLKS = CLKS_PER_BIT * 2000;
     localparam int N_IN = 784;
     localparam int N_NEURONS = 100;
     localparam logic signed [31:0] FXP_ALPHA = 32'sd62259; // 0.95 in S16.16
     localparam logic signed [31:0] FXP_INPUT_W = 32'sd8192; // 0.125 in S16.16
     localparam logic signed [31:0] FXP_THRESH = 32'sd65536; // 1.0 in S16.16
     localparam logic signed [31:0] FXP_BIAS_LSB = 32'sd512; // 0.0078125 in S16.16
+    localparam logic [31:0] POISSON_NUM_CONST = 32'd9175; // floor(32*140*2048*1e-3)
+    localparam logic [10:0] RNG_MAX = 11'd2047;
+    localparam logic [31:0] LCG_A = 32'd1664525;
+    localparam logic [31:0] LCG_C = 32'd1013904223;
 
     localparam logic [7:0] STATUS_OK             = 8'h00;
     localparam logic [7:0] STATUS_BAD_PACKET     = 8'hE1;
     localparam logic [7:0] STATUS_UNSUPPORTED_OP = 8'hE2;
+    localparam logic [7:0] BADDBG_READ_SPIKE_ARG = 8'h11;
+    localparam logic [7:0] BADDBG_SD_REQ_ARG     = 8'h20;
+    localparam logic [7:0] BADDBG_SD_CD_N        = 8'h21;
+    localparam logic [7:0] BADDBG_SD_WAIT_TO     = 8'h22;
+    localparam logic [7:0] BADDBG_SD_BAD_HEADER  = 8'h23;
+    localparam logic [7:0] BADDBG_SD_SECTOR_END  = 8'h24;
+    localparam logic [7:0] BADDBG_READ_INFER_DBG = 8'h14;
 
     typedef enum logic [2:0] {
         RX_WAIT_SYNC,
@@ -56,6 +71,13 @@ module top_level(
         TX_SEND,
         TX_WAIT_DONE
     } tx_state_t;
+    typedef enum logic [2:0] {
+        INFER_IDLE,
+        INFER_PREP_DIV_START,
+        INFER_PREP_DIV_WAIT,
+        INFER_GEN_INPUT_SPIKES,
+        INFER_ACCUM_NEURON
+    } infer_state_t;
 
     rx_state_t rx_state;
     tx_state_t tx_state;
@@ -113,21 +135,43 @@ module top_level(
     logic [31:0] sd_file_bytes_seen;
     logic        sd_copy_done_pending;
     logic        sd_use_sector_limit;
-    logic [7:0]  raw_image0_bits [0:97];
+    logic [7:0]  raw_image0_u8 [0:N_IN-1];
     logic        raw_image0_valid;
     logic [31:0] raw_num_images;
     logic [31:0] raw_bytes_per_image;
-    logic [6:0]  raw_image0_capture_idx;
+    logic [9:0]  raw_image0_capture_idx;
+    logic [31:0] raw_image0_sum_u8;
 
     logic        infer_active;
+    infer_state_t infer_state;
     logic [31:0] infer_steps_target;
     logic [15:0] infer_step_idx;
     logic [6:0]  infer_neuron_idx;
     logic [9:0]  infer_input_idx;
+    logic [9:0]  infer_prep_idx;
     logic signed [31:0] infer_accum;
     logic signed [31:0] infer_v_state [0:N_NEURONS-1];
     logic [15:0] infer_spike_count [0:N_NEURONS-1];
     logic [31:0] infer_total_spikes;
+    logic [31:0] infer_rng_state;
+    logic [10:0] infer_poisson_thresh [0:N_IN-1];
+    logic        infer_input_spike [0:N_IN-1];
+    logic [31:0] infer_dividend;
+    logic [31:0] infer_divisor;
+    logic        infer_div_valid;
+    logic [31:0] infer_div_q;
+    logic [31:0] infer_div_r;
+    logic        infer_div_out_valid;
+    logic        infer_div_err;
+    logic        infer_div_busy;
+    logic [31:0] infer_dbg_total_input_spikes;
+    logic [31:0] infer_dbg_total_syn_hits;
+    logic [31:0] infer_dbg_last_step_input_spikes;
+    logic [31:0] infer_dbg_first_step_input_spikes;
+    logic [31:0] infer_dbg_first_step_hits_n0;
+    logic [31:0] infer_dbg_first_step_hits_n3;
+    logic [31:0] infer_dbg_first_step_hits_n7;
+    logic [31:0] infer_dbg_curr_step_input_spikes;
     integer rr;
 
     wire [7:0] r_in = {sw[15:11], 3'b000};
@@ -202,6 +246,19 @@ module top_level(
         .g_out (),
         .b_out ()
     );
+
+    divider2b #(.WIDTH(32)) u_poisson_divider (
+        .clk_in        (core_clk),
+        .rst_in        (btn[0]),
+        .dividend_in   (infer_dividend),
+        .divisor_in    (infer_divisor),
+        .data_valid_in (infer_div_valid),
+        .quotient_out  (infer_div_q),
+        .remainder_out (infer_div_r),
+        .data_valid_out(infer_div_out_valid),
+        .error_out     (infer_div_err),
+        .busy_out      (infer_div_busy)
+    );
     
     function automatic [7:0] calc_resp_checksum(
         input [7:0] status_in,
@@ -213,20 +270,6 @@ module top_level(
                                ^ result_in[15:8]
                                ^ result_in[23:16]
                                ^ result_in[31:24];
-        end
-    endfunction
-
-    function automatic logic get_image0_bit(input logic [9:0] bit_idx);
-        logic [6:0] byte_idx;
-        logic [2:0] bit_in_byte;
-        begin
-            byte_idx = bit_idx[9:3];
-            bit_in_byte = bit_idx[2:0];
-            if (byte_idx < 7'd98) begin
-                get_image0_bit = raw_image0_bits[byte_idx][bit_in_byte];
-            end else begin
-                get_image0_bit = 1'b0;
-            end
         end
     endfunction
 
@@ -280,16 +323,33 @@ module top_level(
             raw_image0_valid    <= 1'b0;
             raw_num_images      <= 32'd0;
             raw_bytes_per_image <= 32'd0;
-            raw_image0_capture_idx <= 7'd0;
+            raw_image0_capture_idx <= 10'd0;
+            raw_image0_sum_u8   <= 32'd0;
             infer_active        <= 1'b0;
+            infer_state         <= INFER_IDLE;
             infer_steps_target  <= 32'd0;
             infer_step_idx      <= 16'd0;
             infer_neuron_idx    <= 7'd0;
             infer_input_idx     <= 10'd0;
+            infer_prep_idx      <= 10'd0;
             infer_accum         <= 32'sd0;
             infer_total_spikes  <= 32'd0;
-            for (rr = 0; rr < 98; rr = rr + 1) begin
-                raw_image0_bits[rr] <= 8'h00;
+            infer_rng_state     <= 32'd0;
+            infer_dividend      <= 32'd0;
+            infer_divisor       <= 32'd1;
+            infer_div_valid     <= 1'b0;
+            infer_dbg_total_input_spikes <= 32'd0;
+            infer_dbg_total_syn_hits <= 32'd0;
+            infer_dbg_last_step_input_spikes <= 32'd0;
+            infer_dbg_first_step_input_spikes <= 32'd0;
+            infer_dbg_first_step_hits_n0 <= 32'd0;
+            infer_dbg_first_step_hits_n3 <= 32'd0;
+            infer_dbg_first_step_hits_n7 <= 32'd0;
+            infer_dbg_curr_step_input_spikes <= 32'd0;
+            for (rr = 0; rr < N_IN; rr = rr + 1) begin
+                raw_image0_u8[rr] <= 8'h00;
+                infer_poisson_thresh[rr] <= 11'd0;
+                infer_input_spike[rr] <= 1'b0;
             end
             for (rr = 0; rr < N_NEURONS; rr = rr + 1) begin
                 infer_v_state[rr] <= 32'sd0;
@@ -299,6 +359,7 @@ module top_level(
             tx_dv <= 1'b0;
             sd_rd <= 1'b0;
             sd_wr <= 1'b0;
+            infer_div_valid <= 1'b0;
             if (response_ready || (rx_state == RX_WAIT_SYNC)) begin
                 rx_timeout_counter <= 16'd0;
             end else if (rx_dv) begin
@@ -356,7 +417,8 @@ module top_level(
                         end else if (
                             ((req_opcode == OP_ADD_I32) || (req_opcode == OP_DDR_WRITE32) ||
                              (req_opcode == OP_SD_TO_DDR_COPY) || (req_opcode == OP_RUN_SAMPLE_INFER) ||
-                             (req_opcode == OP_READ_SPIKE_COUNT))
+                             (req_opcode == OP_READ_SPIKE_COUNT) || (req_opcode == OP_READ_RAW_U8) ||
+                             (req_opcode == OP_READ_POISSON_THRESH) || (req_opcode == OP_READ_INFER_DEBUG))
                             && (rx_byte != 8'd2)
                         ) begin
                             rx_state        <= RX_WAIT_SYNC;
@@ -464,29 +526,43 @@ module top_level(
                                         sd_copy_done_pending  <= 1'b0;
                                         sd_use_sector_limit   <= (arg1 > 0);
                                         raw_image0_valid      <= 1'b0;
-                                        raw_image0_capture_idx <= 7'd0;
+                                        raw_image0_capture_idx <= 10'd0;
+                                        raw_image0_sum_u8     <= 32'd0;
                                     end else begin
                                         resp_status    <= STATUS_BAD_PACKET;
-                                        resp_result    <= 32'sd0;
-                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                                        // [31:24]=reason, [23:16]=opcode, [15:0]=arg0[15:0]
+                                        resp_result    <= {BADDBG_SD_REQ_ARG, req_opcode, arg0[15:0]};
+                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {BADDBG_SD_REQ_ARG, req_opcode, arg0[15:0]});
                                         response_ready <= 1'b1;
                                     end
                                 end
                                 OP_RUN_SAMPLE_INFER: begin
                                     if (
                                         (req_nargs == 8'd2) &&
-                                        (arg0 == 32'sd0) &&
                                         (arg1 > 0) &&
                                         raw_image0_valid &&
+                                        (raw_bytes_per_image == 32'd784) &&
+                                        (raw_image0_sum_u8 != 32'd0) &&
                                         !infer_active
                                     ) begin
                                         infer_active       <= 1'b1;
+                                        infer_state        <= INFER_PREP_DIV_START;
                                         infer_steps_target <= arg1;
                                         infer_step_idx     <= 16'd0;
                                         infer_neuron_idx   <= 7'd0;
                                         infer_input_idx    <= 10'd0;
+                                        infer_prep_idx     <= 10'd0;
                                         infer_accum        <= neuron_bias(7'd0);
                                         infer_total_spikes <= 32'd0;
+                                        infer_rng_state    <= arg0;
+                                        infer_dbg_total_input_spikes <= 32'd0;
+                                        infer_dbg_total_syn_hits <= 32'd0;
+                                        infer_dbg_last_step_input_spikes <= 32'd0;
+                                        infer_dbg_first_step_input_spikes <= 32'd0;
+                                        infer_dbg_first_step_hits_n0 <= 32'd0;
+                                        infer_dbg_first_step_hits_n3 <= 32'd0;
+                                        infer_dbg_first_step_hits_n7 <= 32'd0;
+                                        infer_dbg_curr_step_input_spikes <= 32'd0;
                                         for (rr = 0; rr < N_NEURONS; rr = rr + 1) begin
                                             infer_v_state[rr] <= 32'sd0;
                                             infer_spike_count[rr] <= 16'd0;
@@ -506,8 +582,66 @@ module top_level(
                                         response_ready <= 1'b1;
                                     end else begin
                                         resp_status    <= STATUS_BAD_PACKET;
-                                        resp_result    <= 32'sd0;
-                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                                        // [31:24]=reason, [23:16]=opcode, [15:0]=arg0[15:0]
+                                        resp_result    <= {BADDBG_READ_SPIKE_ARG, req_opcode, arg0[15:0]};
+                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {BADDBG_READ_SPIKE_ARG, req_opcode, arg0[15:0]});
+                                        response_ready <= 1'b1;
+                                    end
+                                end
+                                OP_READ_RAW_U8: begin
+                                    if ((req_nargs == 8'd2) && raw_image0_valid && (arg0 >= 0) && (arg0 < N_IN)) begin
+                                        resp_status    <= STATUS_OK;
+                                        resp_result    <= {24'd0, raw_image0_u8[arg0[9:0]]};
+                                        resp_checksum  <= calc_resp_checksum(STATUS_OK, {24'd0, raw_image0_u8[arg0[9:0]]});
+                                        response_ready <= 1'b1;
+                                    end else begin
+                                        resp_status    <= STATUS_BAD_PACKET;
+                                        // [31:24]=reason, [23:16]=opcode, [15:0]=arg0[15:0]
+                                        resp_result    <= {8'h12, req_opcode, arg0[15:0]};
+                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {8'h12, req_opcode, arg0[15:0]});
+                                        response_ready <= 1'b1;
+                                    end
+                                end
+                                OP_READ_POISSON_THRESH: begin
+                                    if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < N_IN)) begin
+                                        resp_status    <= STATUS_OK;
+                                        resp_result    <= {21'd0, infer_poisson_thresh[arg0[9:0]]};
+                                        resp_checksum  <= calc_resp_checksum(STATUS_OK, {21'd0, infer_poisson_thresh[arg0[9:0]]});
+                                        response_ready <= 1'b1;
+                                    end else begin
+                                        resp_status    <= STATUS_BAD_PACKET;
+                                        // [31:24]=reason, [23:16]=opcode, [15:0]=arg0[15:0]
+                                        resp_result    <= {8'h13, req_opcode, arg0[15:0]};
+                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {8'h13, req_opcode, arg0[15:0]});
+                                        response_ready <= 1'b1;
+                                    end
+                                end
+                                OP_READ_INFER_DEBUG: begin
+                                    if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < 32'sd12)) begin
+                                        logic signed [31:0] dbg_value;
+                                        resp_status <= STATUS_OK;
+                                        case (arg0[4:0])
+                                            5'd0: dbg_value = infer_dbg_total_input_spikes;
+                                            5'd1: dbg_value = infer_dbg_total_syn_hits;
+                                            5'd2: dbg_value = infer_dbg_last_step_input_spikes;
+                                            5'd3: dbg_value = infer_dbg_first_step_input_spikes;
+                                            5'd4: dbg_value = infer_dbg_first_step_hits_n0;
+                                            5'd5: dbg_value = infer_dbg_first_step_hits_n3;
+                                            5'd6: dbg_value = infer_dbg_first_step_hits_n7;
+                                            5'd7: dbg_value = infer_total_spikes;
+                                            5'd8: dbg_value = infer_steps_target;
+                                            5'd9: dbg_value = {16'd0, infer_step_idx};
+                                            5'd10: dbg_value = {29'd0, infer_state};
+                                            default: dbg_value = raw_image0_sum_u8;
+                                        endcase
+                                        resp_result    <= dbg_value;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_OK, dbg_value);
+                                        response_ready <= 1'b1;
+                                    end else begin
+                                        resp_status    <= STATUS_BAD_PACKET;
+                                        // [31:24]=reason, [23:16]=opcode, [15:0]=arg0[15:0]
+                                        resp_result    <= {BADDBG_READ_INFER_DBG, req_opcode, arg0[15:0]};
+                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {BADDBG_READ_INFER_DBG, req_opcode, arg0[15:0]});
                                         response_ready <= 1'b1;
                                     end
                                 end
@@ -533,8 +667,9 @@ module top_level(
                     if (SD_CD_N != 1'b0) begin
                         sd_copy_active <= 1'b0;
                         resp_status    <= STATUS_BAD_PACKET;
-                        resp_result    <= 32'sd0;
-                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                        // [31:24]=reason, [23:16]=opcode, [15]=SD_CD_N, [4:0]=sd_status
+                        resp_result    <= {BADDBG_SD_CD_N, OP_SD_TO_DDR_COPY, SD_CD_N, 10'd0, sd_status};
+                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {BADDBG_SD_CD_N, OP_SD_TO_DDR_COPY, SD_CD_N, 10'd0, sd_status});
                         response_ready <= 1'b1;
                     end else if (sd_ready) begin
                         sd_address    <= sd_copy_lba;
@@ -548,8 +683,9 @@ module top_level(
                         if (sd_wait_counter == 24'hFFFFFF) begin
                             sd_copy_active <= 1'b0;
                             resp_status    <= STATUS_BAD_PACKET;
-                            resp_result    <= 32'sd0;
-                            resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                            // [31:24]=reason, [23:16]=opcode, [15:0]=wait_counter[15:0]
+                            resp_result    <= {BADDBG_SD_WAIT_TO, OP_SD_TO_DDR_COPY, sd_wait_counter[15:0]};
+                            resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {BADDBG_SD_WAIT_TO, OP_SD_TO_DDR_COPY, sd_wait_counter[15:0]});
                             response_ready <= 1'b1;
                         end else begin
                             sd_wait_counter <= sd_wait_counter + 24'd1;
@@ -590,8 +726,9 @@ module top_level(
                                 sd_copy_active <= 1'b0;
                                 sd_in_read     <= 1'b0;
                                 resp_status    <= STATUS_BAD_PACKET;
-                                resp_result    <= 32'sd0;
-                                resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                                // [31:24]=reason, [23:16]=opcode, [15:0]=file_bytes_seen[15:0]
+                                resp_result    <= {BADDBG_SD_BAD_HEADER, OP_SD_TO_DDR_COPY, sd_file_bytes_seen[15:0]};
+                                resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {BADDBG_SD_BAD_HEADER, OP_SD_TO_DDR_COPY, sd_file_bytes_seen[15:0]});
                                 response_ready <= 1'b1;
                             end
                         end
@@ -599,13 +736,15 @@ module top_level(
                         if (
                             sd_header_done &&
                             (sd_file_bytes_seen >= (32'd20 + raw_num_images)) &&
-                            (raw_image0_capture_idx < 7'd98)
+                            (raw_bytes_per_image == 32'd784) &&
+                            (raw_image0_capture_idx < 10'd784)
                         ) begin
-                            raw_image0_bits[raw_image0_capture_idx] <= sd_dout;
-                            if (raw_image0_capture_idx == 7'd97) begin
+                            raw_image0_u8[raw_image0_capture_idx] <= sd_dout;
+                            raw_image0_sum_u8 <= raw_image0_sum_u8 + {24'd0, sd_dout};
+                            if (raw_image0_capture_idx == 10'd783) begin
                                 raw_image0_valid <= 1'b1;
                             end
-                            raw_image0_capture_idx <= raw_image0_capture_idx + 7'd1;
+                            raw_image0_capture_idx <= raw_image0_capture_idx + 10'd1;
                         end
 
                         case (sd_pack_idx)
@@ -657,8 +796,9 @@ module top_level(
                         end else if (sd_use_sector_limit && (sd_copy_sectors_left == 32'd1)) begin
                             sd_copy_active <= 1'b0;
                             resp_status    <= STATUS_BAD_PACKET;
-                            resp_result    <= 32'sd0;
-                            resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                            // [31:24]=reason, [23:16]=opcode, [15:0]=sectors_left[15:0]
+                            resp_result    <= {BADDBG_SD_SECTOR_END, OP_SD_TO_DDR_COPY, sd_copy_sectors_left[15:0]};
+                            resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {BADDBG_SD_SECTOR_END, OP_SD_TO_DDR_COPY, sd_copy_sectors_left[15:0]});
                             response_ready <= 1'b1;
                         end
                         sd_byte_count <= 9'd0;
@@ -670,49 +810,135 @@ module top_level(
             end
 
             if (infer_active && !response_ready) begin
-                if (infer_input_idx < N_IN) begin
-                    if (
-                        get_image0_bit(infer_input_idx) &&
-                        (((infer_input_idx + infer_neuron_idx) & 10'd3) == 10'd0)
-                    ) begin
-                        infer_accum <= infer_accum + FXP_INPUT_W;
-                    end
-                    infer_input_idx <= infer_input_idx + 10'd1;
-                end else begin
-                    logic signed [31:0] v_next;
-                    logic spike_now;
-                    v_next = $signed(($signed(infer_v_state[infer_neuron_idx]) * $signed(FXP_ALPHA)) >>> 16)
-                           + $signed(infer_accum);
-                    spike_now = (v_next >= FXP_THRESH);
-
-                    if (spike_now) begin
-                        infer_v_state[infer_neuron_idx] <= v_next - FXP_THRESH;
-                        infer_spike_count[infer_neuron_idx] <= infer_spike_count[infer_neuron_idx] + 16'd1;
-                        infer_total_spikes <= infer_total_spikes + 32'd1;
-                    end else begin
-                        infer_v_state[infer_neuron_idx] <= v_next;
+                case (infer_state)
+                    INFER_PREP_DIV_START: begin
+                        if (infer_prep_idx < N_IN) begin
+                            if (!infer_div_busy) begin
+                                infer_dividend <= POISSON_NUM_CONST * {24'd0, raw_image0_u8[infer_prep_idx]};
+                                infer_divisor  <= raw_image0_sum_u8;
+                                infer_div_valid <= 1'b1;
+                                infer_state <= INFER_PREP_DIV_WAIT;
+                            end
+                        end else begin
+                            infer_state <= INFER_GEN_INPUT_SPIKES;
+                            infer_input_idx <= 10'd0;
+                            infer_neuron_idx <= 7'd0;
+                            infer_accum <= neuron_bias(7'd0);
+                        end
                     end
 
-                    infer_input_idx <= 10'd0;
-                    if (infer_neuron_idx == (N_NEURONS - 1)) begin
-                        infer_neuron_idx <= 7'd0;
-                        if ((infer_step_idx + 16'd1) >= infer_steps_target[15:0]) begin
+                    INFER_PREP_DIV_WAIT: begin
+                        if (infer_div_out_valid) begin
+                            if (infer_div_q[31:11] != 0) begin
+                                infer_poisson_thresh[infer_prep_idx] <= RNG_MAX;
+                            end else if (infer_div_q[10:0] > RNG_MAX) begin
+                                infer_poisson_thresh[infer_prep_idx] <= RNG_MAX;
+                            end else begin
+                                infer_poisson_thresh[infer_prep_idx] <= infer_div_q[10:0];
+                            end
+                            infer_prep_idx <= infer_prep_idx + 10'd1;
+                            infer_state <= INFER_PREP_DIV_START;
+                        end else if (infer_div_err) begin
                             infer_active <= 1'b0;
-                            resp_status <= STATUS_OK;
-                            resp_result <= infer_total_spikes + (spike_now ? 32'd1 : 32'd0);
-                            resp_checksum <= calc_resp_checksum(
-                                STATUS_OK,
-                                infer_total_spikes + (spike_now ? 32'd1 : 32'd0)
-                            );
+                            infer_state <= INFER_IDLE;
+                            resp_status <= STATUS_BAD_PACKET;
+                            resp_result <= 32'sd0;
+                            resp_checksum <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
                             response_ready <= 1'b1;
                         end
-                        infer_step_idx <= infer_step_idx + 16'd1;
-                        infer_accum <= neuron_bias(7'd0);
-                    end else begin
-                        infer_neuron_idx <= infer_neuron_idx + 7'd1;
-                        infer_accum <= neuron_bias(infer_neuron_idx + 7'd1);
                     end
-                end
+
+                    INFER_GEN_INPUT_SPIKES: begin
+                        logic [31:0] rng_next;
+                        logic spike_in_now;
+                        rng_next = ($unsigned(infer_rng_state) * LCG_A) + LCG_C;
+                        spike_in_now = (rng_next[31:21] < infer_poisson_thresh[infer_input_idx]);
+                        infer_rng_state <= rng_next;
+                        infer_input_spike[infer_input_idx] <= spike_in_now;
+                        if (spike_in_now) begin
+                            infer_dbg_total_input_spikes <= infer_dbg_total_input_spikes + 32'd1;
+                            infer_dbg_curr_step_input_spikes <= infer_dbg_curr_step_input_spikes + 32'd1;
+                        end
+                        if (infer_input_idx == (N_IN - 1)) begin
+                            infer_dbg_last_step_input_spikes <=
+                                infer_dbg_curr_step_input_spikes + (spike_in_now ? 32'd1 : 32'd0);
+                            if (infer_step_idx == 16'd0) begin
+                                infer_dbg_first_step_input_spikes <=
+                                    infer_dbg_curr_step_input_spikes + (spike_in_now ? 32'd1 : 32'd0);
+                            end
+                            infer_dbg_curr_step_input_spikes <= 32'd0;
+                            infer_input_idx <= 10'd0;
+                            infer_state <= INFER_ACCUM_NEURON;
+                        end else begin
+                            infer_input_idx <= infer_input_idx + 10'd1;
+                        end
+                    end
+
+                    INFER_ACCUM_NEURON: begin
+                        if (infer_input_idx < N_IN) begin
+                            if (
+                                infer_input_spike[infer_input_idx] &&
+                                (((infer_input_idx + infer_neuron_idx) & 10'd3) == 10'd0)
+                            ) begin
+                                infer_accum <= infer_accum + FXP_INPUT_W;
+                                infer_dbg_total_syn_hits <= infer_dbg_total_syn_hits + 32'd1;
+                                if (infer_step_idx == 16'd0) begin
+                                    if (infer_neuron_idx == 7'd0) begin
+                                        infer_dbg_first_step_hits_n0 <= infer_dbg_first_step_hits_n0 + 32'd1;
+                                    end
+                                    if (infer_neuron_idx == 7'd3) begin
+                                        infer_dbg_first_step_hits_n3 <= infer_dbg_first_step_hits_n3 + 32'd1;
+                                    end
+                                    if (infer_neuron_idx == 7'd7) begin
+                                        infer_dbg_first_step_hits_n7 <= infer_dbg_first_step_hits_n7 + 32'd1;
+                                    end
+                                end
+                            end
+                            infer_input_idx <= infer_input_idx + 10'd1;
+                        end else begin
+                            logic signed [31:0] v_next;
+                            logic spike_now;
+                            v_next = $signed(($signed(infer_v_state[infer_neuron_idx]) * $signed(FXP_ALPHA)) >>> 16)
+                                   + $signed(infer_accum);
+                            spike_now = (v_next >= FXP_THRESH);
+
+                            if (spike_now) begin
+                                infer_v_state[infer_neuron_idx] <= v_next - FXP_THRESH;
+                                infer_spike_count[infer_neuron_idx] <= infer_spike_count[infer_neuron_idx] + 16'd1;
+                                infer_total_spikes <= infer_total_spikes + 32'd1;
+                            end else begin
+                                infer_v_state[infer_neuron_idx] <= v_next;
+                            end
+
+                            infer_input_idx <= 10'd0;
+                            if (infer_neuron_idx == (N_NEURONS - 1)) begin
+                                infer_neuron_idx <= 7'd0;
+                                if ((infer_step_idx + 16'd1) >= infer_steps_target[15:0]) begin
+                                    infer_active <= 1'b0;
+                                    infer_state <= INFER_IDLE;
+                                    resp_status <= STATUS_OK;
+                                    resp_result <= infer_total_spikes + (spike_now ? 32'd1 : 32'd0);
+                                    resp_checksum <= calc_resp_checksum(
+                                        STATUS_OK,
+                                        infer_total_spikes + (spike_now ? 32'd1 : 32'd0)
+                                    );
+                                    response_ready <= 1'b1;
+                                end else begin
+                                    infer_step_idx <= infer_step_idx + 16'd1;
+                                    infer_state <= INFER_GEN_INPUT_SPIKES;
+                                end
+                                infer_accum <= neuron_bias(7'd0);
+                            end else begin
+                                infer_neuron_idx <= infer_neuron_idx + 7'd1;
+                                infer_accum <= neuron_bias(infer_neuron_idx + 7'd1);
+                            end
+                        end
+                    end
+
+                    default: begin
+                        infer_state <= INFER_IDLE;
+                    end
+                endcase
             end
 
             case (tx_state)
