@@ -1,0 +1,51 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
+---------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
+| Date         : Wed Oct 15 16:58:34 2025
+| Host         : eecs-digital-02 running 64-bit Ubuntu 24.04.3 LTS
+| Command      : report_utilization -file obj/post_synth_util.rpt -hierarchical -hierarchical_depth 4
+| Design       : top_level
+| Device       : xc7s50csga324-1
+| Speed File   : -1
+| Design State : Synthesized
+---------------------------------------------------------------------------------------------------------------------------------------------
+
+Utilization Design Information
+
+Table of Contents
+-----------------
+1. Utilization by Hierarchy
+
+1. Utilization by Hierarchy
+---------------------------
+
++--------------------------------+------------------------------+------------+------------+---------+------+------+--------+--------+------------+
+|            Instance            |            Module            | Total LUTs | Logic LUTs | LUTRAMs | SRLs |  FFs | RAMB36 | RAMB18 | DSP Blocks |
++--------------------------------+------------------------------+------------+------------+---------+------+------+--------+--------+------------+
+| top_level                      |                        (top) |       4281 |       4257 |      24 |    0 | 4148 |     36 |      1 |          7 |
+|   (top_level)                  |                        (top) |          4 |          4 |       0 |    0 |  191 |      0 |      0 |          0 |
+|   com_m                        |               center_of_mass |        223 |        223 |       0 |    0 |  418 |      0 |      0 |          0 |
+|     (com_m)                    |               center_of_mass |         35 |         35 |       0 |    0 |  240 |      0 |      0 |          0 |
+|     div_x                      |                      divider |         94 |         94 |       0 |    0 |   90 |      0 |      0 |          0 |
+|     div_y                      |                    divider_4 |         94 |         94 |       0 |    0 |   88 |      0 |      0 |          0 |
+|   crw                          |             camera_registers |        132 |        132 |       0 |    0 |  104 |      0 |      0 |          0 |
+|     sccb_c                     |                   i2c_master |        108 |        108 |       0 |    0 |   53 |      0 |      0 |          0 |
+|   highdef_fb                   | high_definition_frame_buffer |       3429 |       3405 |      24 |    0 | 3240 |      4 |      0 |          0 |
+|     unstacker_inst             |                    unstacker |        140 |        140 |       0 |    0 |  133 |      0 |      0 |          0 |
+|     camera_data_fifo           |             clockdomain_fifo |        145 |        145 |       0 |    0 |  234 |      2 |      0 |          0 |
+|       xpm_fifo_axis_inst       |             xpm_fifo_axis__1 |        144 |        144 |       0 |    0 |  234 |      2 |      0 |          0 |
+|         xpm_fifo_base_inst     |             xpm_fifo_base__1 |        142 |        142 |       0 |    0 |  231 |      2 |      0 |          0 |
+|     ddr3_top                   |                     ddr3_top |       2836 |       2836 |       0 |    0 | 2208 |      0 |      0 |          0 |
+|       ddr3_controller_inst     |              ddr3_controller |       2820 |       2820 |       0 |    0 | 2185 |      0 |      0 |          0 |
+|     pdfifo                     |           clockdomain_fifo_5 |        146 |        146 |       0 |    0 |  234 |      2 |      0 |          0 |
+|       xpm_fifo_axis_inst       |                xpm_fifo_axis |        144 |        144 |       0 |    0 |  234 |      2 |      0 |          0 |
+|         xpm_fifo_base_inst     |                xpm_fifo_base |        142 |        142 |       0 |    0 |  231 |      2 |      0 |          0 |
+|     stacker_inst               |                      stacker |         11 |         11 |       0 |    0 |  253 |      0 |      0 |          0 |
+|     traffic_generator_inst     |            traffic_generator |        143 |        119 |      24 |    0 |  178 |      0 |      0 |          0 |
+|       (traffic_generator_inst) |            traffic_generator |         66 |         66 |       0 |    0 |  132 |      0 |      0 |          0 |
+|   nolabel_line160              |            pixel_reconstruct |         46 |         46 |       0 |    0 |   51 |      0 |      0 |          0 |
+|   rgbtoycrcb_m                 |                 rgb_to_ycrcb |         77 |         77 |       0 |    0 |   50 |      0 |      0 |          7 |
+|   vsg                          |                video_sig_gen |        271 |        271 |       0 |    0 |   22 |      0 |      0 |          0 |
++--------------------------------+------------------------------+------------+------------+---------+------+------+--------+--------+------------+
+
+

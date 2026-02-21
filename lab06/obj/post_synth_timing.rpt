@@ -1,0 +1,89 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
+---------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
+| Date         : Wed Oct 15 16:58:34 2025
+| Host         : eecs-digital-02 running 64-bit Ubuntu 24.04.3 LTS
+| Command      : report_timing -file obj/post_synth_timing.rpt
+| Design       : top_level
+| Device       : 7s50-csga324
+| Speed File   : -1  PRODUCTION 1.23 2018-06-13
+| Design State : Synthesized
+---------------------------------------------------------------------------------------------------------------------------------------------
+
+Timing Report
+
+Slack (VIOLATED) :        -0.388ns  (required time - arrival time)
+  Source:                 crw/sccb_c/delay_reg_reg[13]/C
+                            (rising edge-triggered cell FDRE clocked by clk_camera_clk_wiz_0  {rise@0.000ns fall@2.500ns period=5.000ns})
+  Destination:            crw/sccb_c/delay_reg_reg[0]/CE
+                            (rising edge-triggered cell FDRE clocked by clk_camera_clk_wiz_0  {rise@0.000ns fall@2.500ns period=5.000ns})
+  Path Group:             clk_camera_clk_wiz_0
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            5.000ns  (clk_camera_clk_wiz_0 rise@5.000ns - clk_camera_clk_wiz_0 rise@0.000ns)
+  Data Path Delay:        4.974ns  (logic 1.371ns (27.563%)  route 3.603ns (72.437%))
+  Logic Levels:           6  (LUT2=1 LUT4=1 LUT5=1 LUT6=3)
+  Clock Path Skew:        -0.145ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    -2.279ns = ( 2.721 - 5.000 ) 
+    Source Clock Delay      (SCD):    -1.604ns
+    Clock Pessimism Removal (CPR):    0.530ns
+  Clock Uncertainty:      0.067ns  ((TSJ^2 + DJ^2)^1/2) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Discrete Jitter          (DJ):    0.113ns
+    Phase Error              (PE):    0.000ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk_camera_clk_wiz_0 rise edge)
+                                                      0.000     0.000 r  
+    N15                                               0.000     0.000 r  clk_100mhz (IN)
+                         net (fo=0)                   0.000     0.000    lcw/clk_in1
+    N15                  IBUF (Prop_ibuf_I_O)         1.440     1.440 r  lcw/clkin1_ibufg/O
+                         net (fo=1, unplaced)         0.584     2.024    lcw/clk_in1_clk_wiz_0
+                         MMCME2_ADV (Prop_mmcme2_adv_CLKIN1_CLKOUT3)
+                                                     -5.108    -3.083 r  lcw/mmcm_adv_inst/CLKOUT3
+                         net (fo=1, unplaced)         0.800    -2.284    lcw/clk_camera_clk_wiz_0
+                         BUFG (Prop_bufg_I_O)         0.096    -2.188 r  lcw/clkout4_buf/O
+                         net (fo=677, unplaced)       0.584    -1.604    crw/sccb_c/clk_camera
+                         FDRE                                         r  crw/sccb_c/delay_reg_reg[13]/C
+  -------------------------------------------------------------------    -------------------
+                         FDRE (Prop_fdre_C_Q)         0.456    -1.148 r  crw/sccb_c/delay_reg_reg[13]/Q
+                         net (fo=3, unplaced)         0.759    -0.389    crw/sccb_c/delay_reg[13]
+                         LUT4 (Prop_lut4_I1_O)        0.295    -0.094 r  crw/sccb_c/delay_reg[0]_i_5/O
+                         net (fo=1, unplaced)         0.449     0.355    crw/sccb_c/delay_reg[0]_i_5_n_0
+                         LUT5 (Prop_lut5_I4_O)        0.124     0.479 r  crw/sccb_c/delay_reg[0]_i_4/O
+                         net (fo=1, unplaced)         0.449     0.928    crw/sccb_c/delay_reg[0]_i_4_n_0
+                         LUT6 (Prop_lut6_I5_O)        0.124     1.052 r  crw/sccb_c/delay_reg[0]_i_2/O
+                         net (fo=2, unplaced)         0.460     1.512    crw/sccb_c/delay_reg[0]_i_2_n_0
+                         LUT2 (Prop_lut2_I0_O)        0.124     1.636 r  crw/sccb_c/FSM_sequential_phy_state_reg[3]_i_3/O
+                         net (fo=19, unplaced)        0.508     2.144    crw/sccb_c/FSM_sequential_phy_state_reg[3]_i_3_n_0
+                         LUT6 (Prop_lut6_I2_O)        0.124     2.268 r  crw/sccb_c/delay_reg[16]_i_3/O
+                         net (fo=1, unplaced)         0.449     2.717    crw/sccb_c/delay_reg[16]_i_3_n_0
+                         LUT6 (Prop_lut6_I5_O)        0.124     2.841 r  crw/sccb_c/delay_reg[16]_i_1/O
+                         net (fo=17, unplaced)        0.529     3.370    crw/sccb_c/delay_reg[16]_i_1_n_0
+                         FDRE                                         r  crw/sccb_c/delay_reg_reg[0]/CE
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk_camera_clk_wiz_0 rise edge)
+                                                      5.000     5.000 r  
+    N15                                               0.000     5.000 r  clk_100mhz (IN)
+                         net (fo=0)                   0.000     5.000    lcw/clk_in1
+    N15                  IBUF (Prop_ibuf_I_O)         1.370     6.370 r  lcw/clkin1_ibufg/O
+                         net (fo=1, unplaced)         0.439     6.809    lcw/clk_in1_clk_wiz_0
+                         MMCME2_ADV (Prop_mmcme2_adv_CLKIN1_CLKOUT3)
+                                                     -5.378     1.431 r  lcw/mmcm_adv_inst/CLKOUT3
+                         net (fo=1, unplaced)         0.760     2.191    lcw/clk_camera_clk_wiz_0
+                         BUFG (Prop_bufg_I_O)         0.091     2.282 r  lcw/clkout4_buf/O
+                         net (fo=677, unplaced)       0.439     2.721    crw/sccb_c/clk_camera
+                         FDRE                                         r  crw/sccb_c/delay_reg_reg[0]/C
+                         clock pessimism              0.530     3.251    
+                         clock uncertainty           -0.067     3.185    
+                         FDRE (Setup_fdre_C_CE)      -0.202     2.983    crw/sccb_c/delay_reg_reg[0]
+  -------------------------------------------------------------------
+                         required time                          2.983    
+                         arrival time                          -3.370    
+  -------------------------------------------------------------------
+                         slack                                 -0.388    
+
+
+
+

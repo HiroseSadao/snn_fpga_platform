@@ -1,0 +1,6 @@
+<testsuites name="results">
+  <testsuite name="all" package="all">
+    <property name="random_seed" value="1760559978" />
+    <testcase name="command_fifo_spec_test" classname="FIFO_test" file="C:\Users\kamer\Documents\2025年度東大\MIT留学\留学後\digital_systems_laboratory\lab06\sim\FIFO_test.py" lineno="25" time="0.013947486877441406" sim_time_ns="1370.001" ratio_time="98225.65255220512" />
+  </testsuite>
+</testsuites>
