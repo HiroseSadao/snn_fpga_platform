@@ -1,0 +1,78 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
+---------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
+| Date         : Sat Feb 21 00:12:07 2026
+| Host         : eecs-digital-10 running 64-bit Ubuntu 24.04.3 LTS
+| Command      : report_timing -file obj/post_route_timing.rpt
+| Design       : top_level
+| Device       : 7s50-csga324
+| Speed File   : -1  PRODUCTION 1.23 2018-06-13
+| Design State : Routed
+---------------------------------------------------------------------------------------------------------------------------------------------
+
+Timing Report
+
+Slack (MET) :             4.858ns  (required time - arrival time)
+  Source:                 u_uart_rx/o_rx_byte_reg[4]/C
+                            (rising edge-triggered cell FDRE clocked by gclk  {rise@0.000ns fall@4.000ns period=10.000ns})
+  Destination:            resp_checksum_reg[5]/D
+                            (rising edge-triggered cell FDRE clocked by gclk  {rise@0.000ns fall@4.000ns period=10.000ns})
+  Path Group:             gclk
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            10.000ns  (gclk rise@10.000ns - gclk rise@0.000ns)
+  Data Path Delay:        5.165ns  (logic 1.445ns (27.976%)  route 3.720ns (72.024%))
+  Logic Levels:           4  (LUT3=1 LUT4=1 LUT5=1 LUT6=1)
+  Clock Path Skew:        0.029ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    5.011ns = ( 15.011 - 10.000 ) 
+    Source Clock Delay      (SCD):    5.248ns
+    Clock Pessimism Removal (CPR):    0.266ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock gclk rise edge)       0.000     0.000 r  
+    N15                                               0.000     0.000 r  clk_100mhz (IN)
+                         net (fo=0)                   0.000     0.000    clk_100mhz
+    N15                  IBUF (Prop_ibuf_I_O)         1.440     1.440 r  clk_100mhz_IBUF_inst/O
+                         net (fo=1, routed)           1.972     3.412    clk_100mhz_IBUF
+    BUFGCTRL_X0Y0        BUFG (Prop_bufg_I_O)         0.096     3.508 r  clk_100mhz_IBUF_BUFG_inst/O
+                         net (fo=235, routed)         1.740     5.248    u_uart_rx/CLK
+    SLICE_X8Y105         FDRE                                         r  u_uart_rx/o_rx_byte_reg[4]/C
+  -------------------------------------------------------------------    -------------------
+    SLICE_X8Y105         FDRE (Prop_fdre_C_Q)         0.518     5.766 r  u_uart_rx/o_rx_byte_reg[4]/Q
+                         net (fo=7, routed)           1.555     7.321    u_uart_rx/o_rx_byte_reg[7]_0[4]
+    SLICE_X5Y106         LUT4 (Prop_lut4_I2_O)        0.152     7.473 r  u_uart_rx/resp_status[5]_i_9/O
+                         net (fo=1, routed)           0.577     8.050    u_uart_rx/resp_status[5]_i_9_n_0
+    SLICE_X5Y105         LUT6 (Prop_lut6_I1_O)        0.326     8.376 r  u_uart_rx/resp_status[5]_i_5/O
+                         net (fo=3, routed)           0.567     8.943    u_uart_rx/resp_status[5]_i_5_n_0
+    SLICE_X5Y106         LUT3 (Prop_lut3_I2_O)        0.117     9.060 r  u_uart_rx/resp_status[5]_i_2/O
+                         net (fo=39, routed)          1.021    10.081    u_uart_rx/resp_status[2]
+    SLICE_X0Y108         LUT5 (Prop_lut5_I0_O)        0.332    10.413 r  u_uart_rx/resp_checksum[5]_i_1/O
+                         net (fo=1, routed)           0.000    10.413    u_uart_rx_n_30
+    SLICE_X0Y108         FDRE                                         r  resp_checksum_reg[5]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock gclk rise edge)      10.000    10.000 r  
+    N15                                               0.000    10.000 r  clk_100mhz (IN)
+                         net (fo=0)                   0.000    10.000    clk_100mhz
+    N15                  IBUF (Prop_ibuf_I_O)         1.370    11.370 r  clk_100mhz_IBUF_inst/O
+                         net (fo=1, routed)           1.868    13.238    clk_100mhz_IBUF
+    BUFGCTRL_X0Y0        BUFG (Prop_bufg_I_O)         0.091    13.329 r  clk_100mhz_IBUF_BUFG_inst/O
+                         net (fo=235, routed)         1.682    15.011    clk_100mhz_IBUF_BUFG
+    SLICE_X0Y108         FDRE                                         r  resp_checksum_reg[5]/C
+                         clock pessimism              0.266    15.277    
+                         clock uncertainty           -0.035    15.242    
+    SLICE_X0Y108         FDRE (Setup_fdre_C_D)        0.029    15.271    resp_checksum_reg[5]
+  -------------------------------------------------------------------
+                         required time                         15.271    
+                         arrival time                         -10.413    
+  -------------------------------------------------------------------
+                         slack                                  4.858    
+
+
+
+
