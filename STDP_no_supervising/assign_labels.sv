@@ -204,7 +204,7 @@ module assign_labels #(
                 S_RATE_DIV_WAIT: begin
                     if (div_valid_out) begin
                         avg_fixed_reg <= div_quotient;
-                        rates[neuron_idx][label_idx] <= rates[neuron_idx][label_idx] + div_quotient;
+                        rates[neuron_idx][label_idx] <= div_quotient;
                         if (neuron_idx == N_NEURONS-1) begin
                             if (label_idx == N_LABELS-1) begin
                                 neuron_idx <= '0;

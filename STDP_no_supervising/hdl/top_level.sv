@@ -234,6 +234,7 @@ module top_level(
     logic pred_valid;
     logic [LABEL_BITS-1:0] pred_label;
     logic [LABEL_BITS-1:0] true_label;
+    logic [LABEL_BITS-1:0] sample_label_latched;
 
     logic [15:0] exc_counts [0:N_NEURONS-1];
     logic [$clog2(N_NEURONS):0] count_idx;
@@ -740,6 +741,7 @@ module top_level(
             pred_sample_begin <= 1'b0;
             pred_sample_done <= 1'b0;
             pred_sample_label <= '0;
+            sample_label_latched <= '0;
             pred_count_we <= 1'b0;
             pred_count_neuron <= '0;
             pred_count_value <= '0;
@@ -752,6 +754,7 @@ module top_level(
                 true_count_by_label[nn] <= 32'd0;
                 tp_count_by_label[nn] <= 32'd0;
             end
+            sample_label_latched <= '0;
         end else begin
             assign_start <= 1'b0;
             pred_start <= 1'b0;
@@ -761,6 +764,7 @@ module top_level(
             pred_sample_done <= 1'b0;
             pred_count_we <= 1'b0;
             bfifo_rd_en <= 1'b0;
+            sample_label_latched <= labels_mem_q;
 
             hold_input <= write_counts_active | assign_running | pred_running |
                           (run_state == RUN_IDLE) | (run_state == RUN_TRAIN_DONE) | (run_state == RUN_EVAL_DONE);
@@ -785,6 +789,7 @@ module top_level(
                     true_count_by_label[nn] <= 32'd0;
                     tp_count_by_label[nn] <= 32'd0;
                 end
+                sample_label_latched <= '0;
             end else if (eval_start_pulse) begin
                 for (nn = 0; nn < N_NEURONS; nn = nn + 1) begin
                     exc_counts[nn] <= '0;
@@ -805,6 +810,7 @@ module top_level(
                 end
                 pred_start <= 1'b1;
                 pred_running <= 1'b1;
+                sample_label_latched <= '0;
             end
 
             // Pop blank-flag FIFO on each output
@@ -837,8 +843,8 @@ module top_level(
                         end
                         write_counts_active <= 1'b1;
                         count_idx <= '0;
-                        assign_sample_label <= labels_mem_q;
-                        pred_sample_label <= labels_mem_q;
+                        assign_sample_label <= sample_label_latched;
+                        pred_sample_label <= sample_label_latched;
                     end else begin
                         time_idx_out <= time_idx_out + 1'b1;
                     end

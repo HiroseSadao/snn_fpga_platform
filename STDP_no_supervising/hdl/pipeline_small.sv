@@ -302,14 +302,6 @@ module pipeline_small #(
         end
     endfunction
 
-    always_ff @(posedge clk) begin
-        if (rst) begin
-            mul_result <= '0;
-        end else begin
-            mul_result <= (mul_a * mul_b) >>> FP_SHIFT;
-        end
-    end
-
     // Packed state RAM (XPM in synthesis, behavioral in sim)
 `ifdef SYNTHESIS
     xpm_memory_sdpram #(
@@ -449,7 +441,7 @@ module pipeline_small #(
 
     logic signed [31:0] mul_a;
     logic signed [31:0] mul_b;
-    logic signed [31:0] mul_result;
+    wire  signed [31:0] mul_result = (mul_a * mul_b) >>> FP_SHIFT;
     logic signed [31:0] div_result;
 
     logic signed [31:0] num_exc_val;

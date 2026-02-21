@@ -27,6 +27,7 @@ module assign_labels_stream #(
 
     logic [31:0] n_labeled  [0:N_LABELS-1];
     logic [LABEL_BITS-1:0] current_label;
+    logic clear_n_labeled;
 
     // sum_spikes BRAM (packed as [neuron][label])
     logic                 sum_wr_en;
@@ -150,6 +151,11 @@ module assign_labels_stream #(
             acc_pending <= 1'b0;
         end else begin
             acc_rd_en <= 1'b0;
+            if (clear_n_labeled) begin
+                for (l = 0; l < N_LABELS; l = l + 1) begin
+                    n_labeled[l] <= '0;
+                end
+            end
 
             if (sample_commit) begin
                 current_label <= sample_label;
@@ -188,6 +194,7 @@ module assign_labels_stream #(
     logic [LABEL_BITS-1:0] best_label;
     logic [31:0] best_rate;
     logic [31:0] rate_val;
+    logic start_pending;
 
     always_ff @(posedge clk) begin
         if (rst) begin
@@ -201,19 +208,31 @@ module assign_labels_stream #(
             div_divisor <= '0;
             div_valid_in <= 1'b0;
             clear_idx <= '0;
+            start_pending <= 1'b0;
+            clear_n_labeled <= 1'b0;
             for (i = 0; i < N_NEURONS; i = i + 1) begin
                 assignments[i*LABEL_BITS +: LABEL_BITS] <= '0;
             end
         end else begin
             done <= 1'b0;
             div_valid_in <= 1'b0;
+            clear_n_labeled <= 1'b0;
 
             case (state)
                 S_CLEAR: begin
                     // Clear sum_spikes BRAM after reset
                     if (clear_idx == SUM_DEPTH-1) begin
                         clear_idx <= '0;
-                        state <= S_IDLE;
+                        if (start_pending) begin
+                            start_pending <= 1'b0;
+                            neuron_idx <= '0;
+                            label_idx <= '0;
+                            best_label <= '0;
+                            best_rate <= '0;
+                            state <= S_LABEL_INIT;
+                        end else begin
+                            state <= S_IDLE;
+                        end
                     end else begin
                         clear_idx <= clear_idx + 1'b1;
                     end
@@ -221,11 +240,10 @@ module assign_labels_stream #(
 
                 S_IDLE: begin
                     if (start) begin
-                        neuron_idx <= '0;
-                        label_idx <= '0;
-                        best_label <= '0;
-                        best_rate <= '0;
-                        state <= S_LABEL_INIT;
+                        start_pending <= 1'b1;
+                        clear_idx <= '0;
+                        clear_n_labeled <= 1'b1;
+                        state <= S_CLEAR;
                     end
                 end
 

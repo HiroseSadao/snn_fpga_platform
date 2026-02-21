@@ -1,7 +1,7 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 -------------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version     : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date             : Wed Feb 11 00:19:22 2026
+| Date             : Wed Feb 11 01:32:33 2026
 | Host             : eecs-digital-11 running 64-bit Ubuntu 24.04.3 LTS
 | Command          : report_power -file obj/post_route_power.rpt
 | Design           : top_level
@@ -30,7 +30,7 @@ Table of Contents
 ----------
 
 +--------------------------+--------------+
-| Total On-Chip Power (W)  | 0.095        |
+| Total On-Chip Power (W)  | 0.094        |
 | Design Power Budget (W)  | Unspecified* |
 | Power Budget Margin (W)  | NA           |
 | Dynamic (W)              | 0.020        |
@@ -53,20 +53,20 @@ Table of Contents
 | On-Chip                  | Power (W) | Used     | Available | Utilization (%) |
 +--------------------------+-----------+----------+-----------+-----------------+
 | Clocks                   |    <0.001 |        3 |       --- |             --- |
-| Slice Logic              |     0.002 |    47602 |       --- |             --- |
-|   LUT as Logic           |     0.002 |    17867 |     32600 |           54.81 |
+| Slice Logic              |     0.002 |    47339 |       --- |             --- |
+|   LUT as Logic           |     0.002 |    18799 |     32600 |           57.67 |
 |   CARRY4                 |    <0.001 |     1672 |      8150 |           20.52 |
-|   Register               |    <0.001 |    20322 |     65200 |           31.17 |
-|   F7/F8 Muxes            |    <0.001 |     3438 |     32600 |           10.55 |
-|   Others                 |     0.000 |       52 |       --- |             --- |
+|   Register               |    <0.001 |    20385 |     65200 |           31.27 |
+|   F7/F8 Muxes            |    <0.001 |     2789 |     32600 |            8.56 |
+|   Others                 |     0.000 |       53 |       --- |             --- |
 |   LUT as Distributed RAM |     0.000 |      468 |      9600 |            4.88 |
 |   BUFG                   |     0.000 |        1 |        32 |            3.13 |
-| Signals                  |     0.003 |    36839 |       --- |             --- |
+| Signals                  |     0.003 |    37531 |       --- |             --- |
 | Block RAM                |     0.000 |     65.5 |        75 |           87.33 |
 | DSPs                     |     0.002 |       35 |       120 |           29.17 |
 | I/O                      |     0.012 |       62 |       210 |           29.52 |
 | Static Power             |     0.075 |          |           |                 |
-| Total                    |     0.095 |          |           |                 |
+| Total                    |     0.094 |          |           |                 |
 +--------------------------+-----------+----------+-----------+-----------------+
 
 
@@ -145,7 +145,7 @@ Table of Contents
 +--------------------+-----------+
 | top_level          |     0.020 |
 |   u_pipeline_small |     0.004 |
-|   u_sd             |     0.002 |
+|   u_sd             |     0.001 |
 +--------------------+-----------+
 
 
