@@ -193,7 +193,7 @@ module top_level(
     logic [9:0]  infer_input_idx;
     logic [9:0]  infer_prep_idx;
     logic signed [31:0] infer_accum;
-    logic        infer_accum_weight_wait;
+    logic [1:0]  infer_accum_weight_phase;
     logic [16:0] infer_w_rd_addr;
     logic [15:0] infer_w_rd_data;
     (* ram_style = "block" *) logic signed [31:0] infer_g_in_state [0:N_NEURONS-1];
@@ -482,7 +482,7 @@ module top_level(
             infer_input_idx     <= 10'd0;
             infer_prep_idx      <= 10'd0;
             infer_accum         <= 32'sd0;
-            infer_accum_weight_wait <= 1'b0;
+            infer_accum_weight_phase <= 2'd0;
             infer_w_rd_addr     <= 17'd0;
             infer_apply_idx     <= 7'd0;
             infer_sum_c_inh     <= 32'sd0;
@@ -740,7 +740,7 @@ module top_level(
                                         infer_input_idx    <= 10'd0;
                                         infer_prep_idx     <= 10'd0;
                                         infer_accum        <= 32'sd0;
-                                        infer_accum_weight_wait <= 1'b0;
+                                        infer_accum_weight_phase <= 2'd0;
                                         infer_apply_idx    <= 7'd0;
                                         infer_sum_c_inh    <= 32'sd0;
                                         infer_total_spikes <= 32'd0;
@@ -1054,7 +1054,7 @@ module top_level(
 	                            infer_input_idx <= 10'd0;
 	                            infer_neuron_idx <= 7'd0;
 	                            infer_accum <= 32'sd0;
-                                infer_accum_weight_wait <= 1'b0;
+                                infer_accum_weight_phase <= 2'd0;
                         end
                     end
 
@@ -1108,10 +1108,13 @@ module top_level(
                     INFER_ACCUM_NEURON: begin
                         if (infer_input_idx < N_IN) begin
                             logic [16:0] w_idx;
-                            if (!infer_accum_weight_wait) begin
+                            if (infer_accum_weight_phase == 2'd0) begin
                                 w_idx = (infer_neuron_idx * N_IN) + infer_input_idx;
                                 infer_w_rd_addr <= w_idx;
-                                infer_accum_weight_wait <= 1'b1;
+                                infer_accum_weight_phase <= 2'd1;
+                            end else if (infer_accum_weight_phase == 2'd1) begin
+                                // BRAM synchronous read latency fill cycle: data becomes valid next cycle.
+                                infer_accum_weight_phase <= 2'd2;
                             end else begin
                                 if (infer_input_spike[infer_input_idx] && (infer_w_rd_data != 16'd0)) begin
                                     infer_accum <= infer_accum + $signed({16'd0, infer_w_rd_data});
@@ -1129,19 +1132,22 @@ module top_level(
                                     end
                                 end
                                 infer_input_idx <= infer_input_idx + 10'd1;
-                                infer_accum_weight_wait <= 1'b0;
+                                infer_accum_weight_phase <= 2'd0;
                             end
 	                        end else begin
 	                            logic signed [31:0] v_next;
                                 logic signed [31:0] v_prop;
-                                logic signed [31:0] dv_exc;
+                                logic signed [31:0] dv_exc_step;
                                 logic signed [31:0] theta_next;
                                 logic signed [31:0] exc_thresh_now;
                                 logic signed [31:0] g_in_curr;
                                 logic signed [31:0] g_in_state_next;
                                 logic signed [31:0] delayed_g_in;
-                                logic signed [31:0] i_syn_exc;
-                                logic signed [31:0] i_syn_inh;
+                                logic signed [31:0] exc_drive_dt;
+                                logic signed [31:0] inh_drive_dt;
+                                logic signed [31:0] leak_dt;
+                                logic signed [31:0] i_syn_exc_step;
+                                logic signed [31:0] i_syn_inh_step;
 			                            logic spike_now;
                                 logic exc_refractory_ok;
                                 g_in_state_next = $signed(($signed(infer_g_in_state[infer_neuron_idx]) * $signed(FXP_INPUT_G_DECAY)) >>> 16)
@@ -1155,12 +1161,13 @@ module top_level(
                                 infer_g_in_delay1[infer_neuron_idx] <= infer_g_in_delay0[infer_neuron_idx];
                                 infer_g_in_delay0[infer_neuron_idx] <= g_in_curr;
                                 exc_refractory_ok = ((infer_step_idx - infer_exc_last_spike_step[infer_neuron_idx]) > EXC_TREF_STEPS);
-                                i_syn_exc = fxp_mul_s16_16(delayed_g_in, (FXP_EXC_EEXC - infer_v_state[infer_neuron_idx]));
-                                i_syn_inh = fxp_mul_s16_16(infer_g_inh_state[infer_neuron_idx], (FXP_EXC_EINH - infer_v_state[infer_neuron_idx]));
-                                dv_exc = $signed(FXP_EXC_VREST - infer_v_state[infer_neuron_idx])
-                                       + $signed(i_syn_exc)
-                                       + $signed(i_syn_inh);
-	                                v_prop = $signed(infer_v_state[infer_neuron_idx]) + fxp_mul_s16_16(dv_exc, FXP_EXC_DT_OVER_TCM);
+                                exc_drive_dt = fxp_mul_s16_16((FXP_EXC_EEXC - infer_v_state[infer_neuron_idx]), FXP_EXC_DT_OVER_TCM);
+                                inh_drive_dt = fxp_mul_s16_16((FXP_EXC_EINH - infer_v_state[infer_neuron_idx]), FXP_EXC_DT_OVER_TCM);
+                                leak_dt = fxp_mul_s16_16((FXP_EXC_VREST - infer_v_state[infer_neuron_idx]), FXP_EXC_DT_OVER_TCM);
+                                i_syn_exc_step = fxp_mul_s16_16(delayed_g_in, exc_drive_dt);
+                                i_syn_inh_step = fxp_mul_s16_16(infer_g_inh_state[infer_neuron_idx], inh_drive_dt);
+                                dv_exc_step = leak_dt + i_syn_exc_step + i_syn_inh_step;
+	                                v_prop = $signed(infer_v_state[infer_neuron_idx]) + $signed(dv_exc_step);
                                 v_next = exc_refractory_ok ? v_prop : infer_v_state[infer_neuron_idx];
                                 exc_thresh_now = FXP_THRESH_BASE + infer_exc_theta[infer_neuron_idx];
 	                            spike_now = (v_next >= exc_thresh_now);
@@ -1189,7 +1196,7 @@ module top_level(
                             end
 
                             infer_input_idx <= 10'd0;
-                            infer_accum_weight_wait <= 1'b0;
+                            infer_accum_weight_phase <= 2'd0;
 	                            if (infer_neuron_idx == (N_NEURONS - 1)) begin
 	                                infer_neuron_idx <= 7'd0;
 	                                infer_apply_idx <= 7'd0;
@@ -1208,8 +1215,10 @@ module top_level(
 	                        logic signed [31:0] delayed_g_exc;
 	                        logic signed [31:0] v_inh_next;
                             logic signed [31:0] v_inh_prop;
-                            logic signed [31:0] dv_inh;
-                            logic signed [31:0] i_syn_exc_inh;
+                            logic signed [31:0] dv_inh_step;
+                            logic signed [31:0] exc_drive_dt_inh;
+                            logic signed [31:0] leak_dt_inh;
+                            logic signed [31:0] i_syn_exc_step_inh;
 	                        logic s_inh_now;
 	                        logic signed [31:0] c_inh_next;
                             logic inh_refractory_ok;
@@ -1218,9 +1227,11 @@ module top_level(
 	                        infer_g_exc_delay1[infer_apply_idx] <= infer_g_exc_delay0[infer_apply_idx];
 	                        infer_g_exc_delay0[infer_apply_idx] <= g_exc_new;
                             inh_refractory_ok = ((infer_step_idx - infer_inh_last_spike_step[infer_apply_idx]) > INH_TREF_STEPS);
-                            i_syn_exc_inh = fxp_mul_s16_16(delayed_g_exc, (FXP_INH_EEXC - infer_v_inh_state[infer_apply_idx]));
-                            dv_inh = $signed(FXP_INH_VREST - infer_v_inh_state[infer_apply_idx]) + $signed(i_syn_exc_inh);
-                            v_inh_prop = $signed(infer_v_inh_state[infer_apply_idx]) + fxp_mul_s16_16(dv_inh, FXP_INH_DT_OVER_TCM);
+                            exc_drive_dt_inh = fxp_mul_s16_16((FXP_INH_EEXC - infer_v_inh_state[infer_apply_idx]), FXP_INH_DT_OVER_TCM);
+                            leak_dt_inh = fxp_mul_s16_16((FXP_INH_VREST - infer_v_inh_state[infer_apply_idx]), FXP_INH_DT_OVER_TCM);
+                            i_syn_exc_step_inh = fxp_mul_s16_16(delayed_g_exc, exc_drive_dt_inh);
+                            dv_inh_step = leak_dt_inh + i_syn_exc_step_inh;
+                            v_inh_prop = $signed(infer_v_inh_state[infer_apply_idx]) + $signed(dv_inh_step);
                             v_inh_next = inh_refractory_ok ? v_inh_prop : infer_v_inh_state[infer_apply_idx];
 	                        s_inh_now = (v_inh_next >= FXP_INH_THRESH);
 	                        if (s_inh_now) begin
@@ -1269,7 +1280,7 @@ module top_level(
 	                            infer_neuron_idx <= 7'd0;
 	                            infer_input_idx <= 10'd0;
 	                            infer_accum <= 32'sd0;
-                                infer_accum_weight_wait <= 1'b0;
+                                infer_accum_weight_phase <= 2'd0;
 	                        end else begin
 	                            infer_apply_idx <= infer_apply_idx + 7'd1;
 	                        end

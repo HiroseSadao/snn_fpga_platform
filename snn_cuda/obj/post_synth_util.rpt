@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Sun Feb 22 04:59:18 2026
-| Host         : eecs-digital-05 running 64-bit Ubuntu 24.04.3 LTS
+| Date         : Sun Feb 22 05:18:05 2026
+| Host         : eecs-digital-17 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_utilization -file obj/post_synth_util.rpt -hierarchical -hierarchical_depth 4
 | Design       : top_level
 | Device       : xc7s50csga324-1
@@ -22,11 +22,11 @@ Table of Contents
 +---------------------+---------------+------------+------------+---------+------+------+--------+--------+------------+
 |       Instance      |     Module    | Total LUTs | Logic LUTs | LUTRAMs | SRLs |  FFs | RAMB36 | RAMB18 | DSP Blocks |
 +---------------------+---------------+------------+------------+---------+------+------+--------+--------+------------+
-| top_level           |         (top) |       6611 |       4784 |    1827 |    0 | 1661 |     48 |      0 |         23 |
-|   (top_level)       |         (top) |       4845 |       3018 |    1827 |    0 | 1310 |     48 |      0 |         23 |
-|   u_poisson_divider |     divider2b |        249 |        249 |       0 |    0 |  137 |      0 |      0 |          0 |
-|   u_sd_controller   | sd_controller |        768 |        768 |       0 |    0 |  148 |      0 |      0 |          0 |
-|   u_uart_rx         |       uart_rx |        722 |        722 |       0 |    0 |   41 |      0 |      0 |          0 |
+| top_level           |         (top) |       7331 |       5504 |    1827 |    0 | 1650 |     48 |      0 |         23 |
+|   (top_level)       |         (top) |       5521 |       3694 |    1827 |    0 | 1299 |     48 |      0 |         23 |
+|   u_poisson_divider |     divider2b |        233 |        233 |       0 |    0 |  137 |      0 |      0 |          0 |
+|   u_sd_controller   | sd_controller |        734 |        734 |       0 |    0 |  148 |      0 |      0 |          0 |
+|   u_uart_rx         |       uart_rx |        816 |        816 |       0 |    0 |   41 |      0 |      0 |          0 |
 +---------------------+---------------+------------+------------+---------+------+------+--------+--------+------------+
 
 
