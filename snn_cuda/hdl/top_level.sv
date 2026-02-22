@@ -109,9 +109,9 @@ module top_level(
     localparam logic [7:0] BADDBG_READ_INFER_DBG = 8'h14;
     localparam logic [7:0] BADDBG_WRITE_WEIGHT   = 8'h15;
     // Training kernel capability bits (host-visible via OP_TRAIN_QUERY_CAPS)
-    // [0]=query_caps impl, [1]=logical DDR map fixed, [2]=trace opcode reserved,
-    // [3]=tile opcode reserved, [8]=trace kernel exec impl, [9]=tile kernel exec impl.
-    localparam logic [31:0] TRAIN_CAPS_VALUE = 32'h0000000F;
+    // [0]=query_caps impl, [1]=logical DDR map fixed, [2]=trace opcode present,
+    // [3]=tile opcode present, [8]=trace kernel exec impl, [9]=tile kernel exec impl.
+    localparam logic [31:0] TRAIN_CAPS_VALUE = 32'h0000010F;
     // Step1 logical DDR word map contract (future external DDR integration target).
     localparam logic [31:0] TRAIN_BASE_W_Q16_WORDS  = 32'd0;
     localparam logic [31:0] TRAIN_BASE_A_Q16_WORDS  = TRAIN_BASE_W_Q16_WORDS + N_WEIGHTS;
@@ -120,6 +120,10 @@ module top_level(
     localparam logic [31:0] TRAIN_BASE_VSTATE_WORDS = TRAIN_BASE_THETA_WORDS + N_NEURONS;
     localparam logic [31:0] TRAIN_BASE_DELAY_WORDS  = TRAIN_BASE_VSTATE_WORDS + N_NEURONS;
     localparam logic [31:0] TRAIN_BASE_GIN_WORDS    = TRAIN_BASE_DELAY_WORDS + (N_NEURONS * 8);
+    // Fixed training kernel workspaces (host preloads before OP_TRACE_UPDATE)
+    localparam logic [31:0] TRAIN_BASE_XIN_WORK_WORDS    = TRAIN_BASE_GIN_WORDS + N_NEURONS;
+    localparam logic [31:0] TRAIN_BASE_XEXC_WORK_WORDS   = TRAIN_BASE_XIN_WORK_WORDS + N_IN;
+    localparam logic [31:0] TRAIN_BASE_PRELIST_WORK_WORDS= TRAIN_BASE_XEXC_WORK_WORDS + N_NEURONS;
 
     typedef enum logic [2:0] {
         RX_WAIT_SYNC,
@@ -156,6 +160,24 @@ module top_level(
         DDRBR_ISSUE,
         DDRBR_WAIT_ACK
     } ddr_bridge_state_t;
+    typedef enum logic [4:0] {
+        TRK_IDLE,
+        TRK_A_READ_X_REQ,
+        TRK_A_READ_X_WAIT,
+        TRK_A_READ_A_REQ,
+        TRK_A_READ_A_WAIT,
+        TRK_A_WRITE_A_REQ,
+        TRK_A_WRITE_A_WAIT,
+        TRK_B_READ_PRE_REQ,
+        TRK_B_READ_PRE_WAIT,
+        TRK_B_READ_X_REQ,
+        TRK_B_READ_X_WAIT,
+        TRK_B_READ_BT_REQ,
+        TRK_B_READ_BT_WAIT,
+        TRK_B_WRITE_BT_REQ,
+        TRK_B_WRITE_BT_WAIT,
+        TRK_DONE
+    } train_trace_state_t;
 
     rx_state_t rx_state;
     tx_state_t tx_state;
@@ -239,6 +261,7 @@ module top_level(
     logic        ddr_req_from_sd_core;
     logic        ddr_req_from_sd_ddr;
     logic        ddr_req_from_imgload_core;
+    logic        ddr_req_from_train_core;
 
     logic        sd_rd;
     logic        sd_wr;
@@ -290,6 +313,16 @@ module top_level(
     logic        imgload_word_valid;
     logic [31:0] imgload_word_data;
     logic [1:0]  imgload_word_lane;
+    logic        train_trace_active;
+    train_trace_state_t train_trace_state;
+    logic [6:0]  train_winner_idx;
+    logic [9:0]  train_pre_count;
+    logic [9:0]  train_a_idx;
+    logic [9:0]  train_pre_idx;
+    logic [6:0]  train_b_col_idx;
+    logic [9:0]  train_curr_pre;
+    logic [31:0] train_tmp_x_val;
+    logic [31:0] train_tmp_mem_val;
 
     logic        infer_active;
     infer_state_t infer_state;
@@ -756,6 +789,7 @@ module top_level(
             ddr_req_we_core      <= 1'b0;
             ddr_req_from_sd_core <= 1'b0;
             ddr_req_from_imgload_core <= 1'b0;
+            ddr_req_from_train_core <= 1'b0;
             ddr_req_addr_word_core <= 32'd0;
             ddr_req_wdata_core   <= 32'd0;
             ddr_req_wide_core    <= 1'b0;
@@ -810,6 +844,16 @@ module top_level(
             imgload_word_valid   <= 1'b0;
             imgload_word_data    <= 32'd0;
             imgload_word_lane    <= 2'd0;
+            train_trace_active   <= 1'b0;
+            train_trace_state    <= TRK_IDLE;
+            train_winner_idx     <= 7'd0;
+            train_pre_count      <= 10'd0;
+            train_a_idx          <= 10'd0;
+            train_pre_idx        <= 10'd0;
+            train_b_col_idx      <= 7'd0;
+            train_curr_pre       <= 10'd0;
+            train_tmp_x_val      <= 32'd0;
+            train_tmp_mem_val    <= 32'd0;
             infer_active        <= 1'b0;
             infer_state         <= INFER_IDLE;
             infer_steps_target  <= 32'd0;
@@ -899,6 +943,71 @@ module top_level(
                         imgload_word_lane  <= imgload_lane;
                         imgload_addr_word <= imgload_addr_word + 32'd1;
                         imgload_lane <= 2'd0;
+                    end
+                end else if (ddr_req_from_train_core) begin
+                    ddr_req_from_train_core <= 1'b0;
+                    if (ddr_resp_status_async != STATUS_OK) begin
+                        train_trace_active <= 1'b0;
+                        train_trace_state <= TRK_IDLE;
+                        resp_status    <= STATUS_BAD_PACKET;
+                        resp_result    <= 32'sd0;
+                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                        response_ready <= 1'b1;
+                    end else begin
+                        case (train_trace_state)
+                            TRK_A_READ_X_WAIT: begin
+                                train_tmp_x_val <= ddr_resp_rdata_async;
+                                train_trace_state <= TRK_A_READ_A_REQ;
+                            end
+                            TRK_A_READ_A_WAIT: begin
+                                train_tmp_mem_val <= ddr_resp_rdata_async;
+                                train_trace_state <= TRK_A_WRITE_A_REQ;
+                            end
+                            TRK_A_WRITE_A_WAIT: begin
+                                if (train_a_idx == (N_IN - 1)) begin
+                                    train_pre_idx <= 10'd0;
+                                    train_b_col_idx <= 7'd0;
+                                    train_trace_state <= TRK_B_READ_PRE_REQ;
+                                end else begin
+                                    train_a_idx <= train_a_idx + 10'd1;
+                                    train_trace_state <= TRK_A_READ_X_REQ;
+                                end
+                            end
+                            TRK_B_READ_PRE_WAIT: begin
+                                train_curr_pre <= ddr_resp_rdata_async[9:0];
+                                train_b_col_idx <= 7'd0;
+                                train_trace_state <= TRK_B_READ_X_REQ;
+                            end
+                            TRK_B_READ_X_WAIT: begin
+                                train_tmp_x_val <= ddr_resp_rdata_async;
+                                train_trace_state <= TRK_B_READ_BT_REQ;
+                            end
+                            TRK_B_READ_BT_WAIT: begin
+                                train_tmp_mem_val <= ddr_resp_rdata_async;
+                                train_trace_state <= TRK_B_WRITE_BT_REQ;
+                            end
+                            TRK_B_WRITE_BT_WAIT: begin
+                                if (train_b_col_idx == (N_NEURONS - 1)) begin
+                                    if ((train_pre_idx + 10'd1) >= train_pre_count) begin
+                                        train_trace_state <= TRK_DONE;
+                                    end else begin
+                                        train_pre_idx <= train_pre_idx + 10'd1;
+                                        train_trace_state <= TRK_B_READ_PRE_REQ;
+                                    end
+                                end else begin
+                                    train_b_col_idx <= train_b_col_idx + 7'd1;
+                                    train_trace_state <= TRK_B_READ_X_REQ;
+                                end
+                            end
+                            default: begin
+                                train_trace_active <= 1'b0;
+                                train_trace_state <= TRK_IDLE;
+                                resp_status    <= STATUS_BAD_PACKET;
+                                resp_result    <= 32'sd0;
+                                resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                                response_ready <= 1'b1;
+                            end
+                        endcase
                     end
                 end else begin
                     if ((ddr_resp_status_async == STATUS_OK) && ddr_req_we_core) begin
@@ -994,6 +1103,7 @@ module top_level(
                     ddr_req_we_core        <= 1'b1;
                     ddr_req_from_sd_core   <= 1'b1;
                     ddr_req_from_imgload_core <= 1'b0;
+                    ddr_req_from_train_core <= 1'b0;
                     ddr_req_addr_word_core <= sd_sector_ddr_base_word_bank[sd_flush_bank] + {24'd0, sd_ddr_flush_idx};
                     ddr_req_wdata_core     <= sd_sector_word_buf[sd_flush_bank][sd_ddr_flush_idx];
                     ddr_req_wide_core      <= 1'b1;
@@ -1043,6 +1153,7 @@ module top_level(
                     ddr_req_we_core         <= 1'b0;
                     ddr_req_from_sd_core    <= 1'b0;
                     ddr_req_from_imgload_core <= 1'b1;
+                    ddr_req_from_train_core <= 1'b0;
                     ddr_req_addr_word_core  <= imgload_addr_word;
                     ddr_req_wdata_core      <= 32'd0;
                     ddr_req_wide_core       <= 1'b0;
@@ -1054,7 +1165,130 @@ module top_level(
                 end
             end
 
-            if (rx_dv && !response_ready && !memrd_pending && !sd_copy_active && !infer_active && !imgload_active && !ddr_req_pending_core) begin
+            if (train_trace_active && !ddr_req_pending_core && !response_ready && !sd_ddr_flush_active && !imgload_word_valid) begin
+                case (train_trace_state)
+                    TRK_A_READ_X_REQ: begin
+                        ddr_req_pending_core    <= 1'b1;
+                        ddr_req_we_core         <= 1'b0;
+                        ddr_req_from_sd_core    <= 1'b0;
+                        ddr_req_from_imgload_core <= 1'b0;
+                        ddr_req_from_train_core <= 1'b1;
+                        ddr_req_addr_word_core  <= TRAIN_BASE_XIN_WORK_WORDS + {22'd0, train_a_idx};
+                        ddr_req_wdata_core      <= 32'd0;
+                        ddr_req_wide_core       <= 1'b0;
+                        ddr_req_wdata128_core   <= 128'd0;
+                        ddr_req_sel16_core      <= 16'd0;
+                        ddr_req_word_count_core <= 3'd1;
+                        ddr_req_toggle_core     <= ~ddr_req_toggle_core;
+                        train_trace_state       <= TRK_A_READ_X_WAIT;
+                    end
+                    TRK_A_READ_A_REQ: begin
+                        ddr_req_pending_core    <= 1'b1;
+                        ddr_req_we_core         <= 1'b0;
+                        ddr_req_from_sd_core    <= 1'b0;
+                        ddr_req_from_imgload_core <= 1'b0;
+                        ddr_req_from_train_core <= 1'b1;
+                        ddr_req_addr_word_core  <= TRAIN_BASE_A_Q16_WORDS + ({15'd0, train_winner_idx} * N_IN) + {22'd0, train_a_idx};
+                        ddr_req_wdata_core      <= 32'd0;
+                        ddr_req_wide_core       <= 1'b0;
+                        ddr_req_wdata128_core   <= 128'd0;
+                        ddr_req_sel16_core      <= 16'd0;
+                        ddr_req_word_count_core <= 3'd1;
+                        ddr_req_toggle_core     <= ~ddr_req_toggle_core;
+                        train_trace_state       <= TRK_A_READ_A_WAIT;
+                    end
+                    TRK_A_WRITE_A_REQ: begin
+                        ddr_req_pending_core    <= 1'b1;
+                        ddr_req_we_core         <= 1'b1;
+                        ddr_req_from_sd_core    <= 1'b0;
+                        ddr_req_from_imgload_core <= 1'b0;
+                        ddr_req_from_train_core <= 1'b1;
+                        ddr_req_addr_word_core  <= TRAIN_BASE_A_Q16_WORDS + ({15'd0, train_winner_idx} * N_IN) + {22'd0, train_a_idx};
+                        ddr_req_wdata_core      <= train_tmp_mem_val + train_tmp_x_val;
+                        ddr_req_wide_core       <= 1'b0;
+                        ddr_req_wdata128_core   <= 128'd0;
+                        ddr_req_sel16_core      <= 16'd0;
+                        ddr_req_word_count_core <= 3'd1;
+                        ddr_req_toggle_core     <= ~ddr_req_toggle_core;
+                        train_trace_state       <= TRK_A_WRITE_A_WAIT;
+                    end
+                    TRK_B_READ_PRE_REQ: begin
+                        if (train_pre_idx >= train_pre_count) begin
+                            train_trace_state <= TRK_DONE;
+                        end else begin
+                            ddr_req_pending_core    <= 1'b1;
+                            ddr_req_we_core         <= 1'b0;
+                            ddr_req_from_sd_core    <= 1'b0;
+                            ddr_req_from_imgload_core <= 1'b0;
+                            ddr_req_from_train_core <= 1'b1;
+                            ddr_req_addr_word_core  <= TRAIN_BASE_PRELIST_WORK_WORDS + {22'd0, train_pre_idx};
+                            ddr_req_wdata_core      <= 32'd0;
+                            ddr_req_wide_core       <= 1'b0;
+                            ddr_req_wdata128_core   <= 128'd0;
+                            ddr_req_sel16_core      <= 16'd0;
+                            ddr_req_word_count_core <= 3'd1;
+                            ddr_req_toggle_core     <= ~ddr_req_toggle_core;
+                            train_trace_state       <= TRK_B_READ_PRE_WAIT;
+                        end
+                    end
+                    TRK_B_READ_X_REQ: begin
+                        ddr_req_pending_core    <= 1'b1;
+                        ddr_req_we_core         <= 1'b0;
+                        ddr_req_from_sd_core    <= 1'b0;
+                        ddr_req_from_imgload_core <= 1'b0;
+                        ddr_req_from_train_core <= 1'b1;
+                        ddr_req_addr_word_core  <= TRAIN_BASE_XEXC_WORK_WORDS + {25'd0, train_b_col_idx};
+                        ddr_req_wdata_core      <= 32'd0;
+                        ddr_req_wide_core       <= 1'b0;
+                        ddr_req_wdata128_core   <= 128'd0;
+                        ddr_req_sel16_core      <= 16'd0;
+                        ddr_req_word_count_core <= 3'd1;
+                        ddr_req_toggle_core     <= ~ddr_req_toggle_core;
+                        train_trace_state       <= TRK_B_READ_X_WAIT;
+                    end
+                    TRK_B_READ_BT_REQ: begin
+                        ddr_req_pending_core    <= 1'b1;
+                        ddr_req_we_core         <= 1'b0;
+                        ddr_req_from_sd_core    <= 1'b0;
+                        ddr_req_from_imgload_core <= 1'b0;
+                        ddr_req_from_train_core <= 1'b1;
+                        ddr_req_addr_word_core  <= TRAIN_BASE_BT_Q16_WORDS + ({22'd0, train_curr_pre} * N_NEURONS) + {25'd0, train_b_col_idx};
+                        ddr_req_wdata_core      <= 32'd0;
+                        ddr_req_wide_core       <= 1'b0;
+                        ddr_req_wdata128_core   <= 128'd0;
+                        ddr_req_sel16_core      <= 16'd0;
+                        ddr_req_word_count_core <= 3'd1;
+                        ddr_req_toggle_core     <= ~ddr_req_toggle_core;
+                        train_trace_state       <= TRK_B_READ_BT_WAIT;
+                    end
+                    TRK_B_WRITE_BT_REQ: begin
+                        ddr_req_pending_core    <= 1'b1;
+                        ddr_req_we_core         <= 1'b1;
+                        ddr_req_from_sd_core    <= 1'b0;
+                        ddr_req_from_imgload_core <= 1'b0;
+                        ddr_req_from_train_core <= 1'b1;
+                        ddr_req_addr_word_core  <= TRAIN_BASE_BT_Q16_WORDS + ({22'd0, train_curr_pre} * N_NEURONS) + {25'd0, train_b_col_idx};
+                        ddr_req_wdata_core      <= train_tmp_mem_val + train_tmp_x_val;
+                        ddr_req_wide_core       <= 1'b0;
+                        ddr_req_wdata128_core   <= 128'd0;
+                        ddr_req_sel16_core      <= 16'd0;
+                        ddr_req_word_count_core <= 3'd1;
+                        ddr_req_toggle_core     <= ~ddr_req_toggle_core;
+                        train_trace_state       <= TRK_B_WRITE_BT_WAIT;
+                    end
+                    TRK_DONE: begin
+                        train_trace_active <= 1'b0;
+                        train_trace_state <= TRK_IDLE;
+                        resp_status    <= STATUS_OK;
+                        resp_result    <= {22'd0, train_pre_count};
+                        resp_checksum  <= calc_resp_checksum(STATUS_OK, {22'd0, train_pre_count});
+                        response_ready <= 1'b1;
+                    end
+                    default: begin end
+                endcase
+            end
+
+            if (rx_dv && !response_ready && !memrd_pending && !sd_copy_active && !infer_active && !imgload_active && !train_trace_active && !ddr_req_pending_core) begin
                 case (rx_state)
                     RX_WAIT_SYNC: begin
                         if (rx_byte == REQ_SYNC) begin
@@ -1175,6 +1409,7 @@ module top_level(
                                         ddr_req_we_core        <= 1'b1;
                                         ddr_req_from_sd_core   <= 1'b0;
                                         ddr_req_from_imgload_core <= 1'b0;
+                                        ddr_req_from_train_core <= 1'b0;
                                         ddr_req_addr_word_core <= arg0;
                                         ddr_req_wdata_core     <= arg1;
                                         ddr_req_wide_core      <= 1'b0;
@@ -1198,6 +1433,7 @@ module top_level(
                                         ddr_req_we_core        <= 1'b0;
                                         ddr_req_from_sd_core   <= 1'b0;
                                         ddr_req_from_imgload_core <= 1'b0;
+                                        ddr_req_from_train_core <= 1'b0;
                                         ddr_req_addr_word_core <= arg0;
                                         ddr_req_wdata_core     <= 32'd0;
                                         ddr_req_wide_core      <= 1'b0;
@@ -1425,11 +1661,32 @@ module top_level(
                                     end
                                 end
                                 OP_TRACE_UPDATE: begin
-                                    // Step2 kernel opcode reserved (execution not wired yet).
-                                    resp_status    <= STATUS_UNSUPPORTED_OP;
-                                    resp_result    <= TRAIN_CAPS_VALUE;
-                                    resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, TRAIN_CAPS_VALUE);
-                                    response_ready <= 1'b1;
+                                    if ((req_nargs == 8'd2) &&
+                                        (arg0 >= -1) && (arg0 < N_NEURONS) &&
+                                        (arg1 >= 0) && (arg1 <= N_IN) &&
+                                        ddr_calib_complete &&
+                                        !ddr_req_pending_core &&
+                                        !train_trace_active) begin
+                                        train_trace_active <= 1'b1;
+                                        train_winner_idx   <= (arg0 >= 0) ? arg0[6:0] : 7'd0;
+                                        train_pre_count    <= arg1[9:0];
+                                        train_a_idx        <= 10'd0;
+                                        train_pre_idx      <= 10'd0;
+                                        train_b_col_idx    <= 7'd0;
+                                        train_curr_pre     <= 10'd0;
+                                        train_tmp_x_val    <= 32'd0;
+                                        train_tmp_mem_val  <= 32'd0;
+                                        if (arg0 >= 0) begin
+                                            train_trace_state <= TRK_A_READ_X_REQ;
+                                        end else begin
+                                            train_trace_state <= TRK_B_READ_PRE_REQ;
+                                        end
+                                    end else begin
+                                        resp_status    <= STATUS_BAD_PACKET;
+                                        resp_result    <= TRAIN_CAPS_VALUE;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, TRAIN_CAPS_VALUE);
+                                        response_ready <= 1'b1;
+                                    end
                                 end
                                 OP_STDP_UPDATE_TILE: begin
                                     // Step3 kernel opcode reserved (execution not wired yet).

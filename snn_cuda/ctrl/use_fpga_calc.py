@@ -97,6 +97,9 @@ class TrainDDRLayout:
     base_v_state: int
     base_delay_lines: int
     base_g_in_state: int
+    base_x_in_work: int
+    base_x_exc_work: int
+    base_prelist_work: int
     total_words: int
 
 
@@ -121,6 +124,12 @@ def build_train_ddr_layout() -> TrainDDRLayout:
     word += (N_NEURONS * 8)
     base_g_in_state = word               # [N_NEURONS] s32
     word += N_NEURONS
+    base_x_in_work = word                # [N_IN] s32 (Q16.16 traces)
+    word += N_IN
+    base_x_exc_work = word               # [N_NEURONS] s32 (Q16.16 traces)
+    word += N_NEURONS
+    base_prelist_work = word             # [N_IN] u32 indices (max pre_active count)
+    word += N_IN
     return TrainDDRLayout(
         base_w_q16=base_w_q16,
         base_a_q16=base_a_q16,
@@ -129,6 +138,9 @@ def build_train_ddr_layout() -> TrainDDRLayout:
         base_v_state=base_v_state,
         base_delay_lines=base_delay_lines,
         base_g_in_state=base_g_in_state,
+        base_x_in_work=base_x_in_work,
+        base_x_exc_work=base_x_exc_work,
+        base_prelist_work=base_prelist_work,
         total_words=word,
     )
 
@@ -808,6 +820,74 @@ def fpga_stdp_update_tile(
     return int(result)
 
 
+def fpga_ddr_write_block32(ser: serial.Serial, base_addr_word: int, values: list[int] | np.ndarray) -> None:
+    vals = np.asarray(values, dtype=np.int64).reshape(-1)
+    for i, v in enumerate(vals):
+        fpga_ddr_write32(ser, base_addr_word + i, int(v))
+
+
+def fpga_ddr_read_block32(ser: serial.Serial, base_addr_word: int, nwords: int) -> np.ndarray:
+    out = np.zeros(int(nwords), dtype=np.int64)
+    for i in range(int(nwords)):
+        out[i] = np.int64(np.int32(fpga_ddr_read32(ser, base_addr_word + i)))
+    return out
+
+
+def fpga_trace_update_kernel_selfcheck(ser: serial.Serial, seed: int = 0) -> None:
+    rng = np.random.RandomState(seed)
+    layout = build_train_ddr_layout()
+    A0 = np.zeros((N_NEURONS, N_IN), dtype=np.int64)
+    B0 = np.zeros((N_IN, N_NEURONS), dtype=np.int64)
+    x_in = rng.randint(0, 1 << 15, size=(N_IN,), dtype=np.int64)
+    x_exc = rng.randint(0, 1 << 15, size=(N_NEURONS,), dtype=np.int64)
+    s_in = (rng.rand(N_IN) < 0.05)
+    pre_active = np.flatnonzero(s_in).astype(np.int64)
+    s_exc = (rng.rand(N_NEURONS) < 0.03)
+    winner = int(np.argmax(s_exc)) if np.any(s_exc) else -1
+
+    A_ref = A0.astype(np.float64)
+    B_ref = B0.astype(np.float64)
+    kernel_trace_update_python(
+        A_ref,
+        B_ref,
+        x_in.astype(np.float64),
+        x_exc.astype(np.float64),
+        winner,
+        pre_active.astype(np.int64),
+    )
+    A_ref_i32 = A_ref.astype(np.int64)
+    B_ref_i32 = B_ref.astype(np.int64)
+
+    print("Preloading training trace workspace/data into DDR (touched rows only)...")
+    if winner >= 0:
+        fpga_ddr_write_block32(ser, layout.base_a_q16 + winner * N_IN, np.zeros(N_IN, dtype=np.int64))
+    touched_pre = np.unique(pre_active.astype(np.int64))
+    for pre in touched_pre:
+        fpga_ddr_write_block32(ser, layout.base_bt_q16 + int(pre) * N_NEURONS, np.zeros(N_NEURONS, dtype=np.int64))
+    fpga_ddr_write_block32(ser, layout.base_x_in_work, x_in)
+    fpga_ddr_write_block32(ser, layout.base_x_exc_work, x_exc)
+    if pre_active.size > 0:
+        fpga_ddr_write_block32(ser, layout.base_prelist_work, pre_active)
+
+    print(f"Running FPGA TRACE_UPDATE kernel: winner={winner}, pre_count={pre_active.size}")
+    fpga_trace_update_kernel(ser, winner_idx=winner, pre_count=int(pre_active.size))
+
+    print("Reading back touched A/B_T rows from DDR for comparison...")
+    a_diff = 0
+    if winner >= 0:
+        A_fpga_row = fpga_ddr_read_block32(ser, layout.base_a_q16 + winner * N_IN, N_IN).astype(np.int64)
+        a_diff = int(np.max(np.abs(A_fpga_row - A_ref_i32[winner, :])))
+    b_diff = 0
+    for pre in touched_pre:
+        B_fpga_row = fpga_ddr_read_block32(ser, layout.base_bt_q16 + int(pre) * N_NEURONS, N_NEURONS).astype(np.int64)
+        row_diff = int(np.max(np.abs(B_fpga_row - B_ref_i32[int(pre), :])))
+        if row_diff > b_diff:
+            b_diff = row_diff
+    print(f"TRACE_UPDATE selfcheck: max|A_fpga-A_ref|={a_diff}, max|B_fpga-B_ref|={b_diff}")
+    if a_diff != 0 or b_diff != 0:
+        raise RuntimeError("TRACE_UPDATE selfcheck failed")
+
+
 def lcg_next_u32(state: int) -> int:
     return (state * LCG_A + LCG_C) & 0xFFFFFFFF
 
@@ -1157,6 +1237,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="run Python self-check for trace/STDP tile kernels (Step2/Step3) and exit",
     )
+    parser.add_argument(
+        "--train-trace-fpga-selfcheck",
+        action="store_true",
+        help="run FPGA TRACE_UPDATE kernel self-check using DDR preload/readback and exit",
+    )
     return parser.parse_args()
 
 
@@ -1183,6 +1268,9 @@ if __name__ == "__main__":
         print(f"  base_v_state    = {layout.base_v_state}")
         print(f"  base_delay      = {layout.base_delay_lines}")
         print(f"  base_g_in_state = {layout.base_g_in_state}")
+        print(f"  base_x_in_work  = {layout.base_x_in_work}")
+        print(f"  base_x_exc_work = {layout.base_x_exc_work}")
+        print(f"  base_prelist    = {layout.base_prelist_work}")
         print(f"  total_words     = {layout.total_words}")
     if serial is None:
         raise RuntimeError(
@@ -1202,6 +1290,10 @@ if __name__ == "__main__":
             print(f"Train kernel caps: 0x{caps:08X}")
         except Exception as exc:
             print(f"Train kernel caps query skipped/failed: {exc}")
+
+        if args.train_trace_fpga_selfcheck:
+            fpga_trace_update_kernel_selfcheck(ser)
+            raise SystemExit(0)
 
         if args.ddr_smoke:
             fpga_ddr_smoke_test(ser, base_addr_word=args.ddr_smoke_addr)
