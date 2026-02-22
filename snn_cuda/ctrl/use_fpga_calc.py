@@ -1,10 +1,16 @@
+from __future__ import annotations
+
 import argparse
 import struct
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-import serial
+try:
+    import serial
+except Exception:
+    serial = None
 
 # Communication parameters
 SERIAL_PORTNAME = "COM7"
@@ -27,6 +33,9 @@ OP_READ_RAW_U8 = 0x22
 OP_READ_POISSON_THRESH = 0x23
 OP_READ_INFER_DEBUG = 0x24
 OP_WRITE_INFER_WEIGHT = 0x25
+OP_TRAIN_QUERY_CAPS = 0x30
+OP_TRACE_UPDATE = 0x31
+OP_STDP_UPDATE_TILE = 0x32
 
 STATUS_OK = 0x00
 STATUS_BAD_PACKET = 0xE1
@@ -46,6 +55,15 @@ FXP_INH_COEFF = 563
 FXP_INH_THRESH = -2621440
 N_IN = 784
 N_NEURONS = 100
+N_WEIGHTS = N_NEURONS * N_IN
+
+# Fixed-point training constants (mine.py defaults)
+TRAIN_WMAX_Q16 = int(round(0.05 * (1 << FXP_SHIFT)))
+TRAIN_WMIN_Q16 = 0
+TRAIN_NORM_Q16 = int(round(0.1 * (1 << FXP_SHIFT)))
+TRAIN_LR_P_Q16 = int(round(1e-2 * (1 << FXP_SHIFT)))
+TRAIN_LR_M_Q16 = int(round(1e-4 * (1 << FXP_SHIFT)))
+TRAIN_CLIP_DW_Q16 = int(round(1e-3 * (1 << FXP_SHIFT)))
 
 # Inference-only reference parameters from LIF_WTA_STDP_MNIST_mine.py
 MINE_DT = 1e-3
@@ -59,6 +77,52 @@ LCG_A = 1664525
 LCG_C = 1013904223
 
 LAST_IO: dict[str, object] = {}
+
+
+@dataclass(frozen=True)
+class TrainDDRLayout:
+    # Word-addressed logical map (4-byte word units).
+    base_w_q16: int
+    base_a_q16: int
+    base_bt_q16: int
+    base_exc_theta: int
+    base_v_state: int
+    base_delay_lines: int
+    base_g_in_state: int
+    total_words: int
+
+
+def build_train_ddr_layout() -> TrainDDRLayout:
+    """Step1: 学習用メモリマップ（DDR前提）の論理配置を固定する。
+
+    ここでは word address (32-bit word) 単位で定義する。
+    実FPGA側がまだDDR未接続でも、host/HDL間の契約として先に固定しておく。
+    """
+    word = 0
+    base_w_q16 = word                    # 1 weight / word (lower 16b used)
+    word += N_WEIGHTS
+    base_a_q16 = word                    # 1 trace / word (Q16.16 or unsigned Q16 host-side)
+    word += N_WEIGHTS
+    base_bt_q16 = word                   # transposed [N_IN, N_NEURONS]
+    word += N_WEIGHTS
+    base_exc_theta = word                # [N_NEURONS] s32
+    word += N_NEURONS
+    base_v_state = word                  # [N_NEURONS] s32
+    word += N_NEURONS
+    base_delay_lines = word              # placeholder aggregate region
+    word += (N_NEURONS * 8)
+    base_g_in_state = word               # [N_NEURONS] s32
+    word += N_NEURONS
+    return TrainDDRLayout(
+        base_w_q16=base_w_q16,
+        base_a_q16=base_a_q16,
+        base_bt_q16=base_bt_q16,
+        base_exc_theta=base_exc_theta,
+        base_v_state=base_v_state,
+        base_delay_lines=base_delay_lines,
+        base_g_in_state=base_g_in_state,
+        total_words=word,
+    )
 
 
 def calc_checksum(payload: bytes) -> int:
@@ -204,7 +268,16 @@ def send_request(
             ser.reset_input_buffer()
             ser.write(req)
             ser.flush()
-            resp_raw = read_exact(ser, 7)
+            try:
+                resp_raw = read_exact(ser, 7)
+            except TimeoutError:
+                LAST_IO["resp_raw"] = None
+                if attempt < transient_retry_max:
+                    # FPGA can drop a back-to-back request while response_ready/sd_copy_active
+                    # is still deasserting; retry after a short gap.
+                    time.sleep(TRANSIENT_RETRY_SLEEP_SEC)
+                    continue
+                raise
             LAST_IO["resp_raw"] = resp_raw
             status, result = parse_response(resp_raw)
             LAST_IO["status"] = status
@@ -521,6 +594,139 @@ def to_s32(v: int) -> int:
     return v
 
 
+def q16_to_float(arr: np.ndarray) -> np.ndarray:
+    return np.asarray(arr, dtype=np.float64) / float(1 << FXP_SHIFT)
+
+
+def float_to_q16_clip(arr: np.ndarray, lo: int = 0, hi: int = 0xFFFF) -> np.ndarray:
+    q = np.rint(np.asarray(arr, dtype=np.float64) * float(1 << FXP_SHIFT))
+    return np.clip(q, lo, hi).astype(np.int64)
+
+
+def kernel_trace_update_python(
+    A: np.ndarray,
+    B_T: np.ndarray,
+    x_in: np.ndarray,
+    x_exc: np.ndarray,
+    winner_idx: int | None,
+    pre_active: np.ndarray,
+) -> None:
+    if winner_idx is not None and winner_idx >= 0:
+        A[winner_idx, :] += x_in
+    if pre_active.size > 0:
+        np.add.at(B_T, pre_active.astype(np.int64), x_exc)
+
+
+def kernel_stdp_update_tile_python(
+    W: np.ndarray,
+    A: np.ndarray,
+    B_T: np.ndarray,
+    row0: int,
+    nrows: int,
+    *,
+    lr_p: float = 1e-2,
+    lr_m: float = 1e-4,
+    wmin: float = 0.0,
+    wmax: float = 5e-2,
+    norm: float = 0.1,
+    update_nt: int = 100,
+    clip_abs: float = 1e-3,
+) -> None:
+    row1 = min(row0 + nrows, W.shape[0])
+    if row1 <= row0:
+        return
+    w_tile = np.array(W[row0:row1, :], copy=True)
+    w_abs_sum = np.sum(np.abs(w_tile), axis=1, keepdims=True)
+    w_abs_sum[w_abs_sum == 0.0] = 1.0
+    w_tile *= norm / w_abs_sum
+    dW = lr_p * (wmax - w_tile) * A[row0:row1, :]
+    dW -= lr_m * w_tile * B_T[:, row0:row1].T
+    dW = np.clip(dW / float(update_nt), -clip_abs, clip_abs)
+    W[row0:row1, :] = np.clip(w_tile + dW, wmin, wmax)
+
+
+def selfcheck_training_kernels(seed: int = 0) -> None:
+    rng = np.random.RandomState(seed)
+    w = 1e-3 * rng.rand(N_NEURONS, N_IN)
+    A_ref = np.zeros((N_NEURONS, N_IN), dtype=np.float64)
+    B_T_ref = np.zeros((N_IN, N_NEURONS), dtype=np.float64)
+    A_k = np.zeros_like(A_ref)
+    B_T_k = np.zeros_like(B_T_ref)
+
+    update_nt = 23
+    for _ in range(update_nt):
+        s_in = (rng.rand(N_IN) < 0.04).astype(np.uint8)
+        s_exc = (rng.rand(N_NEURONS) < 0.02).astype(np.uint8)
+        x_in = rng.rand(N_IN)
+        x_exc = rng.rand(N_NEURONS)
+        pre_active = np.flatnonzero(s_in)
+        p = int(np.argmax(s_exc))
+        winner = p if s_exc[p] else -1
+
+        if winner >= 0:
+            A_ref[winner, :] += x_in
+        if pre_active.size > 0:
+            np.add.at(B_T_ref, pre_active, x_exc)
+        kernel_trace_update_python(A_k, B_T_k, x_in, x_exc, winner, pre_active)
+
+    print(
+        "train kernel trace selfcheck: "
+        f"max|A_ref-A_k|={float(np.max(np.abs(A_ref-A_k))):.3e}, "
+        f"max|B_T_ref-B_T_k|={float(np.max(np.abs(B_T_ref-B_T_k))):.3e}"
+    )
+
+    w_ref = np.array(w, copy=True)
+    w_k = np.array(w, copy=True)
+    # reference (full matrix)
+    w_abs_sum = np.sum(np.abs(w_ref), axis=1, keepdims=True)
+    w_abs_sum[w_abs_sum == 0.0] = 1.0
+    w_ref *= 0.1 / w_abs_sum
+    dW = 1e-2 * (0.05 - w_ref) * A_ref
+    dW -= 1e-4 * w_ref * B_T_ref.T
+    w_ref = np.clip(w_ref + np.clip(dW / update_nt, -1e-3, 1e-3), 0.0, 0.05)
+
+    # kernelized by tiles
+    tile_rows = 13
+    for row0 in range(0, N_NEURONS, tile_rows):
+        kernel_stdp_update_tile_python(
+            w_k, A_k, B_T_k, row0, tile_rows, update_nt=update_nt
+        )
+
+    print(
+        "train kernel STDP selfcheck: "
+        f"max|W_ref-W_k|={float(np.max(np.abs(w_ref-w_k))):.3e}"
+    )
+
+
+def fpga_train_query_caps(ser: serial.Serial) -> int:
+    status, result = send_request(ser, OP_TRAIN_QUERY_CAPS, [0, 0])
+    require_ok(status, "TRAIN_QUERY_CAPS")
+    return int(result) & 0xFFFFFFFF
+
+
+def fpga_trace_update_kernel(
+    ser: serial.Serial,
+    *,
+    winner_idx: int,
+    pre_count: int,
+) -> int:
+    """Kernel trigger only. Data搬入(x_in/x_exc/prelist)は別opcode実装前提。"""
+    status, result = send_request(ser, OP_TRACE_UPDATE, [winner_idx, pre_count])
+    require_ok(status, "TRACE_UPDATE")
+    return int(result)
+
+
+def fpga_stdp_update_tile(
+    ser: serial.Serial,
+    *,
+    row0: int,
+    nrows: int,
+) -> int:
+    status, result = send_request(ser, OP_STDP_UPDATE_TILE, [row0, nrows])
+    require_ok(status, "STDP_UPDATE_TILE")
+    return int(result)
+
+
 def lcg_next_u32(state: int) -> int:
     return (state * LCG_A + LCG_C) & 0xFFFFFFFF
 
@@ -813,8 +1019,8 @@ def parse_args() -> argparse.Namespace:
             "compare with Python reproduction, then run FPGA add."
         )
     )
-    parser.add_argument("a", type=int, help="integer add operand A")
-    parser.add_argument("b", type=int, help="integer add operand B")
+    parser.add_argument("a", type=int, nargs="?", default=0, help="integer add operand A")
+    parser.add_argument("b", type=int, nargs="?", default=0, help="integer add operand B")
     parser.add_argument(
         "--image-source",
         type=str,
@@ -853,11 +1059,48 @@ def parse_args() -> argparse.Namespace:
         default="mine",
         help="Python reference model for spike-count comparison (default: mine)",
     )
+    parser.add_argument(
+        "--print-train-ddr-map",
+        action="store_true",
+        help="print proposed training DDR logical memory map (Step1) and continue",
+    )
+    parser.add_argument(
+        "--train-kernel-selfcheck",
+        action="store_true",
+        help="run Python self-check for trace/STDP tile kernels (Step2/Step3) and exit",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
+    if args.train_kernel_selfcheck:
+        layout = build_train_ddr_layout()
+        print("Training DDR logical map (word addr):")
+        print(
+            f"  W={layout.base_w_q16}, A={layout.base_a_q16}, B_T={layout.base_bt_q16}, "
+            f"theta={layout.base_exc_theta}, v={layout.base_v_state}, "
+            f"delay={layout.base_delay_lines}, g_in={layout.base_g_in_state}, total={layout.total_words}"
+        )
+        selfcheck_training_kernels()
+        raise SystemExit(0)
+
+    if args.print_train_ddr_map:
+        layout = build_train_ddr_layout()
+        print("Training DDR logical map (word addr):")
+        print(f"  base_w_q16      = {layout.base_w_q16}")
+        print(f"  base_a_q16      = {layout.base_a_q16}")
+        print(f"  base_bt_q16     = {layout.base_bt_q16}")
+        print(f"  base_exc_theta  = {layout.base_exc_theta}")
+        print(f"  base_v_state    = {layout.base_v_state}")
+        print(f"  base_delay      = {layout.base_delay_lines}")
+        print(f"  base_g_in_state = {layout.base_g_in_state}")
+        print(f"  total_words     = {layout.total_words}")
+    if serial is None:
+        raise RuntimeError(
+            "pyserial is not installed. Install it to use FPGA communication paths "
+            "(self-check mode works without pyserial)."
+        )
     print(f"Opening serial port {args.port}")
 
     with serial.Serial(
@@ -866,6 +1109,12 @@ if __name__ == "__main__":
         timeout=TIMEOUT_SEC,
         write_timeout=WRITE_TIMEOUT_SEC
     ) as ser:
+        try:
+            caps = fpga_train_query_caps(ser)
+            print(f"Train kernel caps: 0x{caps:08X}")
+        except Exception as exc:
+            print(f"Train kernel caps query skipped/failed: {exc}")
+
         if args.weights_npy:
             fpga_weights_q16 = load_weight_matrix_q16_from_file(args.weights_npy)
             print(f"Loaded weights from file: {args.weights_npy}")

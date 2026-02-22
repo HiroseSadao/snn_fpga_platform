@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 -------------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version     : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date             : Sun Feb 22 05:18:29 2026
-| Host             : eecs-digital-17 running 64-bit Ubuntu 24.04.3 LTS
+| Date             : Sun Feb 22 05:48:50 2026
+| Host             : eecs-digital-06 running 64-bit Ubuntu 24.04.3 LTS
 | Command          : report_power -file obj/post_route_power.rpt
 | Design           : top_level
 | Device           : xc7s50csga324-1
@@ -53,15 +53,15 @@ Table of Contents
 | On-Chip                  | Power (W) | Used     | Available | Utilization (%) |
 +--------------------------+-----------+----------+-----------+-----------------+
 | Clocks                   |    <0.001 |        3 |       --- |             --- |
-| Slice Logic              |     0.007 |    11114 |       --- |             --- |
-|   LUT as Logic           |     0.006 |     5331 |     32600 |           16.35 |
+| Slice Logic              |     0.007 |    11136 |       --- |             --- |
+|   LUT as Logic           |     0.006 |     5357 |     32600 |           16.43 |
 |   CARRY4                 |    <0.001 |      832 |      8150 |           10.21 |
 |   LUT as Distributed RAM |    <0.001 |     1827 |      9600 |           19.03 |
-|   Register               |    <0.001 |     1653 |     65200 |            2.54 |
+|   Register               |    <0.001 |     1657 |     65200 |            2.54 |
 |   BUFG                   |    <0.001 |        1 |        32 |            3.13 |
 |   F7/F8 Muxes            |    <0.001 |       14 |     32600 |            0.04 |
 |   Others                 |     0.000 |       14 |       --- |             --- |
-| Signals                  |     0.008 |    10843 |       --- |             --- |
+| Signals                  |     0.008 |    10863 |       --- |             --- |
 | Block RAM                |     0.014 |       48 |        75 |           64.00 |
 | DSPs                     |     0.006 |       23 |       120 |           19.17 |
 | I/O                      |     0.003 |       36 |       210 |           17.14 |

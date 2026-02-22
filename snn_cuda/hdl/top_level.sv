@@ -33,6 +33,9 @@ module top_level(
     localparam logic [7:0] OP_READ_POISSON_THRESH = 8'h23;
     localparam logic [7:0] OP_READ_INFER_DEBUG = 8'h24;
     localparam logic [7:0] OP_WRITE_INFER_WEIGHT = 8'h25;
+    localparam logic [7:0] OP_TRAIN_QUERY_CAPS = 8'h30;
+    localparam logic [7:0] OP_TRACE_UPDATE = 8'h31;
+    localparam logic [7:0] OP_STDP_UPDATE_TILE = 8'h32;
     localparam logic [31:0] DDR_ADDR_WORD_LIMIT = 32'd16777216; // 64MiB / 4
     localparam logic [7:0] MAX_SUPPORTED_NARGS = 8'd2;
     // Increase RX timeout margin to tolerate host-side inter-byte gaps on UART.
@@ -88,6 +91,18 @@ module top_level(
     localparam logic [7:0] BADDBG_SD_SECTOR_END  = 8'h24;
     localparam logic [7:0] BADDBG_READ_INFER_DBG = 8'h14;
     localparam logic [7:0] BADDBG_WRITE_WEIGHT   = 8'h15;
+    // Training kernel capability bits (host-visible via OP_TRAIN_QUERY_CAPS)
+    // [0]=query_caps impl, [1]=logical DDR map fixed, [2]=trace opcode reserved,
+    // [3]=tile opcode reserved, [8]=trace kernel exec impl, [9]=tile kernel exec impl.
+    localparam logic [31:0] TRAIN_CAPS_VALUE = 32'h0000000F;
+    // Step1 logical DDR word map contract (future external DDR integration target).
+    localparam logic [31:0] TRAIN_BASE_W_Q16_WORDS  = 32'd0;
+    localparam logic [31:0] TRAIN_BASE_A_Q16_WORDS  = TRAIN_BASE_W_Q16_WORDS + N_WEIGHTS;
+    localparam logic [31:0] TRAIN_BASE_BT_Q16_WORDS = TRAIN_BASE_A_Q16_WORDS + N_WEIGHTS;
+    localparam logic [31:0] TRAIN_BASE_THETA_WORDS  = TRAIN_BASE_BT_Q16_WORDS + N_WEIGHTS;
+    localparam logic [31:0] TRAIN_BASE_VSTATE_WORDS = TRAIN_BASE_THETA_WORDS + N_NEURONS;
+    localparam logic [31:0] TRAIN_BASE_DELAY_WORDS  = TRAIN_BASE_VSTATE_WORDS + N_NEURONS;
+    localparam logic [31:0] TRAIN_BASE_GIN_WORDS    = TRAIN_BASE_DELAY_WORDS + (N_NEURONS * 8);
 
     typedef enum logic [2:0] {
         RX_WAIT_SYNC,
@@ -605,7 +620,9 @@ module top_level(
                             ((req_opcode == OP_ADD_I32) || (req_opcode == OP_DDR_WRITE32) ||
                              (req_opcode == OP_SD_TO_DDR_COPY) || (req_opcode == OP_RUN_SAMPLE_INFER) ||
                              (req_opcode == OP_READ_SPIKE_COUNT) || (req_opcode == OP_READ_RAW_U8) ||
-                             (req_opcode == OP_READ_POISSON_THRESH) || (req_opcode == OP_READ_INFER_DEBUG))
+                             (req_opcode == OP_READ_POISSON_THRESH) || (req_opcode == OP_READ_INFER_DEBUG) ||
+                             (req_opcode == OP_WRITE_INFER_WEIGHT) || (req_opcode == OP_TRAIN_QUERY_CAPS) ||
+                             (req_opcode == OP_TRACE_UPDATE) || (req_opcode == OP_STDP_UPDATE_TILE))
                             && (rx_byte != 8'd2)
                         ) begin
                             rx_state        <= RX_WAIT_SYNC;
@@ -847,6 +864,33 @@ module top_level(
                                         resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {BADDBG_WRITE_WEIGHT, req_opcode, arg0[15:0]});
                                         response_ready <= 1'b1;
                                     end
+                                end
+                                OP_TRAIN_QUERY_CAPS: begin
+                                    if (req_nargs == 8'd2) begin
+                                        resp_status    <= STATUS_OK;
+                                        resp_result    <= TRAIN_CAPS_VALUE;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_OK, TRAIN_CAPS_VALUE);
+                                        response_ready <= 1'b1;
+                                    end else begin
+                                        resp_status    <= STATUS_BAD_PACKET;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                                        response_ready <= 1'b1;
+                                    end
+                                end
+                                OP_TRACE_UPDATE: begin
+                                    // Step2 kernel opcode reserved (execution not wired yet).
+                                    resp_status    <= STATUS_UNSUPPORTED_OP;
+                                    resp_result    <= TRAIN_CAPS_VALUE;
+                                    resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, TRAIN_CAPS_VALUE);
+                                    response_ready <= 1'b1;
+                                end
+                                OP_STDP_UPDATE_TILE: begin
+                                    // Step3 kernel opcode reserved (execution not wired yet).
+                                    resp_status    <= STATUS_UNSUPPORTED_OP;
+                                    resp_result    <= TRAIN_CAPS_VALUE;
+                                    resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, TRAIN_CAPS_VALUE);
+                                    response_ready <= 1'b1;
                                 end
 
                                 default: begin
