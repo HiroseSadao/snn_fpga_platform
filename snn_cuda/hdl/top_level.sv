@@ -40,8 +40,8 @@ module top_level(
     localparam int N_IN = 784;
     localparam int N_NEURONS = 100;
     localparam int N_WEIGHTS = N_IN * N_NEURONS;
-    localparam logic signed [31:0] FXP_ALPHA = 32'sd62259; // 0.95 in S16.16
-    localparam logic signed [31:0] FXP_ALPHA_INH = 32'sd58982; // 0.9 in S16.16
+    localparam logic signed [31:0] FXP_ALPHA = 32'sd62259; // legacy/simple model coeff (unused in mine-style LIF)
+    localparam logic signed [31:0] FXP_ALPHA_INH = 32'sd58982; // legacy/simple model coeff (unused in mine-style LIF)
     localparam logic signed [31:0] FXP_INPUT_W = 32'sd8192; // 0.125 in S16.16
     localparam logic signed [31:0] FXP_THRESH = 32'sd65536; // 1.0 in S16.16
     localparam logic signed [31:0] FXP_BIAS_LSB = 32'sd512; // 0.0078125 in S16.16
@@ -49,14 +49,27 @@ module top_level(
     localparam logic signed [31:0] FXP_HALF = 32'sd32768; // 0.5 in S16.16
     localparam logic signed [31:0] FXP_WEXC = 32'sd147456; // 2.25 in S16.16
     localparam logic signed [31:0] FXP_INH_COEFF = 32'sd563; // (0.85/99) in S16.16
-    localparam logic signed [31:0] FXP_INH_THRESH = 32'sd65536; // 1.0 in S16.16
+    localparam logic signed [31:0] FXP_INH_THRESH = -32'sd2621440; // -40.0 in S16.16
+    localparam logic signed [31:0] FXP_SCALE_1000 = 32'sd65536000;   // 1000.0 in S16.16 (1/1ms)
+    localparam logic signed [31:0] FXP_SCALE_500  = 32'sd32768000;   // 500.0 in S16.16 (1/2ms)
+    localparam logic signed [31:0] FXP_GEXC_SPIKE = 32'sd147456000;  // 2.25 * 1000 in S16.16
     // Step-domain approximations for mine.py neuron dynamics (dt=1ms)
     localparam logic [15:0] EXC_TREF_STEPS = 16'd5;
     localparam logic [15:0] INH_TREF_STEPS = 16'd2;
     localparam logic signed [31:0] FXP_THETA_PLUS = 32'sd3277;   // approx 0.05 in S16.16
     localparam logic signed [31:0] FXP_THETA_DECAY = 32'sd65535; // ~1.0 (dt/tc_theta is tiny)
     localparam logic signed [31:0] FXP_THETA_MAX = 32'sd2293760; // 35.0 in S16.16
-    localparam logic signed [31:0] FXP_THRESH_BASE = 32'sd65536; // current normalized base threshold
+    localparam logic signed [31:0] FXP_THRESH_BASE = -32'sd3407872; // -52.0 in S16.16 (DiehlAndCook init_vthr)
+    localparam logic signed [31:0] FXP_EXC_VREST = -32'sd4259840;   // -65.0 in S16.16
+    localparam logic signed [31:0] FXP_EXC_VRESET = -32'sd4259840;  // -65.0 in S16.16
+    localparam logic signed [31:0] FXP_EXC_EEXC = 32'sd0;           // 0.0 in S16.16
+    localparam logic signed [31:0] FXP_EXC_EINH = -32'sd6553600;    // -100.0 in S16.16
+    localparam logic signed [31:0] FXP_EXC_DT_OVER_TCM = 32'sd655;  // 0.01 in S16.16
+    localparam logic signed [31:0] FXP_INH_VREST = -32'sd3932160;   // -60.0 in S16.16
+    localparam logic signed [31:0] FXP_INH_VRESET = -32'sd2949120;  // -45.0 in S16.16
+    localparam logic signed [31:0] FXP_INH_EEXC = 32'sd0;           // 0.0 in S16.16
+    localparam logic signed [31:0] FXP_INH_EINH = -32'sd5570560;    // -85.0 in S16.16
+    localparam logic signed [31:0] FXP_INH_DT_OVER_TCM = 32'sd6554; // 0.1 in S16.16
     // mine.py input_synapse has dt==td==1ms -> decay term becomes ~0 for c_in/g_in state update.
     localparam logic signed [31:0] FXP_INPUT_G_DECAY = 32'sd0;
     localparam logic [31:0] POISSON_NUM_CONST = 32'd9175; // floor(32*140*2048*1e-3)
@@ -90,6 +103,12 @@ module top_level(
         TX_SEND,
         TX_WAIT_DONE
     } tx_state_t;
+    typedef enum logic [1:0] {
+        MEMRD_NONE,
+        MEMRD_SPIKE_COUNT,
+        MEMRD_RAW_U8,
+        MEMRD_POISSON_THRESH
+    } memrd_kind_t;
     typedef enum logic [2:0] {
         INFER_IDLE,
         INFER_INIT_CLEAR,
@@ -163,6 +182,8 @@ module top_level(
     logic [31:0] raw_bytes_per_image;
     logic [9:0]  raw_image0_capture_idx;
     logic [31:0] raw_image0_sum_u8;
+    logic [9:0]  raw_image0_rd_addr;
+    logic [7:0]  raw_image0_rd_data;
 
     logic        infer_active;
     infer_state_t infer_state;
@@ -191,6 +212,8 @@ module top_level(
     (* ram_style = "block" *) logic signed [31:0] infer_g_exc_delay1 [0:N_NEURONS-1];
     logic        infer_s_exc [0:N_NEURONS-1];
     (* ram_style = "block" *) logic [15:0] infer_spike_count [0:N_NEURONS-1];
+    logic [6:0]  infer_spike_count_rd_addr;
+    logic [15:0] infer_spike_count_rd_data;
     (* ram_style = "block" *) logic [15:0] infer_exc_last_spike_step [0:N_NEURONS-1];
     (* ram_style = "block" *) logic [15:0] infer_inh_last_spike_step [0:N_NEURONS-1];
     logic [6:0]  infer_apply_idx;
@@ -198,6 +221,8 @@ module top_level(
     logic [31:0] infer_total_spikes;
     logic [31:0] infer_rng_state;
     (* ram_style = "block" *) logic [10:0] infer_poisson_thresh [0:N_IN-1];
+    logic [9:0]  infer_poisson_thresh_rd_addr;
+    logic [10:0] infer_poisson_thresh_rd_data;
     logic        infer_input_spike [0:N_IN-1];
     logic [31:0] infer_dividend;
     logic [31:0] infer_divisor;
@@ -215,6 +240,10 @@ module top_level(
     logic [31:0] infer_dbg_first_step_hits_n3;
     logic [31:0] infer_dbg_first_step_hits_n7;
     logic [31:0] infer_dbg_curr_step_input_spikes;
+    logic        memrd_pending;
+    logic        memrd_wait;
+    memrd_kind_t memrd_kind;
+    logic [15:0] memrd_idx;
     logic [2:0]  dbg_rgb1_state;
     integer rr;
 
@@ -294,6 +323,9 @@ module top_level(
     // inference (instead of LUTRAM/distributed RAM).
     always_ff @(posedge core_clk) begin
         infer_w_rd_data <= infer_w_q16[infer_w_rd_addr];
+        raw_image0_rd_data <= raw_image0_u8[raw_image0_rd_addr];
+        infer_spike_count_rd_data <= infer_spike_count[infer_spike_count_rd_addr];
+        infer_poisson_thresh_rd_data <= infer_poisson_thresh[infer_poisson_thresh_rd_addr];
     end
 
     uart_rx #(
@@ -379,6 +411,22 @@ module top_level(
         end
     endfunction
 
+    // S16.16 multiply with symmetric rounding (reduces systematic truncation bias vs [47:16] slicing)
+    function automatic signed [31:0] fxp_mul_s16_16(
+        input signed [31:0] a,
+        input signed [31:0] b
+    );
+        logic signed [63:0] p;
+        begin
+            p = $signed(a) * $signed(b);
+            if (p >= 0) begin
+                fxp_mul_s16_16 = $signed((p + 64'sd32768) >>> 16);
+            end else begin
+                fxp_mul_s16_16 = $signed((p - 64'sd32768) >>> 16);
+            end
+        end
+    endfunction
+
     always_ff @(posedge core_clk) begin
         if (btn[0]) begin
             rx_state          <= RX_WAIT_SYNC;
@@ -425,6 +473,7 @@ module top_level(
             raw_bytes_per_image <= 32'd0;
             raw_image0_capture_idx <= 10'd0;
             raw_image0_sum_u8   <= 32'd0;
+            raw_image0_rd_addr  <= 10'd0;
             infer_active        <= 1'b0;
             infer_state         <= INFER_IDLE;
             infer_steps_target  <= 32'd0;
@@ -450,6 +499,12 @@ module top_level(
             infer_dbg_first_step_hits_n3 <= 32'd0;
             infer_dbg_first_step_hits_n7 <= 32'd0;
             infer_dbg_curr_step_input_spikes <= 32'd0;
+            infer_spike_count_rd_addr <= 7'd0;
+            infer_poisson_thresh_rd_addr <= 10'd0;
+            memrd_pending <= 1'b0;
+            memrd_wait    <= 1'b0;
+            memrd_kind    <= MEMRD_NONE;
+            memrd_idx     <= 16'd0;
             // Large state arrays are cleared by a sequential init phase before inference
             // to reduce control sets and allow BRAM inference.
         end else begin
@@ -475,7 +530,42 @@ module top_level(
                 rx_timeout_counter <= rx_timeout_counter + 16'd1;
             end
 
-            if (rx_dv && !response_ready && !sd_copy_active && !infer_active) begin
+            if (memrd_pending && !response_ready) begin
+                if (memrd_wait) begin
+                    memrd_wait <= 1'b0;
+                end else begin
+                    memrd_pending <= 1'b0;
+                    case (memrd_kind)
+                        MEMRD_SPIKE_COUNT: begin
+                            resp_status    <= STATUS_OK;
+                            resp_result    <= {16'd0, infer_spike_count_rd_data};
+                            resp_checksum  <= calc_resp_checksum(STATUS_OK, {16'd0, infer_spike_count_rd_data});
+                            response_ready <= 1'b1;
+                        end
+                        MEMRD_RAW_U8: begin
+                            resp_status    <= STATUS_OK;
+                            resp_result    <= {24'd0, raw_image0_rd_data};
+                            resp_checksum  <= calc_resp_checksum(STATUS_OK, {24'd0, raw_image0_rd_data});
+                            response_ready <= 1'b1;
+                        end
+                        MEMRD_POISSON_THRESH: begin
+                            resp_status    <= STATUS_OK;
+                            resp_result    <= {21'd0, infer_poisson_thresh_rd_data};
+                            resp_checksum  <= calc_resp_checksum(STATUS_OK, {21'd0, infer_poisson_thresh_rd_data});
+                            response_ready <= 1'b1;
+                        end
+                        default: begin
+                            resp_status    <= STATUS_BAD_PACKET;
+                            resp_result    <= 32'sd0;
+                            resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                            response_ready <= 1'b1;
+                        end
+                    endcase
+                    memrd_kind <= MEMRD_NONE;
+                end
+            end
+
+            if (rx_dv && !response_ready && !memrd_pending && !sd_copy_active && !infer_active) begin
                 case (rx_state)
                     RX_WAIT_SYNC: begin
                         if (rx_byte == REQ_SYNC) begin
@@ -672,10 +762,11 @@ module top_level(
                                 end
                                 OP_READ_SPIKE_COUNT: begin
                                     if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < N_NEURONS)) begin
-                                        resp_status    <= STATUS_OK;
-                                        resp_result    <= {16'd0, infer_spike_count[arg0[6:0]]};
-                                        resp_checksum  <= calc_resp_checksum(STATUS_OK, {16'd0, infer_spike_count[arg0[6:0]]});
-                                        response_ready <= 1'b1;
+                                        infer_spike_count_rd_addr <= arg0[6:0];
+                                        memrd_idx     <= arg0[15:0];
+                                        memrd_kind    <= MEMRD_SPIKE_COUNT;
+                                        memrd_wait    <= 1'b1;
+                                        memrd_pending <= 1'b1;
                                     end else begin
                                         resp_status    <= STATUS_BAD_PACKET;
                                         // [31:24]=reason, [23:16]=opcode, [15:0]=arg0[15:0]
@@ -686,10 +777,11 @@ module top_level(
                                 end
                                 OP_READ_RAW_U8: begin
                                     if ((req_nargs == 8'd2) && raw_image0_valid && (arg0 >= 0) && (arg0 < N_IN)) begin
-                                        resp_status    <= STATUS_OK;
-                                        resp_result    <= {24'd0, raw_image0_u8[arg0[9:0]]};
-                                        resp_checksum  <= calc_resp_checksum(STATUS_OK, {24'd0, raw_image0_u8[arg0[9:0]]});
-                                        response_ready <= 1'b1;
+                                        raw_image0_rd_addr <= arg0[9:0];
+                                        memrd_idx     <= arg0[15:0];
+                                        memrd_kind    <= MEMRD_RAW_U8;
+                                        memrd_wait    <= 1'b1;
+                                        memrd_pending <= 1'b1;
                                     end else begin
                                         resp_status    <= STATUS_BAD_PACKET;
                                         // [31:24]=reason, [23:16]=opcode, [15:0]=arg0[15:0]
@@ -700,10 +792,11 @@ module top_level(
                                 end
                                 OP_READ_POISSON_THRESH: begin
                                     if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < N_IN)) begin
-                                        resp_status    <= STATUS_OK;
-                                        resp_result    <= {21'd0, infer_poisson_thresh[arg0[9:0]]};
-                                        resp_checksum  <= calc_resp_checksum(STATUS_OK, {21'd0, infer_poisson_thresh[arg0[9:0]]});
-                                        response_ready <= 1'b1;
+                                        infer_poisson_thresh_rd_addr <= arg0[9:0];
+                                        memrd_idx     <= arg0[15:0];
+                                        memrd_kind    <= MEMRD_POISSON_THRESH;
+                                        memrd_wait    <= 1'b1;
+                                        memrd_pending <= 1'b1;
                                     end else begin
                                         resp_status    <= STATUS_BAD_PACKET;
                                         // [31:24]=reason, [23:16]=opcode, [15:0]=arg0[15:0]
@@ -922,7 +1015,7 @@ module top_level(
             if (infer_active && !response_ready) begin
                 case (infer_state)
                     INFER_INIT_CLEAR: begin
-                        infer_v_state[infer_apply_idx] <= 32'sd0;
+                        infer_v_state[infer_apply_idx] <= FXP_EXC_VRESET;
                         infer_g_in_state[infer_apply_idx] <= 32'sd0;
                         infer_exc_theta[infer_apply_idx] <= 32'sd0;
                         infer_g_in_delay0[infer_apply_idx] <= 32'sd0;
@@ -930,7 +1023,7 @@ module top_level(
                         infer_g_in_delay2[infer_apply_idx] <= 32'sd0;
                         infer_g_in_delay3[infer_apply_idx] <= 32'sd0;
                         infer_g_in_delay4[infer_apply_idx] <= 32'sd0;
-                        infer_v_inh_state[infer_apply_idx] <= 32'sd0;
+                        infer_v_inh_state[infer_apply_idx] <= FXP_INH_VRESET;
                         infer_c_inh_state[infer_apply_idx] <= 32'sd0;
                         infer_g_inh_state[infer_apply_idx] <= 32'sd0;
                         infer_g_exc_delay0[infer_apply_idx] <= 32'sd0;
@@ -1041,15 +1134,18 @@ module top_level(
 	                        end else begin
 	                            logic signed [31:0] v_next;
                                 logic signed [31:0] v_prop;
+                                logic signed [31:0] dv_exc;
                                 logic signed [31:0] theta_next;
                                 logic signed [31:0] exc_thresh_now;
                                 logic signed [31:0] g_in_curr;
                                 logic signed [31:0] g_in_state_next;
                                 logic signed [31:0] delayed_g_in;
+                                logic signed [31:0] i_syn_exc;
+                                logic signed [31:0] i_syn_inh;
 			                            logic spike_now;
                                 logic exc_refractory_ok;
                                 g_in_state_next = $signed(($signed(infer_g_in_state[infer_neuron_idx]) * $signed(FXP_INPUT_G_DECAY)) >>> 16)
-                                               + $signed(infer_accum);
+                                               + fxp_mul_s16_16(infer_accum, FXP_SCALE_1000);
                                 infer_g_in_state[infer_neuron_idx] <= g_in_state_next;
 	                                g_in_curr = g_in_state_next;
 	                                delayed_g_in = infer_g_in_delay4[infer_neuron_idx];
@@ -1059,13 +1155,16 @@ module top_level(
                                 infer_g_in_delay1[infer_neuron_idx] <= infer_g_in_delay0[infer_neuron_idx];
                                 infer_g_in_delay0[infer_neuron_idx] <= g_in_curr;
                                 exc_refractory_ok = ((infer_step_idx - infer_exc_last_spike_step[infer_neuron_idx]) > EXC_TREF_STEPS);
-	                                v_prop = $signed(($signed(infer_v_state[infer_neuron_idx]) * $signed(FXP_ALPHA)) >>> 16)
-	                                       + $signed(delayed_g_in)
-	                                       - $signed(infer_g_inh_state[infer_neuron_idx]);
+                                i_syn_exc = fxp_mul_s16_16(delayed_g_in, (FXP_EXC_EEXC - infer_v_state[infer_neuron_idx]));
+                                i_syn_inh = fxp_mul_s16_16(infer_g_inh_state[infer_neuron_idx], (FXP_EXC_EINH - infer_v_state[infer_neuron_idx]));
+                                dv_exc = $signed(FXP_EXC_VREST - infer_v_state[infer_neuron_idx])
+                                       + $signed(i_syn_exc)
+                                       + $signed(i_syn_inh);
+	                                v_prop = $signed(infer_v_state[infer_neuron_idx]) + fxp_mul_s16_16(dv_exc, FXP_EXC_DT_OVER_TCM);
                                 v_next = exc_refractory_ok ? v_prop : infer_v_state[infer_neuron_idx];
                                 exc_thresh_now = FXP_THRESH_BASE + infer_exc_theta[infer_neuron_idx];
 	                            spike_now = (v_next >= exc_thresh_now);
-                                theta_next = $signed(($signed(infer_exc_theta[infer_neuron_idx]) * $signed(FXP_THETA_DECAY)) >>> 16);
+                                theta_next = fxp_mul_s16_16(infer_exc_theta[infer_neuron_idx], FXP_THETA_DECAY);
                                 if (spike_now) begin
                                     theta_next = theta_next + FXP_THETA_PLUS;
                                 end
@@ -1079,7 +1178,7 @@ module top_level(
 
 	                            if (spike_now) begin
                                     // mine.py sets the membrane to vreset after spike (no residual carry).
-	                                infer_v_state[infer_neuron_idx] <= 32'sd0;
+	                                infer_v_state[infer_neuron_idx] <= FXP_EXC_VRESET;
 	                                infer_spike_count[infer_neuron_idx] <= infer_spike_count[infer_neuron_idx] + 16'd1;
 	                                infer_total_spikes <= infer_total_spikes + 32'd1;
                                     infer_exc_last_spike_step[infer_neuron_idx] <= infer_step_idx;
@@ -1109,28 +1208,31 @@ module top_level(
 	                        logic signed [31:0] delayed_g_exc;
 	                        logic signed [31:0] v_inh_next;
                             logic signed [31:0] v_inh_prop;
+                            logic signed [31:0] dv_inh;
+                            logic signed [31:0] i_syn_exc_inh;
 	                        logic s_inh_now;
 	                        logic signed [31:0] c_inh_next;
                             logic inh_refractory_ok;
-	                        g_exc_new = infer_s_exc[infer_apply_idx] ? FXP_WEXC : 32'sd0;
+	                        g_exc_new = infer_s_exc[infer_apply_idx] ? FXP_GEXC_SPIKE : 32'sd0;
 	                        delayed_g_exc = infer_g_exc_delay1[infer_apply_idx];
 	                        infer_g_exc_delay1[infer_apply_idx] <= infer_g_exc_delay0[infer_apply_idx];
 	                        infer_g_exc_delay0[infer_apply_idx] <= g_exc_new;
                             inh_refractory_ok = ((infer_step_idx - infer_inh_last_spike_step[infer_apply_idx]) > INH_TREF_STEPS);
-                            v_inh_prop = $signed(($signed(infer_v_inh_state[infer_apply_idx]) * $signed(FXP_ALPHA_INH)) >>> 16)
-	                                   + delayed_g_exc;
+                            i_syn_exc_inh = fxp_mul_s16_16(delayed_g_exc, (FXP_INH_EEXC - infer_v_inh_state[infer_apply_idx]));
+                            dv_inh = $signed(FXP_INH_VREST - infer_v_inh_state[infer_apply_idx]) + $signed(i_syn_exc_inh);
+                            v_inh_prop = $signed(infer_v_inh_state[infer_apply_idx]) + fxp_mul_s16_16(dv_inh, FXP_INH_DT_OVER_TCM);
                             v_inh_next = inh_refractory_ok ? v_inh_prop : infer_v_inh_state[infer_apply_idx];
 	                        s_inh_now = (v_inh_next >= FXP_INH_THRESH);
 	                        if (s_inh_now) begin
                                 // mine.py inhibitory neuron also resets to vreset after spike.
-	                            infer_v_inh_state[infer_apply_idx] <= 32'sd0;
+	                            infer_v_inh_state[infer_apply_idx] <= FXP_INH_VRESET;
                                 infer_inh_last_spike_step[infer_apply_idx] <= infer_step_idx;
 	                        end else begin
 	                            infer_v_inh_state[infer_apply_idx] <= v_inh_next;
 	                        end
 	                        c_inh_next = $signed(infer_c_inh_state[infer_apply_idx]) >>> 1;
 	                        if (s_inh_now) begin
-	                            c_inh_next = c_inh_next + FXP_HALF;
+	                            c_inh_next = c_inh_next + FXP_SCALE_500;
 	                        end
 	                        infer_c_inh_state[infer_apply_idx] <= c_inh_next;
 	                        infer_sum_c_inh <= infer_sum_c_inh + c_inh_next;
@@ -1145,13 +1247,11 @@ module top_level(
 
 	                    INFER_WTA_PASS2: begin
 	                        logic signed [31:0] diff_c_inh;
-	                        logic signed [63:0] prod_inh;
 	                        diff_c_inh = infer_sum_c_inh - infer_c_inh_state[infer_apply_idx];
 	                        if (diff_c_inh < 0) begin
 	                            diff_c_inh = 32'sd0;
 	                        end
-	                        prod_inh = $signed(diff_c_inh) * $signed(FXP_INH_COEFF);
-	                        infer_g_inh_state[infer_apply_idx] <= prod_inh[47:16];
+	                        infer_g_inh_state[infer_apply_idx] <= fxp_mul_s16_16(diff_c_inh, FXP_INH_COEFF);
 
 	                        if (infer_apply_idx == (N_NEURONS - 1)) begin
 	                            if ((infer_step_idx + 16'd1) >= infer_steps_target[15:0]) begin

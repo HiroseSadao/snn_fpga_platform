@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Sun Feb 22 03:10:22 2026
-| Host         : eecs-digital-06 running 64-bit Ubuntu 24.04.3 LTS
+| Date         : Sun Feb 22 04:59:32 2026
+| Host         : eecs-digital-05 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_timing -file obj/post_place_timing.rpt
 | Design       : top_level
 | Device       : 7s50-csga324
@@ -45,7 +45,7 @@ Slack (MET) :             8.418ns  (required time - arrival time)
   -------------------------------------------------------------------    -------------------
     SLICE_X36Y46         FDRE (Prop_fdre_C_Q)         0.419     5.494 r  clk_div_reg[1]/Q
                          net (fo=2, estimated)        0.853     6.347    core_clk
-    SLICE_X36Y46         LUT3 (Prop_lut3_I0_O)        0.325     6.672 r  clk_div[1]_i_1/O
+    SLICE_X36Y46         LUT3 (Prop_lut3_I1_O)        0.325     6.672 r  clk_div[1]_i_1/O
                          net (fo=1, routed)           0.000     6.672    clk_div[1]_i_1_n_0
     SLICE_X36Y46         FDRE                                         r  clk_div_reg[1]/D
   -------------------------------------------------------------------    -------------------
