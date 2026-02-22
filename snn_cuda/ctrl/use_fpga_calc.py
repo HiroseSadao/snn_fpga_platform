@@ -26,6 +26,7 @@ OP_READ_SPIKE_COUNT = 0x21
 OP_READ_RAW_U8 = 0x22
 OP_READ_POISSON_THRESH = 0x23
 OP_READ_INFER_DEBUG = 0x24
+OP_WRITE_INFER_WEIGHT = 0x25
 
 STATUS_OK = 0x00
 STATUS_BAD_PACKET = 0xE1
@@ -34,12 +35,22 @@ STATUS_UNSUPPORTED_OP = 0xE2
 # Fixed-point S16.16 model constants (must match top_level.sv)
 FXP_SHIFT = 16
 FXP_ALPHA = 62259
+FXP_ALPHA_INH = 58982
 FXP_INPUT_W = 8192
 FXP_THRESH = 65536
 FXP_BIAS_LSB = 512
-FXP_WTA_INH = 55706
+FXP_ONE = 65536
+FXP_HALF = 32768
+FXP_WEXC = 147456
+FXP_INH_COEFF = 563
+FXP_INH_THRESH = 65536
 N_IN = 784
 N_NEURONS = 100
+
+# Inference-only reference parameters from LIF_WTA_STDP_MNIST_mine.py
+MINE_DT = 1e-3
+MINE_WEXC = 2.25
+MINE_WINH = 0.85
 
 # Poisson/RNG constants (must match top_level.sv)
 POISSON_NUM_CONST = 9175  # floor(32*140*2048*1e-3)
@@ -160,6 +171,11 @@ def decode_bad_packet_result(result: int) -> str:
             f"reason=READ_INFER_DEBUG_ARG(0x14), "
             f"opcode=0x{opcode:02X}, arg0_lo16=0x{arg0_lo16:04X}({arg0_lo16})"
         )
+    if reason == 0x15:
+        return (
+            f"reason=WRITE_INFER_WEIGHT_ARG(0x15), "
+            f"opcode=0x{opcode:02X}, arg0_lo16=0x{arg0_lo16:04X}({arg0_lo16})"
+        )
     if u == 0:
         return "no debug payload (result=0)"
     return f"reason=0x{reason:02X}, opcode=0x{opcode:02X}, arg0_lo16=0x{arg0_lo16:04X}"
@@ -271,6 +287,65 @@ def fpga_run_sample_infer(
     require_ok(status, "RUN_SAMPLE_INFER")
     print(f"FPGA inference finished, total_spikes={total_spikes}")
     return total_spikes
+
+
+def build_fixed_weight_matrix_q16() -> np.ndarray:
+    # Must match the fallback fixed connectivity used by the Python mine-style reference.
+    w_q16 = np.zeros((N_NEURONS, N_IN), dtype=np.uint16)
+    for n in range(N_NEURONS):
+        for i in range(N_IN):
+            if ((i + n) & 0x3) == 0:
+                w_q16[n, i] = np.uint16(FXP_INPUT_W & 0xFFFF)
+    return w_q16
+
+
+def load_weight_matrix_q16_from_file(path: str) -> np.ndarray:
+    arr = np.load(path)
+    if isinstance(arr, np.lib.npyio.NpzFile):
+        if "w_in" in arr:
+            data = arr["w_in"]
+        else:
+            first_key = next(iter(arr.files), None)
+            if first_key is None:
+                raise ValueError(f"No arrays found in npz: {path}")
+            data = arr[first_key]
+    else:
+        data = arr
+
+    data_np = np.asarray(data)
+    if data_np.shape != (N_NEURONS, N_IN):
+        raise ValueError(
+            f"weights shape mismatch: got {data_np.shape}, expected {(N_NEURONS, N_IN)}"
+        )
+
+    if np.issubdtype(data_np.dtype, np.integer):
+        q16 = np.asarray(data_np, dtype=np.int64)
+        if np.any((q16 < 0) | (q16 > 0xFFFF)):
+            raise ValueError("integer weight file must contain Q0.16 values in [0, 65535]")
+        return q16.astype(np.uint16)
+
+    data_f = np.asarray(data_np, dtype=np.float64)
+    q16 = np.clip(np.rint(data_f * (1 << FXP_SHIFT)), 0, 0xFFFF).astype(np.uint16)
+    return q16
+
+
+def fpga_write_infer_weights(ser: serial.Serial, w_q16: np.ndarray) -> None:
+    if w_q16.shape != (N_NEURONS, N_IN):
+        raise ValueError(f"w_q16 shape mismatch: got {w_q16.shape}, expected {(N_NEURONS, N_IN)}")
+    flat = np.asarray(w_q16, dtype=np.uint16).reshape(-1)
+    nnz = int(np.count_nonzero(flat))
+    print(
+        "Uploading infer weights via UART: "
+        f"count={flat.size}, nonzero={nnz}, q16_sum={int(np.sum(flat, dtype=np.uint64))}"
+    )
+    t0 = time.time()
+    for idx, val in enumerate(flat):
+        status, result = send_request(ser, OP_WRITE_INFER_WEIGHT, [idx, int(val)])
+        require_ok(status, f"WRITE_INFER_WEIGHT[{idx}]")
+        if (idx & 0x0FFF) == 0x0FFF or idx == (flat.size - 1):
+            elapsed = time.time() - t0
+            print(f"  uploaded {idx + 1}/{flat.size} ({elapsed:.1f}s)")
+    print(f"Weight upload completed in {time.time() - t0:.2f}s")
 
 
 def fpga_read_spike_counts(ser: serial.Serial) -> list[int]:
@@ -470,6 +545,11 @@ def run_fixed_point_python_poisson(image_u8: list[int], n_steps: int, seed: int)
 
 def run_fixed_point_python_poisson_with_thresholds(thresholds: list[int], n_steps: int, seed: int) -> list[int]:
     v = [0] * N_NEURONS
+    v_inh = [0] * N_NEURONS
+    c_inh = [0] * N_NEURONS
+    g_inh = [0] * N_NEURONS
+    g_exc_delay0 = [0] * N_NEURONS
+    g_exc_delay1 = [0] * N_NEURONS
     spike_count = [0] * N_NEURONS
     rng_state = seed & 0xFFFFFFFF
 
@@ -480,37 +560,199 @@ def run_fixed_point_python_poisson_with_thresholds(thresholds: list[int], n_step
             rand11 = (rng_state >> 21) & 0x7FF
             s_in[i] = 1 if rand11 < thresholds[i] else 0
 
-        v_next = [0] * N_NEURONS
-        any_spike = False
-        winner_idx = 0
-        winner_v_next = 0
+        s_exc = [0] * N_NEURONS
 
         for n in range(N_NEURONS):
-            accum = neuron_bias(n)
+            accum = 0
             for i in range(N_IN):
                 if s_in[i] and (((i + n) & 0x3) == 0):
                     accum = to_s32(accum + FXP_INPUT_W)
-            v_n_next = to_s32(((to_s32(v[n]) * FXP_ALPHA) >> FXP_SHIFT) + accum)
-            v_next[n] = v_n_next
+            v_n_next = to_s32(((to_s32(v[n]) * FXP_ALPHA) >> FXP_SHIFT) + accum - g_inh[n])
             if v_n_next >= FXP_THRESH:
-                if (not any_spike) or (v_n_next > winner_v_next) or (
-                    v_n_next == winner_v_next and n < winner_idx
-                ):
-                    winner_idx = n
-                    winner_v_next = v_n_next
-                any_spike = True
+                v[n] = to_s32(v_n_next - FXP_THRESH)
+                spike_count[n] += 1
+                s_exc[n] = 1
+            else:
+                v[n] = v_n_next
 
-        if any_spike:
-            for n in range(N_NEURONS):
-                if n == winner_idx:
-                    v[n] = to_s32(v_next[n] - FXP_THRESH)
-                    spike_count[n] += 1
-                else:
-                    inhibited = to_s32(v_next[n] - FXP_WTA_INH)
-                    v[n] = inhibited if inhibited > 0 else 0
-        else:
-            v = v_next
+        sum_c_inh = 0
+        for n in range(N_NEURONS):
+            g_exc_new = FXP_WEXC if s_exc[n] else 0
+            delayed_g_exc = g_exc_delay1[n]
+            g_exc_delay1[n] = g_exc_delay0[n]
+            g_exc_delay0[n] = g_exc_new
+
+            v_inh_next = to_s32(((to_s32(v_inh[n]) * FXP_ALPHA_INH) >> FXP_SHIFT) + delayed_g_exc)
+            s_inh = 1 if v_inh_next >= FXP_INH_THRESH else 0
+            if s_inh:
+                v_inh[n] = to_s32(v_inh_next - FXP_INH_THRESH)
+            else:
+                v_inh[n] = v_inh_next
+
+            c_inh_next = to_s32(c_inh[n] >> 1)
+            if s_inh:
+                c_inh_next = to_s32(c_inh_next + FXP_HALF)
+            c_inh[n] = c_inh_next
+            sum_c_inh = to_s32(sum_c_inh + c_inh_next)
+
+        for n in range(N_NEURONS):
+            diff = sum_c_inh - c_inh[n]
+            if diff < 0:
+                diff = 0
+            g_inh[n] = to_s32((diff * FXP_INH_COEFF) >> FXP_SHIFT)
     return spike_count
+
+
+def _build_fixed_w_in_for_mine_like() -> np.ndarray:
+    # Reuse the same source used for FPGA UART initialization to avoid drift.
+    return build_fixed_weight_matrix_q16().astype(np.float64) / float(1 << FXP_SHIFT)
+
+
+def _single_exp_step(r: np.ndarray, spike: np.ndarray, dt: float, td: float) -> np.ndarray:
+    r = r * (1.0 - dt / td) + spike / td
+    return r
+
+
+def _delay_step(buf: np.ndarray, x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    # buf shape: (N, nt_delay), nt_delay >= 1
+    out = buf[:, -1].copy()
+    if buf.shape[1] > 1:
+        buf[:, 1:] = buf[:, :-1]
+    buf[:, 0] = x
+    return out, buf
+
+
+def _conductance_lif_step(
+    v: np.ndarray,
+    tlast: np.ndarray,
+    tcount: int,
+    g_exc: np.ndarray,
+    g_inh: np.ndarray,
+    *,
+    dt: float,
+    tref: float,
+    tc_m: float,
+    vrest: float,
+    vreset: float,
+    vthr: np.ndarray,
+    vpeak: float,
+    e_exc: float,
+    e_inh: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    i_exc = g_exc * (e_exc - v)
+    i_inh = g_inh * (e_inh - v)
+    dv = (vrest - v + i_exc + i_inh) / tc_m
+    refractory_mask = ((dt * tcount) > (tlast + tref)).astype(np.float64)
+    v_tmp = v + refractory_mask * dv * dt
+    s = (v_tmp >= vthr).astype(np.uint8)
+    tlast_next = tlast * (1.0 - s) + (dt * tcount) * s
+    v_peaked = v_tmp * (1.0 - s) + vpeak * s
+    v_next = v_peaked * (1.0 - s) + vreset * s
+    return v_next, tlast_next, s
+
+
+def run_mine_style_python_poisson_with_thresholds(
+    thresholds: list[int],
+    n_steps: int,
+    seed: int,
+    w_in: np.ndarray | None = None,
+) -> list[int]:
+    # Inference-only port of the update ordering in LIF_WTA_STDP_MNIST_mine.py::__call__
+    # using deterministic fixed weights (current FPGA connectivity) instead of learned W_in.
+    dt = MINE_DT
+    n = N_NEURONS
+    n_in = N_IN
+
+    rng_state = seed & 0xFFFFFFFF
+
+    # Connectivity / gains
+    if w_in is None:
+        w_in = _build_fixed_w_in_for_mine_like()
+    inh_coeff = MINE_WINH / (n - 1)
+
+    # Synapse/delay states
+    input_td = 1e-3
+    exc_td = 1e-3
+    inh_td = 2e-3
+    input_decay = 1.0 - dt / input_td
+    input_scale = 1.0 / input_td
+    c_in_state = np.zeros(n_in, dtype=np.float64)
+    g_in_state = np.zeros(n, dtype=np.float64)
+    exc_syn_r = np.zeros(n, dtype=np.float64)
+    inh_syn_r = np.zeros(n, dtype=np.float64)
+    delay_input = np.zeros((n, max(1, round(5e-3 / dt))), dtype=np.float64)
+    delay_exc2inh = np.zeros((n, max(1, round(2e-3 / dt))), dtype=np.float64)
+    g_inh = np.zeros(n, dtype=np.float64)
+
+    # Excitatory neuron (DiehlAndCook2015LIF) state
+    v_exc = np.full(n, -65.0, dtype=np.float64)
+    tlast_exc = np.zeros(n, dtype=np.float64)
+    theta = np.zeros(n, dtype=np.float64)
+    vthr_exc = np.full(n, -52.0, dtype=np.float64)
+    exc_tcount = 0
+
+    # Inhibitory neuron (ConductanceBasedLIF) state
+    v_inh = np.full(n, -45.0, dtype=np.float64)  # vreset at init
+    tlast_inh = np.zeros(n, dtype=np.float64)
+    vthr_inh = np.full(n, -40.0, dtype=np.float64)
+    inh_tcount = 0
+
+    spike_count = np.zeros(n, dtype=np.int64)
+    thresholds_arr = np.asarray(thresholds, dtype=np.uint16)
+
+    for _ in range(n_steps):
+        # Poisson input generation (same RNG sequence as FPGA/simple reference)
+        s_in = np.zeros(n_in, dtype=np.uint8)
+        for i in range(n_in):
+            rng_state = lcg_next_u32(rng_state)
+            rand11 = (rng_state >> 21) & 0x7FF
+            s_in[i] = 1 if rand11 < int(thresholds_arr[i]) else 0
+
+        pre_active = np.flatnonzero(s_in)
+
+        # Input layer / synapses (mine.py ordering)
+        c_in_state = c_in_state * input_decay + input_scale * s_in.astype(np.float64)
+        # input_synaptictrace x_in exists in mine.py but not needed for inference (stdp=False)
+
+        g_in_state *= input_decay
+        if pre_active.size > 0:
+            # Equivalent to add_columns_scaled_inplace(g_in_state, W_in, pre_active, input_scale)
+            g_in_state += input_scale * np.sum(w_in[:, pre_active], axis=1)
+        delayed_g_in, delay_input = _delay_step(delay_input, g_in_state)
+
+        # Excitatory layer (DiehlAndCook2015LIF)
+        v_exc, tlast_exc, s_exc = _conductance_lif_step(
+            v_exc, tlast_exc, exc_tcount, delayed_g_in, g_inh,
+            dt=dt, tref=5e-3, tc_m=1e-1,
+            vrest=-65.0, vreset=-65.0, vthr=vthr_exc, vpeak=20.0,
+            e_exc=0.0, e_inh=-100.0,
+        )
+        theta = (1.0 - dt / 1e4) * theta + 0.05 * s_exc.astype(np.float64)
+        theta = np.clip(theta, 0.0, 35.0)
+        vthr_exc = theta + (-52.0)
+        exc_tcount += 1
+        spike_count += s_exc.astype(np.int64)
+
+        # Excitatory synapse -> inhibitory delay
+        exc_syn_r = _single_exp_step(exc_syn_r, s_exc.astype(np.float64), dt, exc_td)
+        g_exc = MINE_WEXC * exc_syn_r
+        delayed_g_exc, delay_exc2inh = _delay_step(delay_exc2inh, g_exc)
+
+        # Inhibitory layer
+        v_inh, tlast_inh, s_inh = _conductance_lif_step(
+            v_inh, tlast_inh, inh_tcount, delayed_g_exc, np.zeros(n, dtype=np.float64),
+            dt=dt, tref=2e-3, tc_m=1e-2,
+            vrest=-60.0, vreset=-45.0, vthr=vthr_inh, vpeak=20.0,
+            e_exc=0.0, e_inh=-85.0,
+        )
+        inh_tcount += 1
+
+        # Inhibitory synapse and WTA inhibition
+        inh_syn_r = _single_exp_step(inh_syn_r, s_inh.astype(np.float64), dt, inh_td)
+        sum_c_inh = float(np.sum(inh_syn_r))
+        g_inh = inh_coeff * (sum_c_inh - inh_syn_r)
+
+    return spike_count.astype(np.int64).tolist()
 
 
 def simulate_poisson_debug_counts(thresholds: list[int], n_steps: int, seed: int) -> dict[str, int]:
@@ -594,6 +836,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=lambda x: int(x, 0), default=0x12345678)
     parser.add_argument("--timeout", type=float, default=600.0)
     parser.add_argument("--poisson-only", action="store_true", help="validate only Poisson spike generation (skip LIF count comparison)")
+    parser.add_argument(
+        "--weights-npy",
+        type=str,
+        default=None,
+        help="Optional .npy/.npz weight matrix (shape [100,784]); used for Python compare and optionally UART upload",
+    )
+    parser.add_argument(
+        "--upload-weights",
+        action="store_true",
+        help="Upload weights to FPGA over UART before inference (default: off; FPGA initializes built-in weights)",
+    )
+    parser.add_argument(
+        "--python-model",
+        choices=["mine", "simple"],
+        default="mine",
+        help="Python reference model for spike-count comparison (default: mine)",
+    )
     return parser.parse_args()
 
 
@@ -607,6 +866,18 @@ if __name__ == "__main__":
         timeout=TIMEOUT_SEC,
         write_timeout=WRITE_TIMEOUT_SEC
     ) as ser:
+        if args.weights_npy:
+            fpga_weights_q16 = load_weight_matrix_q16_from_file(args.weights_npy)
+            print(f"Loaded weights from file: {args.weights_npy}")
+        else:
+            fpga_weights_q16 = build_fixed_weight_matrix_q16()
+            print("Using built-in fixed wiring weights (matches FPGA default initialization)")
+        if args.upload_weights:
+            fpga_write_infer_weights(ser, fpga_weights_q16)
+        else:
+            print("Skipping UART weight upload; using FPGA-side weight initialization")
+        py_w_in = fpga_weights_q16.astype(np.float64) / float(1 << FXP_SHIFT)
+
         fpga_sd_to_ddr_copy(
             ser=ser,
             start_lba=args.start_lba,
@@ -637,7 +908,10 @@ if __name__ == "__main__":
         py_thresh_sum = int(sum(py_thresh))
         py_thresh_max = max(py_thresh) if py_thresh else 0
         print(f"Python threshold stats: sum={py_thresh_sum}, max={py_thresh_max}")
-        print(f"WTA inhibition (S16.16): FXP_WTA_INH={FXP_WTA_INH}")
+        print(
+            "WTA/inhibition params (S16.16): "
+            f"FXP_WEXC={FXP_WEXC}, FXP_INH_COEFF={FXP_INH_COEFF}, FXP_INH_THRESH={FXP_INH_THRESH}"
+        )
 
         fpga_run_sample_infer(
             ser=ser,
@@ -697,16 +971,32 @@ if __name__ == "__main__":
             print(f"FPGA result: {args.a} + {args.b} = {result}")
             raise SystemExit(0)
 
-        py_counts = run_fixed_point_python_poisson(
-            image_u8=image0_u8,
-            n_steps=args.n_steps,
-            seed=args.seed
-        )
-        py_counts_from_fpga_thresh = run_fixed_point_python_poisson_with_thresholds(
-            thresholds=fpga_thresh,
-            n_steps=args.n_steps,
-            seed=args.seed
-        )
+        if args.python_model == "mine":
+            print("Python compare model: mine-style inference (no STDP, fixed FPGA wiring weights)")
+            py_counts = run_mine_style_python_poisson_with_thresholds(
+                thresholds=py_thresh,
+                n_steps=args.n_steps,
+                seed=args.seed,
+                w_in=py_w_in,
+            )
+            py_counts_from_fpga_thresh = run_mine_style_python_poisson_with_thresholds(
+                thresholds=fpga_thresh,
+                n_steps=args.n_steps,
+                seed=args.seed,
+                w_in=py_w_in,
+            )
+        else:
+            print("Python compare model: simple fixed-point debug model")
+            py_counts = run_fixed_point_python_poisson(
+                image_u8=image0_u8,
+                n_steps=args.n_steps,
+                seed=args.seed
+            )
+            py_counts_from_fpga_thresh = run_fixed_point_python_poisson_with_thresholds(
+                thresholds=fpga_thresh,
+                n_steps=args.n_steps,
+                seed=args.seed
+            )
         compare_counts(fpga_counts, py_counts)
         print("Compare using FPGA-read thresholds:")
         compare_counts(fpga_counts, py_counts_from_fpga_thresh)
