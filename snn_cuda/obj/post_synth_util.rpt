@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Sun Feb 22 05:48:25 2026
-| Host         : eecs-digital-06 running 64-bit Ubuntu 24.04.3 LTS
+| Date         : Sun Feb 22 07:23:18 2026
+| Host         : eecs-digital-17 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_utilization -file obj/post_synth_util.rpt -hierarchical -hierarchical_depth 4
 | Design       : top_level
 | Device       : xc7s50csga324-1
@@ -19,14 +19,17 @@ Table of Contents
 1. Utilization by Hierarchy
 ---------------------------
 
-+---------------------+---------------+------------+------------+---------+------+------+--------+--------+------------+
-|       Instance      |     Module    | Total LUTs | Logic LUTs | LUTRAMs | SRLs |  FFs | RAMB36 | RAMB18 | DSP Blocks |
-+---------------------+---------------+------------+------------+---------+------+------+--------+--------+------------+
-| top_level           |         (top) |       7390 |       5563 |    1827 |    0 | 1654 |     48 |      0 |         23 |
-|   (top_level)       |         (top) |       5532 |       3705 |    1827 |    0 | 1303 |     48 |      0 |         23 |
-|   u_poisson_divider |     divider2b |        239 |        239 |       0 |    0 |  137 |      0 |      0 |          0 |
-|   u_sd_controller   | sd_controller |        782 |        782 |       0 |    0 |  148 |      0 |      0 |          0 |
-|   u_uart_rx         |       uart_rx |        810 |        810 |       0 |    0 |   41 |      0 |      0 |          0 |
-+---------------------+---------------+------------+------------+---------+------+------+--------+--------+------------+
++--------------------------+-----------------+------------+------------+---------+------+------+--------+--------+------------+
+|         Instance         |      Module     | Total LUTs | Logic LUTs | LUTRAMs | SRLs |  FFs | RAMB36 | RAMB18 | DSP Blocks |
++--------------------------+-----------------+------------+------------+---------+------+------+--------+--------+------------+
+| top_level                |           (top) |      10346 |       8519 |    1827 |    0 | 4177 |     48 |      0 |         23 |
+|   (top_level)            |           (top) |       5659 |       3832 |    1827 |    0 | 1622 |     48 |      0 |         23 |
+|   u_ddr3_top             |        ddr3_top |       3085 |       3085 |       0 |    0 | 2204 |      0 |      0 |          0 |
+|     (u_ddr3_top)         |        ddr3_top |        320 |        320 |       0 |    0 |    0 |      0 |      0 |          0 |
+|     ddr3_controller_inst | ddr3_controller |       2751 |       2751 |       0 |    0 | 2181 |      0 |      0 |          0 |
+|   u_poisson_divider      |       divider2b |        277 |        277 |       0 |    0 |  137 |      0 |      0 |          0 |
+|   u_sd_controller        |   sd_controller |        703 |        703 |       0 |    0 |  148 |      0 |      0 |          0 |
+|   u_uart_rx              |         uart_rx |        594 |        594 |       0 |    0 |   41 |      0 |      0 |          0 |
++--------------------------+-----------------+------------+------------+---------+------+------+--------+--------+------------+
 
 

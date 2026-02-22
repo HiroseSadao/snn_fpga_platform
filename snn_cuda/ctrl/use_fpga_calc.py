@@ -26,7 +26,9 @@ RESP_SYNC = 0x5A
 PROTO_VER = 0x01
 
 OP_ADD_I32 = 0x01
+OP_DDR_WRITE32 = 0x10
 OP_SD_TO_DDR_COPY = 0x11
+OP_DDR_READ32 = 0x12
 OP_RUN_SAMPLE_INFER = 0x20
 OP_READ_SPIKE_COUNT = 0x21
 OP_READ_RAW_U8 = 0x22
@@ -476,6 +478,33 @@ def fpga_add(ser: serial.Serial, a: int, b: int) -> int:
     status, result = send_request(ser, OP_ADD_I32, [a, b], response_timeout=TIMEOUT_SEC)
     require_ok(status, "ADD request")
     return result
+
+
+def fpga_ddr_write32(ser: serial.Serial, addr_word: int, value: int) -> int:
+    status, result = send_request(ser, OP_DDR_WRITE32, [int(addr_word), int(value)])
+    require_ok(status, f"DDR_WRITE32[{addr_word}]")
+    return int(result)
+
+
+def fpga_ddr_read32(ser: serial.Serial, addr_word: int) -> int:
+    status, result = send_request(ser, OP_DDR_READ32, [int(addr_word), 0])
+    require_ok(status, f"DDR_READ32[{addr_word}]")
+    return int(result)
+
+
+def fpga_ddr_smoke_test(ser: serial.Serial, base_addr_word: int = 0x100) -> None:
+    print(f"Running DDR smoke test @ word_addr=0x{base_addr_word:08X}")
+    patterns = [0x11223344, 0x89ABCDEF, 0x00000000, 0x55AA33CC]
+    for i, pat in enumerate(patterns):
+        addr = base_addr_word + i
+        fpga_ddr_write32(ser, addr, pat)
+    for i, pat in enumerate(patterns):
+        addr = base_addr_word + i
+        got = fpga_ddr_read32(ser, addr) & 0xFFFFFFFF
+        print(f"  DDR[{addr}] -> 0x{got:08X} (exp 0x{pat & 0xFFFFFFFF:08X})")
+        if got != (pat & 0xFFFFFFFF):
+            raise RuntimeError(f"DDR smoke test mismatch at addr {addr}: got 0x{got:08X}")
+    print("DDR smoke test passed.")
 
 
 def load_mnist() -> tuple[np.ndarray, np.ndarray]:
@@ -1041,6 +1070,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n-steps", type=int, default=350)
     parser.add_argument("--seed", type=lambda x: int(x, 0), default=0x12345678)
     parser.add_argument("--timeout", type=float, default=600.0)
+    parser.add_argument("--ddr-smoke", action="store_true", help="run DDR read/write smoke test before SD/inference")
+    parser.add_argument("--ddr-smoke-addr", type=lambda x: int(x, 0), default=0x100, help="base word address for DDR smoke test")
     parser.add_argument("--poisson-only", action="store_true", help="validate only Poisson spike generation (skip LIF count comparison)")
     parser.add_argument(
         "--weights-npy",
@@ -1114,6 +1145,9 @@ if __name__ == "__main__":
             print(f"Train kernel caps: 0x{caps:08X}")
         except Exception as exc:
             print(f"Train kernel caps query skipped/failed: {exc}")
+
+        if args.ddr_smoke:
+            fpga_ddr_smoke_test(ser, base_addr_word=args.ddr_smoke_addr)
 
         if args.weights_npy:
             fpga_weights_q16 = load_weight_matrix_q16_from_file(args.weights_npy)

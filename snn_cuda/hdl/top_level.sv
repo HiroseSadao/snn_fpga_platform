@@ -6,6 +6,20 @@ module top_level(
     input  wire [15:0] sw,
     input  wire        uart_rxd,
     output logic       uart_txd,
+    inout  wire [15:0] ddr3_dq,
+    inout  wire [1:0]  ddr3_dqs_n,
+    inout  wire [1:0]  ddr3_dqs_p,
+    output wire [13:0] ddr3_addr,
+    output wire [2:0]  ddr3_ba,
+    output wire        ddr3_ras_n,
+    output wire        ddr3_cas_n,
+    output wire        ddr3_we_n,
+    output wire        ddr3_reset_n,
+    output wire        ddr3_clk_p,
+    output wire        ddr3_clk_n,
+    output wire        ddr3_clke,
+    output wire [1:0]  ddr3_dm,
+    output wire        ddr3_odt,
     input  wire        SD_DQ0,
     output wire        SD_DQ1,
     output wire        SD_DQ2,
@@ -27,6 +41,7 @@ module top_level(
     localparam logic [7:0] OP_ADD_I32 = 8'h01;
     localparam logic [7:0] OP_DDR_WRITE32 = 8'h10;
     localparam logic [7:0] OP_SD_TO_DDR_COPY = 8'h11;
+    localparam logic [7:0] OP_DDR_READ32 = 8'h12;
     localparam logic [7:0] OP_RUN_SAMPLE_INFER = 8'h20;
     localparam logic [7:0] OP_READ_SPIKE_COUNT = 8'h21;
     localparam logic [7:0] OP_READ_RAW_U8 = 8'h22;
@@ -134,6 +149,11 @@ module top_level(
         INFER_APPLY_WTA,
         INFER_WTA_PASS2
     } infer_state_t;
+    typedef enum logic [1:0] {
+        DDRBR_IDLE,
+        DDRBR_ISSUE,
+        DDRBR_WAIT_ACK
+    } ddr_bridge_state_t;
 
     rx_state_t rx_state;
     tx_state_t tx_state;
@@ -167,6 +187,45 @@ module top_level(
     logic [1:0]  clk_div;
     wire         clk_25mhz = clk_div[1];
     wire         core_clk = clk_25mhz;
+    wire         clk_controller;
+    wire         clk_ddr3;
+    wire         clk_ddr3_90;
+    wire         clk_ref_200;
+    wire         clk_100mhz_buf;
+    wire         ddr_clk_wiz_locked;
+
+    // DDR3 Wishbone interface (controller clock domain)
+    logic        ddr_wb_stb;
+    logic        ddr_wb_we;
+    logic [23:0] ddr_wb_addr;
+    logic [127:0] ddr_wb_wdata;
+    logic [15:0] ddr_wb_sel;
+    wire         ddr_wb_stall;
+    wire         ddr_wb_ack;
+    wire [127:0] ddr_wb_rdata;
+    wire         ddr_calib_complete;
+
+    // Core<->DDR bridge for UART DDR read/write smoke test
+    logic        ddr_req_pending_core;
+    logic        ddr_req_we_core;
+    logic [31:0] ddr_req_addr_word_core;
+    logic [31:0] ddr_req_wdata_core;
+    logic [31:0] ddr_resp_rdata_async;
+    logic [7:0]  ddr_resp_status_async;
+    logic        ddr_req_toggle_core;
+    logic        ddr_rsp_toggle_core_sync1, ddr_rsp_toggle_core_sync2;
+    logic        ddr_rsp_toggle_core_seen;
+
+    logic        ddr_req_toggle_ddr_sync1, ddr_req_toggle_ddr_sync2;
+    logic        ddr_req_toggle_ddr_seen;
+    logic        ddr_rsp_toggle_ddr;
+    ddr_bridge_state_t ddr_bridge_state;
+    logic        ddr_req_we_ddr;
+    logic [31:0] ddr_req_addr_word_ddr;
+    logic [31:0] ddr_req_wdata_ddr;
+    logic [31:0] ddr_rsp_rdata_ddr;
+    logic [7:0]  ddr_rsp_status_ddr;
+    logic [1:0]  ddr_lane_sel_ddr;
 
     logic        sd_rd;
     logic        sd_wr;
@@ -304,7 +363,9 @@ module top_level(
     assign led[5] = response_ready;             // LD5: response pending
     assign led[6] = tx_active;                  // LD6: UART TX active
     assign led[7] = (resp_status == STATUS_OK); // LD7: last response OK
-    assign led[15:8] = 8'h00;
+    assign led[14] = ddr_clk_wiz_locked;         // DDR clock wizard lock
+    assign led[15] = ddr_calib_complete;         // DDR3 calibration done
+    assign led[13:8] = 6'h00;
     assign pmoda = {rgb0[0], rgb0[1], rgb0[2]};
 
     // Default inference weights are initialized on-FPGA at configuration time.
@@ -326,7 +387,7 @@ module top_level(
         end
     end
 
-    always_ff @(posedge clk_100mhz) begin
+    always_ff @(posedge clk_100mhz_buf) begin
         if (btn[0]) begin
             clk_div <= 2'b00;
         end else begin
@@ -363,6 +424,84 @@ module top_level(
         .o_tx_active (tx_active),
         .o_tx_serial (uart_txd),
         .o_tx_done   (tx_done)
+    );
+
+    lab06_clk_wiz u_ddr_clk_wiz (
+        .clk_controller  (clk_controller),
+        .clk_ddr3        (clk_ddr3),
+        .clk_ddr3_90     (clk_ddr3_90),
+        .clk_camera      (clk_ref_200), // 200 MHz output reused as DDR IDELAY refclk
+        .clk_xc          (),
+        .clk_passthrough (clk_100mhz_buf),
+        .reset           (btn[0]),
+        .locked          (ddr_clk_wiz_locked),
+        .clk_in1         (clk_100mhz)
+    );
+
+    ddr3_top #(
+        .CONTROLLER_CLK_PERIOD(12_000),
+        .DDR3_CLK_PERIOD(3_000),
+        .ROW_BITS(14),
+        .COL_BITS(10),
+        .BA_BITS(3),
+        .BYTE_LANES(2),
+        .AUX_WIDTH(16),
+        .WB2_ADDR_BITS(32),
+        .WB2_DATA_BITS(32),
+        .MICRON_SIM(0),
+        .ODELAY_SUPPORTED(0),
+        .SECOND_WISHBONE(0),
+        .ECC_ENABLE(0),
+        .WB_ERROR(0)
+    ) u_ddr3_top (
+        .i_controller_clk(clk_controller),
+        .i_ddr3_clk      (clk_ddr3),
+        .i_ref_clk       (clk_ref_200),
+        .i_ddr3_clk_90   (clk_ddr3_90),
+        .i_rst_n         (!btn[0] && ddr_clk_wiz_locked),
+
+        .i_wb_cyc        (1'b1),
+        .i_wb_stb        (ddr_wb_stb),
+        .i_wb_we         (ddr_wb_we),
+        .i_wb_addr       (ddr_wb_addr),
+        .i_wb_data       (ddr_wb_wdata),
+        .i_wb_sel        (ddr_wb_sel),
+        .i_aux           ({15'd0, ddr_wb_we}),
+        .o_wb_stall      (ddr_wb_stall),
+        .o_wb_ack        (ddr_wb_ack),
+        .o_wb_err        (),
+        .o_wb_data       (ddr_wb_rdata),
+        .o_aux           (),
+
+        .i_wb2_cyc       (1'b0),
+        .i_wb2_stb       (1'b0),
+        .i_wb2_we        (1'b0),
+        .i_wb2_addr      (32'd0),
+        .i_wb2_data      (32'd0),
+        .i_wb2_sel       (4'd0),
+        .o_wb2_stall     (),
+        .o_wb2_ack       (),
+        .o_wb2_data      (),
+
+        .o_ddr3_clk_p    (ddr3_clk_p),
+        .o_ddr3_clk_n    (ddr3_clk_n),
+        .o_ddr3_reset_n  (ddr3_reset_n),
+        .o_ddr3_cke      (ddr3_clke),
+        .o_ddr3_cs_n     (),
+        .o_ddr3_ras_n    (ddr3_ras_n),
+        .o_ddr3_cas_n    (ddr3_cas_n),
+        .o_ddr3_we_n     (ddr3_we_n),
+        .o_ddr3_addr     (ddr3_addr),
+        .o_ddr3_ba_addr  (ddr3_ba),
+        .io_ddr3_dq      (ddr3_dq),
+        .io_ddr3_dqs     (ddr3_dqs_p),
+        .io_ddr3_dqs_n   (ddr3_dqs_n),
+        .o_ddr3_dm       (ddr3_dm),
+        .o_ddr3_odt      (ddr3_odt),
+        .o_calib_complete(ddr_calib_complete),
+        .o_debug1        (),
+        .i_user_self_refresh(1'b0),
+        .uart_tx         ()
     );
 
     sd_controller u_sd_controller (
@@ -442,6 +581,95 @@ module top_level(
         end
     endfunction
 
+    always_ff @(posedge clk_controller) begin
+        if (btn[0] || !ddr_clk_wiz_locked) begin
+            ddr_wb_stb <= 1'b0;
+            ddr_wb_we  <= 1'b0;
+            ddr_wb_addr <= 24'd0;
+            ddr_wb_wdata <= 128'd0;
+            ddr_wb_sel <= 16'd0;
+            ddr_req_toggle_ddr_sync1 <= 1'b0;
+            ddr_req_toggle_ddr_sync2 <= 1'b0;
+            ddr_req_toggle_ddr_seen  <= 1'b0;
+            ddr_rsp_toggle_ddr <= 1'b0;
+            ddr_bridge_state <= DDRBR_IDLE;
+            ddr_req_we_ddr <= 1'b0;
+            ddr_req_addr_word_ddr <= 32'd0;
+            ddr_req_wdata_ddr <= 32'd0;
+            ddr_rsp_rdata_ddr <= 32'd0;
+            ddr_rsp_status_ddr <= STATUS_BAD_PACKET;
+            ddr_lane_sel_ddr <= 2'd0;
+            ddr_resp_rdata_async <= 32'd0;
+            ddr_resp_status_async <= STATUS_BAD_PACKET;
+        end else begin
+            ddr_req_toggle_ddr_sync1 <= ddr_req_toggle_core;
+            ddr_req_toggle_ddr_sync2 <= ddr_req_toggle_ddr_sync1;
+            ddr_wb_stb <= 1'b0;
+
+            case (ddr_bridge_state)
+                DDRBR_IDLE: begin
+                    if (ddr_req_toggle_ddr_sync2 != ddr_req_toggle_ddr_seen) begin
+                        ddr_req_toggle_ddr_seen <= ddr_req_toggle_ddr_sync2;
+                        // Core domain holds payload stable until response toggle is observed.
+                        ddr_req_we_ddr <= ddr_req_we_core;
+                        ddr_req_addr_word_ddr <= ddr_req_addr_word_core;
+                        ddr_req_wdata_ddr <= ddr_req_wdata_core;
+                        ddr_lane_sel_ddr <= ddr_req_addr_word_core[1:0];
+                        ddr_bridge_state <= DDRBR_ISSUE;
+                    end
+                end
+
+                DDRBR_ISSUE: begin
+                    if (!ddr_calib_complete) begin
+                        ddr_resp_status_async <= STATUS_BAD_PACKET;
+                        ddr_resp_rdata_async  <= 32'sd0;
+                        ddr_rsp_toggle_ddr    <= ~ddr_rsp_toggle_ddr;
+                        ddr_bridge_state      <= DDRBR_IDLE;
+                    end else if (!ddr_wb_stall) begin
+                        ddr_wb_we   <= ddr_req_we_ddr;
+                        ddr_wb_addr <= {2'b00, ddr_req_addr_word_ddr[23:2]};
+                        if (ddr_req_we_ddr) begin
+                            case (ddr_req_addr_word_ddr[1:0])
+                                2'd0: begin ddr_wb_wdata <= {96'd0, ddr_req_wdata_ddr}; ddr_wb_sel <= 16'h000F; end
+                                2'd1: begin ddr_wb_wdata <= {64'd0, ddr_req_wdata_ddr, 32'd0}; ddr_wb_sel <= 16'h00F0; end
+                                2'd2: begin ddr_wb_wdata <= {32'd0, ddr_req_wdata_ddr, 64'd0}; ddr_wb_sel <= 16'h0F00; end
+                                default: begin ddr_wb_wdata <= {ddr_req_wdata_ddr, 96'd0}; ddr_wb_sel <= 16'hF000; end
+                            endcase
+                        end else begin
+                            ddr_wb_wdata <= 128'd0;
+                            ddr_wb_sel   <= 16'h0000;
+                        end
+                        ddr_wb_stb <= 1'b1;
+                        ddr_bridge_state <= DDRBR_WAIT_ACK;
+                    end
+                end
+
+                DDRBR_WAIT_ACK: begin
+                    if (ddr_wb_ack) begin
+                        if (ddr_req_we_ddr) begin
+                            ddr_resp_status_async <= STATUS_OK;
+                            ddr_resp_rdata_async  <= ddr_req_addr_word_ddr;
+                        end else begin
+                            ddr_resp_status_async <= STATUS_OK;
+                            case (ddr_lane_sel_ddr)
+                                2'd0: ddr_resp_rdata_async <= ddr_wb_rdata[31:0];
+                                2'd1: ddr_resp_rdata_async <= ddr_wb_rdata[63:32];
+                                2'd2: ddr_resp_rdata_async <= ddr_wb_rdata[95:64];
+                                default: ddr_resp_rdata_async <= ddr_wb_rdata[127:96];
+                            endcase
+                        end
+                        ddr_rsp_toggle_ddr <= ~ddr_rsp_toggle_ddr;
+                        ddr_bridge_state <= DDRBR_IDLE;
+                    end
+                end
+
+                default: begin
+                    ddr_bridge_state <= DDRBR_IDLE;
+                end
+            endcase
+        end
+    end
+
     always_ff @(posedge core_clk) begin
         if (btn[0]) begin
             rx_state          <= RX_WAIT_SYNC;
@@ -465,6 +693,14 @@ module top_level(
             ddr_write_count   <= 32'd0;
             ddr_last_addr     <= 32'd0;
             ddr_last_data     <= 32'd0;
+            ddr_req_pending_core <= 1'b0;
+            ddr_req_we_core      <= 1'b0;
+            ddr_req_addr_word_core <= 32'd0;
+            ddr_req_wdata_core   <= 32'd0;
+            ddr_req_toggle_core  <= 1'b0;
+            ddr_rsp_toggle_core_sync1 <= 1'b0;
+            ddr_rsp_toggle_core_sync2 <= 1'b0;
+            ddr_rsp_toggle_core_seen  <= 1'b0;
             rx_timeout_counter<= 16'd0;
             sd_rd             <= 1'b0;
             sd_wr             <= 1'b0;
@@ -527,6 +763,21 @@ module top_level(
             sd_rd <= 1'b0;
             sd_wr <= 1'b0;
             infer_div_valid <= 1'b0;
+            ddr_rsp_toggle_core_sync1 <= ddr_rsp_toggle_ddr;
+            ddr_rsp_toggle_core_sync2 <= ddr_rsp_toggle_core_sync1;
+
+            if (ddr_req_pending_core && !response_ready &&
+                (ddr_rsp_toggle_core_sync2 != ddr_rsp_toggle_core_seen)) begin
+                ddr_rsp_toggle_core_seen <= ddr_rsp_toggle_core_sync2;
+                ddr_req_pending_core <= 1'b0;
+                if ((ddr_resp_status_async == STATUS_OK) && ddr_req_we_core) begin
+                    ddr_write_count <= ddr_write_count + 32'd1;
+                end
+                resp_status    <= ddr_resp_status_async;
+                resp_result    <= ddr_resp_rdata_async;
+                resp_checksum  <= calc_resp_checksum(ddr_resp_status_async, ddr_resp_rdata_async);
+                response_ready <= 1'b1;
+            end
             if (response_ready || (rx_state == RX_WAIT_SYNC)) begin
                 rx_timeout_counter <= 16'd0;
             end else if (rx_dv) begin
@@ -580,7 +831,7 @@ module top_level(
                 end
             end
 
-            if (rx_dv && !response_ready && !memrd_pending && !sd_copy_active && !infer_active) begin
+            if (rx_dv && !response_ready && !memrd_pending && !sd_copy_active && !infer_active && !ddr_req_pending_core) begin
                 case (rx_state)
                     RX_WAIT_SYNC: begin
                         if (rx_byte == REQ_SYNC) begin
@@ -618,7 +869,7 @@ module top_level(
                             response_ready  <= 1'b1;
                         end else if (
                             ((req_opcode == OP_ADD_I32) || (req_opcode == OP_DDR_WRITE32) ||
-                             (req_opcode == OP_SD_TO_DDR_COPY) || (req_opcode == OP_RUN_SAMPLE_INFER) ||
+                             (req_opcode == OP_SD_TO_DDR_COPY) || (req_opcode == OP_DDR_READ32) || (req_opcode == OP_RUN_SAMPLE_INFER) ||
                              (req_opcode == OP_READ_SPIKE_COUNT) || (req_opcode == OP_READ_RAW_U8) ||
                              (req_opcode == OP_READ_POISSON_THRESH) || (req_opcode == OP_READ_INFER_DEBUG) ||
                              (req_opcode == OP_WRITE_INFER_WEIGHT) || (req_opcode == OP_TRAIN_QUERY_CAPS) ||
@@ -694,14 +945,31 @@ module top_level(
                                     end
                                 end
                                 OP_DDR_WRITE32: begin
-                                    if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < DDR_ADDR_WORD_LIMIT)) begin
-                                        ddr_write_count <= ddr_write_count + 32'd1;
-                                        ddr_last_addr <= arg0;
-                                        ddr_last_data <= arg1;
-                                        resp_status    <= STATUS_OK;
-                                        resp_result    <= arg0;
-                                        resp_checksum  <= calc_resp_checksum(STATUS_OK, arg0);
+                                    if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < DDR_ADDR_WORD_LIMIT) &&
+                                        ddr_calib_complete && !ddr_req_pending_core) begin
+                                        ddr_req_pending_core   <= 1'b1;
+                                        ddr_req_we_core        <= 1'b1;
+                                        ddr_req_addr_word_core <= arg0;
+                                        ddr_req_wdata_core     <= arg1;
+                                        ddr_req_toggle_core    <= ~ddr_req_toggle_core;
+                                        ddr_last_addr          <= arg0;
+                                        ddr_last_data          <= arg1;
+                                    end else begin
+                                        resp_status    <= STATUS_BAD_PACKET;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
                                         response_ready <= 1'b1;
+                                    end
+                                end
+                                OP_DDR_READ32: begin
+                                    if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < DDR_ADDR_WORD_LIMIT) &&
+                                        ddr_calib_complete && !ddr_req_pending_core) begin
+                                        ddr_req_pending_core   <= 1'b1;
+                                        ddr_req_we_core        <= 1'b0;
+                                        ddr_req_addr_word_core <= arg0;
+                                        ddr_req_wdata_core     <= 32'd0;
+                                        ddr_req_toggle_core    <= ~ddr_req_toggle_core;
+                                        ddr_last_addr          <= arg0;
                                     end else begin
                                         resp_status    <= STATUS_BAD_PACKET;
                                         resp_result    <= 32'sd0;
