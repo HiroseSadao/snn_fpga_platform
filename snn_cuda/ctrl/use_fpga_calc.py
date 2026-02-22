@@ -37,6 +37,7 @@ FXP_ALPHA = 62259
 FXP_INPUT_W = 8192
 FXP_THRESH = 65536
 FXP_BIAS_LSB = 512
+FXP_WTA_INH = 55706
 N_IN = 784
 N_NEURONS = 100
 
@@ -479,17 +480,36 @@ def run_fixed_point_python_poisson_with_thresholds(thresholds: list[int], n_step
             rand11 = (rng_state >> 21) & 0x7FF
             s_in[i] = 1 if rand11 < thresholds[i] else 0
 
+        v_next = [0] * N_NEURONS
+        any_spike = False
+        winner_idx = 0
+        winner_v_next = 0
+
         for n in range(N_NEURONS):
             accum = neuron_bias(n)
             for i in range(N_IN):
                 if s_in[i] and (((i + n) & 0x3) == 0):
                     accum = to_s32(accum + FXP_INPUT_W)
-            v_next = to_s32(((to_s32(v[n]) * FXP_ALPHA) >> FXP_SHIFT) + accum)
-            if v_next >= FXP_THRESH:
-                v[n] = to_s32(v_next - FXP_THRESH)
-                spike_count[n] += 1
-            else:
-                v[n] = v_next
+            v_n_next = to_s32(((to_s32(v[n]) * FXP_ALPHA) >> FXP_SHIFT) + accum)
+            v_next[n] = v_n_next
+            if v_n_next >= FXP_THRESH:
+                if (not any_spike) or (v_n_next > winner_v_next) or (
+                    v_n_next == winner_v_next and n < winner_idx
+                ):
+                    winner_idx = n
+                    winner_v_next = v_n_next
+                any_spike = True
+
+        if any_spike:
+            for n in range(N_NEURONS):
+                if n == winner_idx:
+                    v[n] = to_s32(v_next[n] - FXP_THRESH)
+                    spike_count[n] += 1
+                else:
+                    inhibited = to_s32(v_next[n] - FXP_WTA_INH)
+                    v[n] = inhibited if inhibited > 0 else 0
+        else:
+            v = v_next
     return spike_count
 
 
@@ -547,7 +567,7 @@ def compare_counts(fpga_counts: list[int], py_counts: list[int]) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Copy RAW1 from SD to DDR, run FPGA Poisson+LIF inference, "
+            "Copy RAW1 from SD to DDR, run FPGA Poisson+LIF(WTA+inhibition) inference, "
             "compare with Python reproduction, then run FPGA add."
         )
     )
@@ -617,6 +637,7 @@ if __name__ == "__main__":
         py_thresh_sum = int(sum(py_thresh))
         py_thresh_max = max(py_thresh) if py_thresh else 0
         print(f"Python threshold stats: sum={py_thresh_sum}, max={py_thresh_max}")
+        print(f"WTA inhibition (S16.16): FXP_WTA_INH={FXP_WTA_INH}")
 
         fpga_run_sample_infer(
             ser=ser,

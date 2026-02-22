@@ -41,6 +41,7 @@ module top_level(
     localparam logic signed [31:0] FXP_INPUT_W = 32'sd8192; // 0.125 in S16.16
     localparam logic signed [31:0] FXP_THRESH = 32'sd65536; // 1.0 in S16.16
     localparam logic signed [31:0] FXP_BIAS_LSB = 32'sd512; // 0.0078125 in S16.16
+    localparam logic signed [31:0] FXP_WTA_INH = 32'sd55706; // 0.85 in S16.16
     localparam logic [31:0] POISSON_NUM_CONST = 32'd9175; // floor(32*140*2048*1e-3)
     localparam logic [10:0] RNG_MAX = 11'd2047;
     localparam logic [31:0] LCG_A = 32'd1664525;
@@ -76,7 +77,8 @@ module top_level(
         INFER_PREP_DIV_START,
         INFER_PREP_DIV_WAIT,
         INFER_GEN_INPUT_SPIKES,
-        INFER_ACCUM_NEURON
+        INFER_ACCUM_NEURON,
+        INFER_APPLY_WTA
     } infer_state_t;
 
     rx_state_t rx_state;
@@ -151,7 +153,12 @@ module top_level(
     logic [9:0]  infer_prep_idx;
     logic signed [31:0] infer_accum;
     logic signed [31:0] infer_v_state [0:N_NEURONS-1];
+    logic signed [31:0] infer_v_next [0:N_NEURONS-1];
     logic [15:0] infer_spike_count [0:N_NEURONS-1];
+    logic        infer_any_spike;
+    logic [6:0]  infer_winner_idx;
+    logic signed [31:0] infer_winner_v_next;
+    logic [6:0]  infer_apply_idx;
     logic [31:0] infer_total_spikes;
     logic [31:0] infer_rng_state;
     logic [10:0] infer_poisson_thresh [0:N_IN-1];
@@ -333,6 +340,10 @@ module top_level(
             infer_input_idx     <= 10'd0;
             infer_prep_idx      <= 10'd0;
             infer_accum         <= 32'sd0;
+            infer_any_spike     <= 1'b0;
+            infer_winner_idx    <= 7'd0;
+            infer_winner_v_next <= 32'sd0;
+            infer_apply_idx     <= 7'd0;
             infer_total_spikes  <= 32'd0;
             infer_rng_state     <= 32'd0;
             infer_dividend      <= 32'd0;
@@ -353,6 +364,7 @@ module top_level(
             end
             for (rr = 0; rr < N_NEURONS; rr = rr + 1) begin
                 infer_v_state[rr] <= 32'sd0;
+                infer_v_next[rr] <= 32'sd0;
                 infer_spike_count[rr] <= 16'd0;
             end
         end else begin
@@ -553,6 +565,10 @@ module top_level(
                                         infer_input_idx    <= 10'd0;
                                         infer_prep_idx     <= 10'd0;
                                         infer_accum        <= neuron_bias(7'd0);
+                                        infer_any_spike    <= 1'b0;
+                                        infer_winner_idx   <= 7'd0;
+                                        infer_winner_v_next<= 32'sd0;
+                                        infer_apply_idx    <= 7'd0;
                                         infer_total_spikes <= 32'd0;
                                         infer_rng_state    <= arg0;
                                         infer_dbg_total_input_spikes <= 32'd0;
@@ -565,6 +581,7 @@ module top_level(
                                         infer_dbg_curr_step_input_spikes <= 32'd0;
                                         for (rr = 0; rr < N_NEURONS; rr = rr + 1) begin
                                             infer_v_state[rr] <= 32'sd0;
+                                            infer_v_next[rr] <= 32'sd0;
                                             infer_spike_count[rr] <= 16'd0;
                                         end
                                     end else begin
@@ -868,6 +885,9 @@ module top_level(
                             end
                             infer_dbg_curr_step_input_spikes <= 32'd0;
                             infer_input_idx <= 10'd0;
+                            infer_any_spike <= 1'b0;
+                            infer_winner_idx <= 7'd0;
+                            infer_winner_v_next <= 32'sd0;
                             infer_state <= INFER_ACCUM_NEURON;
                         end else begin
                             infer_input_idx <= infer_input_idx + 10'd1;
@@ -902,36 +922,74 @@ module top_level(
                                    + $signed(infer_accum);
                             spike_now = (v_next >= FXP_THRESH);
 
+                            infer_v_next[infer_neuron_idx] <= v_next;
                             if (spike_now) begin
-                                infer_v_state[infer_neuron_idx] <= v_next - FXP_THRESH;
-                                infer_spike_count[infer_neuron_idx] <= infer_spike_count[infer_neuron_idx] + 16'd1;
-                                infer_total_spikes <= infer_total_spikes + 32'd1;
-                            end else begin
-                                infer_v_state[infer_neuron_idx] <= v_next;
+                                if (
+                                    !infer_any_spike ||
+                                    (v_next > infer_winner_v_next) ||
+                                    ((v_next == infer_winner_v_next) && (infer_neuron_idx < infer_winner_idx))
+                                ) begin
+                                    infer_winner_idx <= infer_neuron_idx;
+                                    infer_winner_v_next <= v_next;
+                                end
+                                infer_any_spike <= 1'b1;
                             end
 
                             infer_input_idx <= 10'd0;
                             if (infer_neuron_idx == (N_NEURONS - 1)) begin
                                 infer_neuron_idx <= 7'd0;
-                                if ((infer_step_idx + 16'd1) >= infer_steps_target[15:0]) begin
-                                    infer_active <= 1'b0;
-                                    infer_state <= INFER_IDLE;
-                                    resp_status <= STATUS_OK;
-                                    resp_result <= infer_total_spikes + (spike_now ? 32'd1 : 32'd0);
-                                    resp_checksum <= calc_resp_checksum(
-                                        STATUS_OK,
-                                        infer_total_spikes + (spike_now ? 32'd1 : 32'd0)
-                                    );
-                                    response_ready <= 1'b1;
-                                end else begin
-                                    infer_step_idx <= infer_step_idx + 16'd1;
-                                    infer_state <= INFER_GEN_INPUT_SPIKES;
-                                end
+                                infer_apply_idx <= 7'd0;
+                                infer_state <= INFER_APPLY_WTA;
                                 infer_accum <= neuron_bias(7'd0);
                             end else begin
                                 infer_neuron_idx <= infer_neuron_idx + 7'd1;
                                 infer_accum <= neuron_bias(infer_neuron_idx + 7'd1);
                             end
+                        end
+                    end
+
+                    INFER_APPLY_WTA: begin
+                        logic signed [31:0] v_tmp;
+                        v_tmp = infer_v_next[infer_apply_idx];
+                        if (infer_any_spike) begin
+                            if (infer_apply_idx == infer_winner_idx) begin
+                                infer_v_state[infer_apply_idx] <= v_tmp - FXP_THRESH;
+                                infer_spike_count[infer_apply_idx] <= infer_spike_count[infer_apply_idx] + 16'd1;
+                                infer_total_spikes <= infer_total_spikes + 32'd1;
+                            end else begin
+                                if (v_tmp > FXP_WTA_INH) begin
+                                    infer_v_state[infer_apply_idx] <= v_tmp - FXP_WTA_INH;
+                                end else begin
+                                    infer_v_state[infer_apply_idx] <= 32'sd0;
+                                end
+                            end
+                        end else begin
+                            infer_v_state[infer_apply_idx] <= v_tmp;
+                        end
+
+                        if (infer_apply_idx == (N_NEURONS - 1)) begin
+                            if ((infer_step_idx + 16'd1) >= infer_steps_target[15:0]) begin
+                                infer_active <= 1'b0;
+                                infer_state <= INFER_IDLE;
+                                resp_status <= STATUS_OK;
+                                resp_result <= infer_total_spikes +
+                                    ((infer_any_spike && (infer_winner_idx == (N_NEURONS - 1))) ? 32'd1 : 32'd0);
+                                resp_checksum <= calc_resp_checksum(
+                                    STATUS_OK,
+                                    infer_total_spikes +
+                                    ((infer_any_spike && (infer_winner_idx == (N_NEURONS - 1))) ? 32'd1 : 32'd0)
+                                );
+                                response_ready <= 1'b1;
+                            end else begin
+                                infer_step_idx <= infer_step_idx + 16'd1;
+                                infer_state <= INFER_GEN_INPUT_SPIKES;
+                            end
+                            infer_apply_idx <= 7'd0;
+                            infer_neuron_idx <= 7'd0;
+                            infer_input_idx <= 10'd0;
+                            infer_accum <= neuron_bias(7'd0);
+                        end else begin
+                            infer_apply_idx <= infer_apply_idx + 7'd1;
                         end
                     end
 

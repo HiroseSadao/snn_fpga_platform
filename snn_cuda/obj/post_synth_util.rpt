@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Sat Feb 21 09:46:25 2026
-| Host         : eecs-digital-16 running 64-bit Ubuntu 24.04.3 LTS
+| Date         : Sat Feb 21 23:04:42 2026
+| Host         : eecs-digital-03 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_utilization -file obj/post_synth_util.rpt -hierarchical -hierarchical_depth 4
 | Design       : top_level
 | Device       : xc7s50csga324-1
@@ -22,11 +22,11 @@ Table of Contents
 +---------------------+---------------+------------+------------+---------+------+-------+--------+--------+------------+
 |       Instance      |     Module    | Total LUTs | Logic LUTs | LUTRAMs | SRLs |  FFs  | RAMB36 | RAMB18 | DSP Blocks |
 +---------------------+---------------+------------+------------+---------+------+-------+--------+--------+------------+
-| top_level           |         (top) |      19868 |      19868 |       0 |    0 | 22412 |      0 |      0 |          6 |
-|   (top_level)       |         (top) |       8110 |       8110 |       0 |    0 | 21965 |      0 |      0 |          6 |
-|   u_poisson_divider |     divider2b |       1204 |       1204 |       0 |    0 |   137 |      0 |      0 |          0 |
-|   u_sd_controller   | sd_controller |       4264 |       4264 |       0 |    0 |   244 |      0 |      0 |          0 |
-|   u_uart_rx         |       uart_rx |       6262 |       6262 |       0 |    0 |    41 |      0 |      0 |          0 |
+| top_level           |         (top) |      24171 |      24171 |       0 |    0 | 25723 |      0 |      0 |          6 |
+|   (top_level)       |         (top) |      12143 |      12143 |       0 |    0 | 25284 |      0 |      0 |          6 |
+|   u_poisson_divider |     divider2b |       1179 |       1179 |       0 |    0 |   137 |      0 |      0 |          0 |
+|   u_sd_controller   | sd_controller |       3247 |       3247 |       0 |    0 |   236 |      0 |      0 |          0 |
+|   u_uart_rx         |       uart_rx |       7574 |       7574 |       0 |    0 |    41 |      0 |      0 |          0 |
 +---------------------+---------------+------------+------------+---------+------+-------+--------+--------+------------+
 
 
