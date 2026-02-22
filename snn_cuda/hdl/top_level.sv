@@ -42,6 +42,8 @@ module top_level(
     localparam logic [7:0] OP_DDR_WRITE32 = 8'h10;
     localparam logic [7:0] OP_SD_TO_DDR_COPY = 8'h11;
     localparam logic [7:0] OP_DDR_READ32 = 8'h12;
+    localparam logic [7:0] OP_SD_SECTORS_TO_DDR = 8'h13;
+    localparam logic [7:0] OP_LOAD_IMAGE_FROM_DDR = 8'h14;
     localparam logic [7:0] OP_RUN_SAMPLE_INFER = 8'h20;
     localparam logic [7:0] OP_READ_SPIKE_COUNT = 8'h21;
     localparam logic [7:0] OP_READ_RAW_U8 = 8'h22;
@@ -210,6 +212,10 @@ module top_level(
     logic        ddr_req_we_core;
     logic [31:0] ddr_req_addr_word_core;
     logic [31:0] ddr_req_wdata_core;
+    logic        ddr_req_wide_core;
+    logic [127:0] ddr_req_wdata128_core;
+    logic [15:0] ddr_req_sel16_core;
+    logic [2:0]  ddr_req_word_count_core;
     logic [31:0] ddr_resp_rdata_async;
     logic [7:0]  ddr_resp_status_async;
     logic        ddr_req_toggle_core;
@@ -223,9 +229,16 @@ module top_level(
     logic        ddr_req_we_ddr;
     logic [31:0] ddr_req_addr_word_ddr;
     logic [31:0] ddr_req_wdata_ddr;
+    logic        ddr_req_wide_ddr;
+    logic [127:0] ddr_req_wdata128_ddr;
+    logic [15:0] ddr_req_sel16_ddr;
+    logic [2:0]  ddr_req_word_count_ddr;
     logic [31:0] ddr_rsp_rdata_ddr;
     logic [7:0]  ddr_rsp_status_ddr;
     logic [1:0]  ddr_lane_sel_ddr;
+    logic        ddr_req_from_sd_core;
+    logic        ddr_req_from_sd_ddr;
+    logic        ddr_req_from_imgload_core;
 
     logic        sd_rd;
     logic        sd_wr;
@@ -243,6 +256,14 @@ module top_level(
     logic [1:0]  sd_pack_idx;
     logic [31:0] sd_pack_word;
     logic [31:0] sd_copy_words_written;
+    logic [31:0] sd_sector_ddr_base_word_bank [0:1];
+    logic [7:0]  sd_sector_words_queued_bank [0:1];
+    logic [1:0]  sd_sector_buf_ready;
+    logic        sd_fill_bank;
+    logic        sd_flush_bank;
+    logic        sd_ddr_flush_active;
+    logic [7:0]  sd_ddr_flush_idx;
+    (* ram_style = "block" *) logic [31:0] sd_sector_word_buf [0:1][0:127];
     logic [23:0] sd_wait_counter;
     logic [7:0]  sd_header_bytes [0:19];
     logic        sd_header_done;
@@ -250,6 +271,8 @@ module top_level(
     logic [31:0] sd_file_bytes_seen;
     logic        sd_copy_done_pending;
     logic        sd_use_sector_limit;
+    logic        sd_copy_raw1_mode;
+    logic [31:0] sd_copy_dest_base_word;
     (* ram_style = "block" *) logic [7:0]  raw_image0_u8 [0:N_IN-1];
     logic        raw_image0_valid;
     logic [31:0] raw_num_images;
@@ -258,6 +281,15 @@ module top_level(
     logic [31:0] raw_image0_sum_u8;
     logic [9:0]  raw_image0_rd_addr;
     logic [7:0]  raw_image0_rd_data;
+    logic        imgload_active;
+    logic [31:0] imgload_addr_word;
+    logic [1:0]  imgload_lane;
+    logic [9:0]  imgload_byte_idx;
+    logic [9:0]  imgload_total_bytes;
+    logic [31:0] imgload_sum_u8_accum;
+    logic        imgload_word_valid;
+    logic [31:0] imgload_word_data;
+    logic [1:0]  imgload_word_lane;
 
     logic        infer_active;
     infer_state_t infer_state;
@@ -581,6 +613,20 @@ module top_level(
         end
     endfunction
 
+    function automatic [7:0] lane_byte_sel(
+        input [31:0] w,
+        input [1:0] lane
+    );
+        begin
+            case (lane)
+                2'd0: lane_byte_sel = w[7:0];
+                2'd1: lane_byte_sel = w[15:8];
+                2'd2: lane_byte_sel = w[23:16];
+                default: lane_byte_sel = w[31:24];
+            endcase
+        end
+    endfunction
+
     always_ff @(posedge clk_controller) begin
         if (btn[0] || !ddr_clk_wiz_locked) begin
             ddr_wb_stb <= 1'b0;
@@ -594,8 +640,13 @@ module top_level(
             ddr_rsp_toggle_ddr <= 1'b0;
             ddr_bridge_state <= DDRBR_IDLE;
             ddr_req_we_ddr <= 1'b0;
+            ddr_req_from_sd_ddr <= 1'b0;
             ddr_req_addr_word_ddr <= 32'd0;
             ddr_req_wdata_ddr <= 32'd0;
+            ddr_req_wide_ddr <= 1'b0;
+            ddr_req_wdata128_ddr <= 128'd0;
+            ddr_req_sel16_ddr <= 16'd0;
+            ddr_req_word_count_ddr <= 3'd0;
             ddr_rsp_rdata_ddr <= 32'd0;
             ddr_rsp_status_ddr <= STATUS_BAD_PACKET;
             ddr_lane_sel_ddr <= 2'd0;
@@ -612,8 +663,13 @@ module top_level(
                         ddr_req_toggle_ddr_seen <= ddr_req_toggle_ddr_sync2;
                         // Core domain holds payload stable until response toggle is observed.
                         ddr_req_we_ddr <= ddr_req_we_core;
+                        ddr_req_from_sd_ddr <= ddr_req_from_sd_core;
                         ddr_req_addr_word_ddr <= ddr_req_addr_word_core;
                         ddr_req_wdata_ddr <= ddr_req_wdata_core;
+                        ddr_req_wide_ddr <= ddr_req_wide_core;
+                        ddr_req_wdata128_ddr <= ddr_req_wdata128_core;
+                        ddr_req_sel16_ddr <= ddr_req_sel16_core;
+                        ddr_req_word_count_ddr <= ddr_req_word_count_core;
                         ddr_lane_sel_ddr <= ddr_req_addr_word_core[1:0];
                         ddr_bridge_state <= DDRBR_ISSUE;
                     end
@@ -628,7 +684,10 @@ module top_level(
                     end else if (!ddr_wb_stall) begin
                         ddr_wb_we   <= ddr_req_we_ddr;
                         ddr_wb_addr <= {2'b00, ddr_req_addr_word_ddr[23:2]};
-                        if (ddr_req_we_ddr) begin
+                        if (ddr_req_we_ddr && ddr_req_wide_ddr) begin
+                            ddr_wb_wdata <= ddr_req_wdata128_ddr;
+                            ddr_wb_sel   <= ddr_req_sel16_ddr;
+                        end else if (ddr_req_we_ddr) begin
                             case (ddr_req_addr_word_ddr[1:0])
                                 2'd0: begin ddr_wb_wdata <= {96'd0, ddr_req_wdata_ddr}; ddr_wb_sel <= 16'h000F; end
                                 2'd1: begin ddr_wb_wdata <= {64'd0, ddr_req_wdata_ddr, 32'd0}; ddr_wb_sel <= 16'h00F0; end
@@ -695,8 +754,14 @@ module top_level(
             ddr_last_data     <= 32'd0;
             ddr_req_pending_core <= 1'b0;
             ddr_req_we_core      <= 1'b0;
+            ddr_req_from_sd_core <= 1'b0;
+            ddr_req_from_imgload_core <= 1'b0;
             ddr_req_addr_word_core <= 32'd0;
             ddr_req_wdata_core   <= 32'd0;
+            ddr_req_wide_core    <= 1'b0;
+            ddr_req_wdata128_core <= 128'd0;
+            ddr_req_sel16_core   <= 16'd0;
+            ddr_req_word_count_core <= 3'd0;
             ddr_req_toggle_core  <= 1'b0;
             ddr_rsp_toggle_core_sync1 <= 1'b0;
             ddr_rsp_toggle_core_sync2 <= 1'b0;
@@ -713,18 +778,38 @@ module top_level(
             sd_pack_idx       <= 2'd0;
             sd_pack_word      <= 32'd0;
             sd_copy_words_written <= 32'd0;
+            sd_sector_ddr_base_word_bank[0] <= 32'd0;
+            sd_sector_ddr_base_word_bank[1] <= 32'd0;
+            sd_sector_words_queued_bank[0] <= 8'd0;
+            sd_sector_words_queued_bank[1] <= 8'd0;
+            sd_sector_buf_ready <= 2'b00;
+            sd_fill_bank <= 1'b0;
+            sd_flush_bank <= 1'b0;
+            sd_ddr_flush_active <= 1'b0;
+            sd_ddr_flush_idx <= 8'd0;
             sd_wait_counter    <= 24'd0;
             sd_header_done     <= 1'b0;
             sd_file_total_bytes<= 32'd0;
             sd_file_bytes_seen <= 32'd0;
             sd_copy_done_pending <= 1'b0;
             sd_use_sector_limit <= 1'b0;
+            sd_copy_raw1_mode <= 1'b1;
+            sd_copy_dest_base_word <= 32'd0;
             raw_image0_valid    <= 1'b0;
             raw_num_images      <= 32'd0;
             raw_bytes_per_image <= 32'd0;
             raw_image0_capture_idx <= 10'd0;
             raw_image0_sum_u8   <= 32'd0;
             raw_image0_rd_addr  <= 10'd0;
+            imgload_active      <= 1'b0;
+            imgload_addr_word    <= 32'd0;
+            imgload_lane        <= 2'd0;
+            imgload_byte_idx     <= 10'd0;
+            imgload_total_bytes  <= 10'd0;
+            imgload_sum_u8_accum <= 32'd0;
+            imgload_word_valid   <= 1'b0;
+            imgload_word_data    <= 32'd0;
+            imgload_word_lane    <= 2'd0;
             infer_active        <= 1'b0;
             infer_state         <= INFER_IDLE;
             infer_steps_target  <= 32'd0;
@@ -770,13 +855,60 @@ module top_level(
                 (ddr_rsp_toggle_core_sync2 != ddr_rsp_toggle_core_seen)) begin
                 ddr_rsp_toggle_core_seen <= ddr_rsp_toggle_core_sync2;
                 ddr_req_pending_core <= 1'b0;
-                if ((ddr_resp_status_async == STATUS_OK) && ddr_req_we_core) begin
-                    ddr_write_count <= ddr_write_count + 32'd1;
+                if (ddr_req_from_sd_core) begin
+                    ddr_req_from_sd_core <= 1'b0;
+                    if (ddr_resp_status_async != STATUS_OK) begin
+                        sd_ddr_flush_active <= 1'b0;
+                        sd_copy_active <= 1'b0;
+                        sd_in_read <= 1'b0;
+                        resp_status    <= STATUS_BAD_PACKET;
+                        resp_result    <= 32'sd0;
+                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                        response_ready <= 1'b1;
+                    end else begin
+                        ddr_write_count <= ddr_write_count + {29'd0, ddr_req_word_count_core};
+                        if ((sd_ddr_flush_idx + {5'd0, ddr_req_word_count_core}) >= sd_sector_words_queued_bank[sd_flush_bank]) begin
+                            sd_ddr_flush_active <= 1'b0;
+                            sd_ddr_flush_idx <= 8'd0;
+                            sd_sector_buf_ready[sd_flush_bank] <= 1'b0;
+                            if (sd_copy_done_pending && !sd_in_read &&
+                                ((sd_flush_bank == 1'b0 && !sd_sector_buf_ready[1]) ||
+                                 (sd_flush_bank == 1'b1 && !sd_sector_buf_ready[0]))) begin
+                                sd_copy_active <= 1'b0;
+                                resp_status    <= STATUS_OK;
+                                resp_result    <= sd_copy_words_written;
+                                resp_checksum  <= calc_resp_checksum(STATUS_OK, sd_copy_words_written);
+                                response_ready <= 1'b1;
+                            end
+                        end else begin
+                            sd_ddr_flush_idx <= sd_ddr_flush_idx + {5'd0, ddr_req_word_count_core};
+                        end
+                    end
+                end else if (ddr_req_from_imgload_core) begin
+                    ddr_req_from_imgload_core <= 1'b0;
+                    if (ddr_resp_status_async != STATUS_OK) begin
+                        imgload_active <= 1'b0;
+                        imgload_word_valid <= 1'b0;
+                        resp_status    <= STATUS_BAD_PACKET;
+                        resp_result    <= 32'sd0;
+                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                        response_ready <= 1'b1;
+                    end else begin
+                        imgload_word_valid <= 1'b1;
+                        imgload_word_data  <= ddr_resp_rdata_async;
+                        imgload_word_lane  <= imgload_lane;
+                        imgload_addr_word <= imgload_addr_word + 32'd1;
+                        imgload_lane <= 2'd0;
+                    end
+                end else begin
+                    if ((ddr_resp_status_async == STATUS_OK) && ddr_req_we_core) begin
+                        ddr_write_count <= ddr_write_count + 32'd1;
+                    end
+                    resp_status    <= ddr_resp_status_async;
+                    resp_result    <= ddr_resp_rdata_async;
+                    resp_checksum  <= calc_resp_checksum(ddr_resp_status_async, ddr_resp_rdata_async);
+                    response_ready <= 1'b1;
                 end
-                resp_status    <= ddr_resp_status_async;
-                resp_result    <= ddr_resp_rdata_async;
-                resp_checksum  <= calc_resp_checksum(ddr_resp_status_async, ddr_resp_rdata_async);
-                response_ready <= 1'b1;
             end
             if (response_ready || (rx_state == RX_WAIT_SYNC)) begin
                 rx_timeout_counter <= 16'd0;
@@ -831,7 +963,98 @@ module top_level(
                 end
             end
 
-            if (rx_dv && !response_ready && !memrd_pending && !sd_copy_active && !infer_active && !ddr_req_pending_core) begin
+            if (sd_ddr_flush_active && !ddr_req_pending_core && !response_ready && sd_copy_active) begin
+                if (sd_ddr_flush_idx < sd_sector_words_queued_bank[sd_flush_bank]) begin
+                    logic [7:0] words_left;
+                    logic [2:0] words_this_req;
+                    logic [15:0] sel_mask16;
+                    logic [127:0] wide_wdata;
+                    words_left = sd_sector_words_queued_bank[sd_flush_bank] - sd_ddr_flush_idx;
+                    words_this_req = (words_left >= 8'd4) ? 3'd4 : words_left[2:0];
+                    wide_wdata = 128'd0;
+                    sel_mask16 = 16'd0;
+                    if (words_this_req >= 3'd1) begin
+                        wide_wdata[31:0] = sd_sector_word_buf[sd_flush_bank][sd_ddr_flush_idx];
+                        sel_mask16[3:0] = 4'hF;
+                    end
+                    if (words_this_req >= 3'd2) begin
+                        wide_wdata[63:32] = sd_sector_word_buf[sd_flush_bank][sd_ddr_flush_idx + 8'd1];
+                        sel_mask16[7:4] = 4'hF;
+                    end
+                    if (words_this_req >= 3'd3) begin
+                        wide_wdata[95:64] = sd_sector_word_buf[sd_flush_bank][sd_ddr_flush_idx + 8'd2];
+                        sel_mask16[11:8] = 4'hF;
+                    end
+                    if (words_this_req >= 3'd4) begin
+                        wide_wdata[127:96] = sd_sector_word_buf[sd_flush_bank][sd_ddr_flush_idx + 8'd3];
+                        sel_mask16[15:12] = 4'hF;
+                    end
+
+                    ddr_req_pending_core   <= 1'b1;
+                    ddr_req_we_core        <= 1'b1;
+                    ddr_req_from_sd_core   <= 1'b1;
+                    ddr_req_from_imgload_core <= 1'b0;
+                    ddr_req_addr_word_core <= sd_sector_ddr_base_word_bank[sd_flush_bank] + {24'd0, sd_ddr_flush_idx};
+                    ddr_req_wdata_core     <= sd_sector_word_buf[sd_flush_bank][sd_ddr_flush_idx];
+                    ddr_req_wide_core      <= 1'b1;
+                    ddr_req_wdata128_core  <= wide_wdata;
+                    ddr_req_sel16_core     <= sel_mask16;
+                    ddr_req_word_count_core <= words_this_req;
+                    ddr_req_toggle_core    <= ~ddr_req_toggle_core;
+                    ddr_last_addr          <= sd_sector_ddr_base_word_bank[sd_flush_bank] + {24'd0, sd_ddr_flush_idx};
+                    ddr_last_data          <= sd_sector_word_buf[sd_flush_bank][sd_ddr_flush_idx];
+                end else begin
+                    sd_ddr_flush_active <= 1'b0;
+                end
+            end
+
+            if (imgload_active && imgload_word_valid && !response_ready) begin
+                if (imgload_byte_idx < imgload_total_bytes) begin
+                    raw_image0_u8[imgload_byte_idx] <= lane_byte_sel(imgload_word_data, imgload_word_lane);
+                    imgload_sum_u8_accum <= imgload_sum_u8_accum + {24'd0, lane_byte_sel(imgload_word_data, imgload_word_lane)};
+                    if ((imgload_byte_idx + 10'd1) >= imgload_total_bytes) begin
+                        imgload_active <= 1'b0;
+                        imgload_word_valid <= 1'b0;
+                        imgload_byte_idx <= imgload_byte_idx + 10'd1;
+                        raw_image0_valid <= 1'b1;
+                        raw_image0_capture_idx <= imgload_byte_idx + 10'd1;
+                        raw_image0_sum_u8 <= imgload_sum_u8_accum + {24'd0, lane_byte_sel(imgload_word_data, imgload_word_lane)};
+                        resp_status    <= STATUS_OK;
+                        resp_result    <= imgload_byte_idx + 10'd1;
+                        resp_checksum  <= calc_resp_checksum(STATUS_OK, imgload_byte_idx + 10'd1);
+                        response_ready <= 1'b1;
+                    end else begin
+                        imgload_byte_idx <= imgload_byte_idx + 10'd1;
+                        if (imgload_word_lane == 2'd3) begin
+                            imgload_word_valid <= 1'b0;
+                            imgload_word_lane <= 2'd0;
+                        end else begin
+                            imgload_word_lane <= imgload_word_lane + 2'd1;
+                        end
+                    end
+                end else begin
+                    imgload_word_valid <= 1'b0;
+                end
+            end
+
+            if (imgload_active && !imgload_word_valid && !ddr_req_pending_core && !response_ready && !sd_ddr_flush_active) begin
+                if (imgload_byte_idx < imgload_total_bytes) begin
+                    ddr_req_pending_core    <= 1'b1;
+                    ddr_req_we_core         <= 1'b0;
+                    ddr_req_from_sd_core    <= 1'b0;
+                    ddr_req_from_imgload_core <= 1'b1;
+                    ddr_req_addr_word_core  <= imgload_addr_word;
+                    ddr_req_wdata_core      <= 32'd0;
+                    ddr_req_wide_core       <= 1'b0;
+                    ddr_req_wdata128_core   <= 128'd0;
+                    ddr_req_sel16_core      <= 16'd0;
+                    ddr_req_word_count_core <= 3'd1;
+                    ddr_req_toggle_core     <= ~ddr_req_toggle_core;
+                    ddr_last_addr           <= imgload_addr_word;
+                end
+            end
+
+            if (rx_dv && !response_ready && !memrd_pending && !sd_copy_active && !infer_active && !imgload_active && !ddr_req_pending_core) begin
                 case (rx_state)
                     RX_WAIT_SYNC: begin
                         if (rx_byte == REQ_SYNC) begin
@@ -869,7 +1092,8 @@ module top_level(
                             response_ready  <= 1'b1;
                         end else if (
                             ((req_opcode == OP_ADD_I32) || (req_opcode == OP_DDR_WRITE32) ||
-                             (req_opcode == OP_SD_TO_DDR_COPY) || (req_opcode == OP_DDR_READ32) || (req_opcode == OP_RUN_SAMPLE_INFER) ||
+                             (req_opcode == OP_SD_TO_DDR_COPY) || (req_opcode == OP_SD_SECTORS_TO_DDR) ||
+                             (req_opcode == OP_DDR_READ32) || (req_opcode == OP_LOAD_IMAGE_FROM_DDR) || (req_opcode == OP_RUN_SAMPLE_INFER) ||
                              (req_opcode == OP_READ_SPIKE_COUNT) || (req_opcode == OP_READ_RAW_U8) ||
                              (req_opcode == OP_READ_POISSON_THRESH) || (req_opcode == OP_READ_INFER_DEBUG) ||
                              (req_opcode == OP_WRITE_INFER_WEIGHT) || (req_opcode == OP_TRAIN_QUERY_CAPS) ||
@@ -949,8 +1173,14 @@ module top_level(
                                         ddr_calib_complete && !ddr_req_pending_core) begin
                                         ddr_req_pending_core   <= 1'b1;
                                         ddr_req_we_core        <= 1'b1;
+                                        ddr_req_from_sd_core   <= 1'b0;
+                                        ddr_req_from_imgload_core <= 1'b0;
                                         ddr_req_addr_word_core <= arg0;
                                         ddr_req_wdata_core     <= arg1;
+                                        ddr_req_wide_core      <= 1'b0;
+                                        ddr_req_wdata128_core  <= 128'd0;
+                                        ddr_req_sel16_core     <= 16'd0;
+                                        ddr_req_word_count_core <= 3'd1;
                                         ddr_req_toggle_core    <= ~ddr_req_toggle_core;
                                         ddr_last_addr          <= arg0;
                                         ddr_last_data          <= arg1;
@@ -966,8 +1196,14 @@ module top_level(
                                         ddr_calib_complete && !ddr_req_pending_core) begin
                                         ddr_req_pending_core   <= 1'b1;
                                         ddr_req_we_core        <= 1'b0;
+                                        ddr_req_from_sd_core   <= 1'b0;
+                                        ddr_req_from_imgload_core <= 1'b0;
                                         ddr_req_addr_word_core <= arg0;
                                         ddr_req_wdata_core     <= 32'd0;
+                                        ddr_req_wide_core      <= 1'b0;
+                                        ddr_req_wdata128_core  <= 128'd0;
+                                        ddr_req_sel16_core     <= 16'd0;
+                                        ddr_req_word_count_core <= 3'd1;
                                         ddr_req_toggle_core    <= ~ddr_req_toggle_core;
                                         ddr_last_addr          <= arg0;
                                     end else begin
@@ -978,9 +1214,18 @@ module top_level(
                                     end
                                 end
                                 OP_SD_TO_DDR_COPY: begin
+                                    // Legacy RAW1 auto-header copy is disabled to save LUTs.
+                                    // Use OP_SD_SECTORS_TO_DDR + OP_LOAD_IMAGE_FROM_DDR instead.
+                                    resp_status    <= STATUS_UNSUPPORTED_OP;
+                                    resp_result    <= 32'sd0;
+                                    resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
+                                    response_ready <= 1'b1;
+                                end
+                                OP_SD_SECTORS_TO_DDR: begin
                                     if (
                                         (req_nargs == 8'd2) &&
                                         (arg0 >= 0) &&
+                                        (arg1 > 0) &&
                                         !sd_copy_active
                                     ) begin
                                         sd_copy_active        <= 1'b1;
@@ -991,20 +1236,53 @@ module top_level(
                                         sd_pack_idx           <= 2'd0;
                                         sd_pack_word          <= 32'd0;
                                         sd_copy_words_written <= 32'd0;
-                                        sd_wait_counter       <= 24'd0;
-                                        sd_header_done        <= 1'b0;
-                                        sd_file_total_bytes   <= 32'd0;
-                                        sd_file_bytes_seen    <= 32'd0;
-                                        sd_copy_done_pending  <= 1'b0;
-                                        sd_use_sector_limit   <= (arg1 > 0);
-                                        raw_image0_valid      <= 1'b0;
-                                        raw_image0_capture_idx <= 10'd0;
-                                        raw_image0_sum_u8     <= 32'd0;
+                                        sd_sector_ddr_base_word_bank[0] <= 32'd0;
+                                        sd_sector_ddr_base_word_bank[1] <= 32'd0;
+                                        sd_sector_words_queued_bank[0] <= 8'd0;
+                                        sd_sector_words_queued_bank[1] <= 8'd0;
+                                        sd_sector_buf_ready <= 2'b00;
+                                        sd_fill_bank <= 1'b0;
+                                        sd_flush_bank <= 1'b0;
+                                        sd_ddr_flush_active <= 1'b0;
+                                        sd_ddr_flush_idx <= 8'd0;
+                                        sd_wait_counter      <= 24'd0;
+                                        sd_header_done       <= 1'b0;
+                                        sd_file_total_bytes  <= 32'd0;
+                                        sd_file_bytes_seen   <= 32'd0;
+                                        sd_copy_done_pending <= 1'b0;
+                                        sd_use_sector_limit  <= 1'b1;
+                                        sd_copy_raw1_mode    <= 1'b0;
+                                        sd_copy_dest_base_word <= 32'd0;
                                     end else begin
                                         resp_status    <= STATUS_BAD_PACKET;
-                                        // [31:24]=reason, [23:16]=opcode, [15:0]=arg0[15:0]
                                         resp_result    <= {BADDBG_SD_REQ_ARG, req_opcode, arg0[15:0]};
                                         resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {BADDBG_SD_REQ_ARG, req_opcode, arg0[15:0]});
+                                        response_ready <= 1'b1;
+                                    end
+                                end
+                                OP_LOAD_IMAGE_FROM_DDR: begin
+                                    if ((req_nargs == 8'd2) &&
+                                        (arg0 >= 0) &&
+                                        (arg1 > 0) && (arg1 <= N_IN) &&
+                                        ddr_calib_complete && !ddr_req_pending_core &&
+                                        !imgload_active) begin
+                                        imgload_active <= 1'b1;
+                                        imgload_addr_word <= {2'b00, arg0[31:2]};
+                                        imgload_lane <= arg0[1:0];
+                                        imgload_byte_idx <= 10'd0;
+                                        imgload_total_bytes <= arg1[9:0];
+                                        imgload_sum_u8_accum <= 32'd0;
+                                        imgload_word_valid <= 1'b0;
+                                        imgload_word_data <= 32'd0;
+                                        imgload_word_lane <= 2'd0;
+                                        raw_image0_valid <= 1'b0;
+                                        raw_image0_capture_idx <= 10'd0;
+                                        raw_image0_sum_u8 <= 32'd0;
+                                        raw_bytes_per_image <= arg1;
+                                    end else begin
+                                        resp_status    <= STATUS_BAD_PACKET;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
                                         response_ready <= 1'b1;
                                     end
                                 end
@@ -1178,7 +1456,19 @@ module top_level(
             end
 
             if (sd_copy_active && !response_ready) begin
-                if (!sd_in_read && (!sd_use_sector_limit || (sd_copy_sectors_left != 0)) && !sd_copy_done_pending) begin
+                if (!sd_ddr_flush_active) begin
+                    if (sd_sector_buf_ready[sd_flush_bank]) begin
+                        sd_ddr_flush_active <= 1'b1;
+                        sd_ddr_flush_idx <= 8'd0;
+                    end else if (sd_sector_buf_ready[~sd_flush_bank]) begin
+                        sd_flush_bank <= ~sd_flush_bank;
+                        sd_ddr_flush_active <= 1'b1;
+                        sd_ddr_flush_idx <= 8'd0;
+                    end
+                end
+
+                if (!sd_in_read && !sd_sector_buf_ready[sd_fill_bank] &&
+                    (!sd_use_sector_limit || (sd_copy_sectors_left != 0)) && !sd_copy_done_pending) begin
                     if (SD_CD_N != 1'b0) begin
                         sd_copy_active <= 1'b0;
                         resp_status    <= STATUS_BAD_PACKET;
@@ -1193,6 +1483,9 @@ module top_level(
                         sd_byte_count <= 9'd0;
                         sd_pack_idx   <= 2'd0;
                         sd_pack_word  <= 32'd0;
+                        sd_sector_ddr_base_word_bank[sd_fill_bank] <= sd_copy_dest_base_word + sd_copy_words_written;
+                        sd_sector_words_queued_bank[sd_fill_bank] <= 8'd0;
+                        sd_ddr_flush_idx <= 8'd0;
                         sd_wait_counter <= 24'd0;
                     end else begin
                         if (sd_wait_counter == 24'hFFFFFF) begin
@@ -1209,83 +1502,19 @@ module top_level(
                 end
 
                 if (sd_in_read && sd_byte_available) begin
-                    if (
-                        !sd_header_done ||
-                        (sd_file_bytes_seen < sd_file_total_bytes)
-                    ) begin
-                        if (!sd_header_done && (sd_file_bytes_seen < 32'd20)) begin
-                            sd_header_bytes[sd_file_bytes_seen[4:0]] <= sd_dout;
+                    case (sd_pack_idx)
+                        2'd0: sd_pack_word[7:0]   <= sd_dout;
+                        2'd1: sd_pack_word[15:8]  <= sd_dout;
+                        2'd2: sd_pack_word[23:16] <= sd_dout;
+                        default: begin
+                            sd_pack_word[31:24] <= sd_dout;
+                            sd_sector_word_buf[sd_fill_bank][sd_sector_words_queued_bank[sd_fill_bank]] <= {sd_dout, sd_pack_word[23:0]};
+                            sd_copy_words_written <= sd_copy_words_written + 32'd1;
+                            sd_sector_words_queued_bank[sd_fill_bank] <= sd_sector_words_queued_bank[sd_fill_bank] + 8'd1;
                         end
+                    endcase
 
-                        if (!sd_header_done && (sd_file_bytes_seen == 32'd19)) begin
-                            if (
-                                (sd_header_bytes[0] == 8'h52) && // 'R'
-                                (sd_header_bytes[1] == 8'h41) && // 'A'
-                                (sd_header_bytes[2] == 8'h57) && // 'W'
-                                (sd_header_bytes[3] == 8'h31) && // '1'
-                                ({sd_header_bytes[7], sd_header_bytes[6], sd_header_bytes[5], sd_header_bytes[4]} == 32'd1) &&
-                                ({sd_header_bytes[15], sd_header_bytes[14], sd_header_bytes[13], sd_header_bytes[12]} == 32'd784)
-                            ) begin
-                                sd_header_done <= 1'b1;
-                                raw_num_images <= {sd_header_bytes[11], sd_header_bytes[10], sd_header_bytes[9], sd_header_bytes[8]};
-                                raw_bytes_per_image <= {sd_dout, sd_header_bytes[18], sd_header_bytes[17], sd_header_bytes[16]};
-                                raw_image0_valid <= 1'b0;
-                                sd_file_total_bytes <=
-                                    32'd20 +
-                                    {sd_header_bytes[11], sd_header_bytes[10], sd_header_bytes[9], sd_header_bytes[8]} +
-                                    (
-                                        {sd_header_bytes[11], sd_header_bytes[10], sd_header_bytes[9], sd_header_bytes[8]} *
-                                        {sd_dout, sd_header_bytes[18], sd_header_bytes[17], sd_header_bytes[16]}
-                                    );
-                            end else begin
-                                sd_copy_active <= 1'b0;
-                                sd_in_read     <= 1'b0;
-                                resp_status    <= STATUS_BAD_PACKET;
-                                // [31:24]=reason, [23:16]=opcode, [15:0]=file_bytes_seen[15:0]
-                                resp_result    <= {BADDBG_SD_BAD_HEADER, OP_SD_TO_DDR_COPY, sd_file_bytes_seen[15:0]};
-                                resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {BADDBG_SD_BAD_HEADER, OP_SD_TO_DDR_COPY, sd_file_bytes_seen[15:0]});
-                                response_ready <= 1'b1;
-                            end
-                        end
-
-                        if (
-                            sd_header_done &&
-                            (sd_file_bytes_seen >= (32'd20 + raw_num_images)) &&
-                            (raw_bytes_per_image == 32'd784) &&
-                            (raw_image0_capture_idx < 10'd784)
-                        ) begin
-                            raw_image0_u8[raw_image0_capture_idx] <= sd_dout;
-                            raw_image0_sum_u8 <= raw_image0_sum_u8 + {24'd0, sd_dout};
-                            if (raw_image0_capture_idx == 10'd783) begin
-                                raw_image0_valid <= 1'b1;
-                            end
-                            raw_image0_capture_idx <= raw_image0_capture_idx + 10'd1;
-                        end
-
-                        case (sd_pack_idx)
-                            2'd0: sd_pack_word[7:0]   <= sd_dout;
-                            2'd1: sd_pack_word[15:8]  <= sd_dout;
-                            2'd2: sd_pack_word[23:16] <= sd_dout;
-                            default: begin
-                                sd_pack_word[31:24] <= sd_dout;
-                                ddr_last_data       <= {sd_dout, sd_pack_word[23:0]};
-                                ddr_last_addr       <= ddr_write_count;
-                                ddr_write_count     <= ddr_write_count + 32'd1;
-                                sd_copy_words_written <= sd_copy_words_written + 32'd1;
-                            end
-                        endcase
-
-                        sd_pack_idx <= sd_pack_idx + 2'd1;
-                        sd_file_bytes_seen <= sd_file_bytes_seen + 32'd1;
-                    end
-
-                    if (
-                        sd_header_done &&
-                        (sd_file_bytes_seen >= sd_file_total_bytes) &&
-                        !sd_copy_done_pending
-                    ) begin
-                        sd_copy_done_pending <= 1'b1;
-                    end
+                    sd_pack_idx <= sd_pack_idx + 2'd1;
 
                     if (sd_byte_count == 9'd511) begin
                         sd_in_read   <= 1'b0;
@@ -1293,29 +1522,29 @@ module top_level(
                         if (sd_use_sector_limit && (sd_copy_sectors_left != 0)) begin
                             sd_copy_sectors_left <= sd_copy_sectors_left - 32'd1;
                         end
-                        if (sd_copy_done_pending) begin
-                            if (sd_pack_idx != 2'd0) begin
-                                ddr_last_data <= sd_pack_word;
-                                ddr_last_addr <= ddr_write_count;
-                                ddr_write_count <= ddr_write_count + 32'd1;
-                                sd_copy_words_written <= sd_copy_words_written + 32'd1;
+                        if (sd_pack_idx != 2'd0) begin
+                            sd_sector_word_buf[sd_fill_bank][sd_sector_words_queued_bank[sd_fill_bank]] <= sd_pack_word;
+                            sd_copy_words_written <= sd_copy_words_written + 32'd1;
+                            sd_sector_words_queued_bank[sd_fill_bank] <= sd_sector_words_queued_bank[sd_fill_bank] + 8'd1;
+                        end
+                        if ((sd_sector_words_queued_bank[sd_fill_bank] != 8'd0) || (sd_pack_idx != 2'd0)) begin
+                            sd_sector_buf_ready[sd_fill_bank] <= 1'b1;
+                            if (!sd_ddr_flush_active) begin
+                                sd_flush_bank <= sd_fill_bank;
+                                sd_ddr_flush_active <= 1'b1;
+                                sd_ddr_flush_idx <= 8'd0;
                             end
+                        end else if (sd_copy_done_pending || (sd_use_sector_limit && (sd_copy_sectors_left == 32'd1))) begin
                             sd_copy_active <= 1'b0;
                             resp_status    <= STATUS_OK;
-                            resp_result    <= sd_copy_words_written + ((sd_pack_idx != 2'd0) ? 32'd1 : 32'd0);
-                            resp_checksum  <= calc_resp_checksum(
-                                STATUS_OK,
-                                sd_copy_words_written + ((sd_pack_idx != 2'd0) ? 32'd1 : 32'd0)
-                            );
-                            response_ready <= 1'b1;
-                        end else if (sd_use_sector_limit && (sd_copy_sectors_left == 32'd1)) begin
-                            sd_copy_active <= 1'b0;
-                            resp_status    <= STATUS_BAD_PACKET;
-                            // [31:24]=reason, [23:16]=opcode, [15:0]=sectors_left[15:0]
-                            resp_result    <= {BADDBG_SD_SECTOR_END, OP_SD_TO_DDR_COPY, sd_copy_sectors_left[15:0]};
-                            resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {BADDBG_SD_SECTOR_END, OP_SD_TO_DDR_COPY, sd_copy_sectors_left[15:0]});
+                            resp_result    <= sd_copy_words_written;
+                            resp_checksum  <= calc_resp_checksum(STATUS_OK, sd_copy_words_written);
                             response_ready <= 1'b1;
                         end
+                        if (sd_use_sector_limit && (sd_copy_sectors_left == 32'd1)) begin
+                            sd_copy_done_pending <= 1'b1;
+                        end
+                        sd_fill_bank <= ~sd_fill_bank;
                         sd_byte_count <= 9'd0;
                         sd_pack_idx   <= 2'd0;
                     end else begin

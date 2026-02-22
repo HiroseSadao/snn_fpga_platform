@@ -29,6 +29,8 @@ OP_ADD_I32 = 0x01
 OP_DDR_WRITE32 = 0x10
 OP_SD_TO_DDR_COPY = 0x11
 OP_DDR_READ32 = 0x12
+OP_SD_SECTORS_TO_DDR = 0x13
+OP_LOAD_IMAGE_FROM_DDR = 0x14
 OP_RUN_SAMPLE_INFER = 0x20
 OP_READ_SPIKE_COUNT = 0x21
 OP_READ_RAW_U8 = 0x22
@@ -58,6 +60,10 @@ FXP_INH_THRESH = -2621440
 N_IN = 784
 N_NEURONS = 100
 N_WEIGHTS = N_NEURONS * N_IN
+RAW1_HEADER_BYTES = 20
+RAW1_NUM_IMAGES_DEFAULT = 10_000
+RAW1_TOTAL_BYTES_DEFAULT = RAW1_HEADER_BYTES + RAW1_NUM_IMAGES_DEFAULT + (RAW1_NUM_IMAGES_DEFAULT * N_IN)
+RAW1_TOTAL_SECTORS_DEFAULT = (RAW1_TOTAL_BYTES_DEFAULT + 511) // 512
 
 # Fixed-point training constants (mine.py defaults)
 TRAIN_WMAX_Q16 = int(round(0.05 * (1 << FXP_SHIFT)))
@@ -343,6 +349,46 @@ def fpga_sd_to_ddr_copy(
     return result
 
 
+def fpga_sd_sectors_to_ddr(
+    ser: serial.Serial,
+    start_lba: int,
+    num_sectors: int,
+    timeout_sec: float = 120.0,
+) -> int:
+    print(f"Requesting SD sectors->DDR DMA: start_lba={start_lba}, sectors={num_sectors}")
+    t0 = time.time()
+    status, result = send_request(
+        ser=ser,
+        opcode=OP_SD_SECTORS_TO_DDR,
+        args=[start_lba, num_sectors],
+        response_timeout=timeout_sec,
+    )
+    require_ok(status, "SD sectors->DDR")
+    elapsed = time.time() - t0
+    print(f"SD sectors->DDR completed in {elapsed:.2f}s, words_written={result}")
+    return result
+
+
+def fpga_load_image_from_ddr(
+    ser: serial.Serial,
+    base_addr_byte: int,
+    n_bytes: int = N_IN,
+    timeout_sec: float = 120.0,
+) -> None:
+    if n_bytes <= 0 or n_bytes > N_IN:
+        raise ValueError(f"n_bytes must be in [1, {N_IN}], got {n_bytes}")
+    print(f"Requesting DDR->raw_image0 load: base_byte=0x{base_addr_byte:08X}, n_bytes={n_bytes}")
+    status, result = send_request(
+        ser=ser,
+        opcode=OP_LOAD_IMAGE_FROM_DDR,
+        args=[base_addr_byte, n_bytes],
+        response_timeout=timeout_sec,
+    )
+    require_ok(status, "LOAD_IMAGE_FROM_DDR")
+    if int(result) != n_bytes:
+        raise RuntimeError(f"LOAD_IMAGE_FROM_DDR returned unexpected byte count: {result} (expected {n_bytes})")
+
+
 def fpga_run_sample_infer(
     ser: serial.Serial,
     seed: int,
@@ -581,7 +627,7 @@ def resolve_raw_bin_path(raw_bin_arg: str | None) -> Path:
     )
 
 
-def read_raw1_first_image_u8(raw_bin_path: str) -> tuple[list[int], int]:
+def read_raw1_image_u8(raw_bin_path: str, sample_idx: int = 0) -> tuple[list[int], int]:
     p = Path(raw_bin_path)
     with p.open("rb") as f:
         header = f.read(20)
@@ -600,16 +646,22 @@ def read_raw1_first_image_u8(raw_bin_path: str) -> tuple[list[int], int]:
             )
         if num_images <= 0:
             raise ValueError("RAW1 has no images")
+        if sample_idx < 0 or sample_idx >= num_images:
+            raise ValueError(f"RAW1 sample_idx out of range: {sample_idx} (max={num_images-1})")
 
         labels = f.read(num_images)
         if len(labels) != num_images:
             raise ValueError("RAW1 labels are truncated")
+        if sample_idx:
+            f.seek(sample_idx * bytes_per_image, 1)
+        img = f.read(bytes_per_image)
+        if len(img) != bytes_per_image:
+            raise ValueError("RAW1 image is truncated")
+        return list(img), int(labels[sample_idx])
 
-        first = f.read(bytes_per_image)
-        if len(first) != bytes_per_image:
-            raise ValueError("RAW1 first image is truncated")
-        label0 = labels[0]
-        return list(first), int(label0)
+
+def read_raw1_first_image_u8(raw_bin_path: str) -> tuple[list[int], int]:
+    return read_raw1_image_u8(raw_bin_path, sample_idx=0)
 
 
 def neuron_bias(neuron_idx: int) -> int:
@@ -1067,6 +1119,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--port", type=str, default=SERIAL_PORTNAME)
     parser.add_argument("--start-lba", type=int, default=2048)
     parser.add_argument("--num-sectors", type=int, default=0, help="0 means auto from RAW1 header")
+    parser.add_argument(
+        "--full-sd-copy",
+        action="store_true",
+        help="force legacy full RAW1 copy before inference (default fpga image path streams only required sectors)",
+    )
     parser.add_argument("--n-steps", type=int, default=350)
     parser.add_argument("--seed", type=lambda x: int(x, 0), default=0x12345678)
     parser.add_argument("--timeout", type=float, default=600.0)
@@ -1161,24 +1218,87 @@ if __name__ == "__main__":
             print("Skipping UART weight upload; using FPGA-side weight initialization")
         py_w_in = fpga_weights_q16.astype(np.float64) / float(1 << FXP_SHIFT)
 
-        fpga_sd_to_ddr_copy(
-            ser=ser,
-            start_lba=args.start_lba,
-            num_sectors=args.num_sectors,
-            timeout_sec=args.timeout
-        )
+        if args.image_source == "fpga" and args.num_sectors == 0 and not args.full_sd_copy:
+            img_idx = int(args.sample_idx)
+            if img_idx < 0:
+                raise ValueError(f"--sample-idx must be >=0 for --image-source fpga, got {img_idx}")
+            img_byte_off = RAW1_HEADER_BYTES + RAW1_NUM_IMAGES_DEFAULT + (img_idx * N_IN)
+            img_sector_off = img_byte_off // 512
+            img_byte_in_sector = img_byte_off % 512
+            sectors_needed = (img_byte_in_sector + N_IN + 511) // 512
+            ddr_image_base_byte = img_byte_in_sector
+            print(
+                "Using streamed FPGA image load path: "
+                f"sample_idx={img_idx}, sector_off={img_sector_off}, sectors={sectors_needed}, "
+                f"byte_in_sector={img_byte_in_sector}, ddr_image_base_byte={ddr_image_base_byte}"
+            )
+            fpga_sd_sectors_to_ddr(
+                ser=ser,
+                start_lba=args.start_lba + img_sector_off,
+                num_sectors=sectors_needed,
+                timeout_sec=args.timeout,
+            )
+            fpga_load_image_from_ddr(
+                ser=ser,
+                base_addr_byte=ddr_image_base_byte,
+                n_bytes=N_IN,
+                timeout_sec=args.timeout,
+            )
+        else:
+            if args.num_sectors > 0:
+                fpga_sd_sectors_to_ddr(
+                    ser=ser,
+                    start_lba=args.start_lba,
+                    num_sectors=args.num_sectors,
+                    timeout_sec=args.timeout,
+                )
+            elif args.full_sd_copy:
+                print(
+                    "Using full sector DMA copy (RAW1 parser on FPGA disabled): "
+                    f"sectors={RAW1_TOTAL_SECTORS_DEFAULT}"
+                )
+                fpga_sd_sectors_to_ddr(
+                    ser=ser,
+                    start_lba=args.start_lba,
+                    num_sectors=RAW1_TOTAL_SECTORS_DEFAULT,
+                    timeout_sec=args.timeout,
+                )
+            else:
+                print(
+                    "Using host-side RAW1 size assumption for full sector DMA copy "
+                    f"(sectors={RAW1_TOTAL_SECTORS_DEFAULT})"
+                )
+                fpga_sd_sectors_to_ddr(
+                    ser=ser,
+                    start_lba=args.start_lba,
+                    num_sectors=RAW1_TOTAL_SECTORS_DEFAULT,
+                    timeout_sec=args.timeout,
+                )
 
         if args.image_source == "fpga":
             image0_u8 = fpga_read_raw_image_u8(ser)
             label0 = -1
-            print("Loaded comparison image from FPGA raw_image0_u8 (label=unknown)")
+            if args.raw_bin:
+                raw_bin_path = resolve_raw_bin_path(args.raw_bin)
+                ref_u8, ref_label = read_raw1_image_u8(str(raw_bin_path), sample_idx=args.sample_idx)
+                img_mismatch = sum(1 for a, b in zip(image0_u8, ref_u8) if int(a) != int(b))
+                label0 = ref_label
+                print(
+                    "Loaded comparison image from FPGA raw_image0_u8 "
+                    f"(sample_idx={args.sample_idx}, label={label0}, mismatched_vs_raw={img_mismatch})"
+                )
+            else:
+                print(
+                    "Loaded comparison image from FPGA raw_image0_u8 "
+                    f"(sample_idx={args.sample_idx}, label=unknown)"
+                )
         elif args.image_source == "mnist":
             image0_u8, label0 = read_mnist_image_u8(args.sample_idx)
             print(f"Loaded comparison image from MNIST: sample_idx={args.sample_idx} (label={label0})")
         else:
             raw_bin_path = resolve_raw_bin_path(args.raw_bin)
-            image0_u8, label0 = read_raw1_first_image_u8(str(raw_bin_path))
-            print(f"Loaded comparison image from RAW1: {raw_bin_path} (label={label0})")
+            image0_u8, label0 = read_raw1_image_u8(str(raw_bin_path), sample_idx=args.sample_idx)
+            print(f"Loaded comparison image from RAW1: {raw_bin_path} (sample_idx={args.sample_idx}, label={label0})")
 
         sum_u8 = int(sum(image0_u8))
         nz = sum(1 for v in image0_u8 if v != 0)
