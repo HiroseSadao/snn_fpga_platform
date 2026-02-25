@@ -60,6 +60,7 @@ module top_level(
     localparam logic [7:0] OP_STDP_UPDATE_ALL = 8'h35;
     localparam logic [7:0] OP_TRAIN_RUN_CHUNK = 8'h36;
     localparam logic [7:0] OP_TRAIN_RUN_SAMPLE_PHASE3 = 8'h37;
+    localparam logic [7:0] OP_TRAIN_RUN_SAMPLE_PHASE4 = 8'h38;
     localparam logic [31:0] DDR_ADDR_WORD_LIMIT = 32'd16777216; // 64MiB / 4
     localparam logic [7:0] MAX_SUPPORTED_NARGS = 8'd2;
     // Increase RX timeout margin to tolerate host-side inter-byte gaps on UART.
@@ -120,8 +121,9 @@ module top_level(
     // [0]=query_caps impl, [1]=logical DDR map fixed, [2]=trace opcode present,
     // [3]=tile opcode present, [8]=trace kernel exec impl, [9]=tile kernel exec impl,
     // [10]=train work generation helper impl, [11]=stdp all-rows batch impl,
-    // [12]=train chunk runner (phase0 skeleton) impl.
-    localparam logic [31:0] TRAIN_CAPS_VALUE = 32'h00003F0F;
+    // [12]=train chunk runner (phase0 skeleton) impl, [13]=phase3 sample flow impl,
+    // [14]=phase4 retry sample flow impl.
+    localparam logic [31:0] TRAIN_CAPS_VALUE = 32'h00007F0F;
     // Step1 logical DDR word map contract (future external DDR integration target).
     localparam logic [31:0] TRAIN_BASE_W_Q16_WORDS  = 32'd0;
     localparam logic [31:0] TRAIN_BASE_A_Q16_WORDS  = TRAIN_BASE_W_Q16_WORDS + N_WEIGHTS;
@@ -142,6 +144,10 @@ module top_level(
     localparam logic signed [31:0] TRAIN_LR_M_Q16    = 32'sd7;    // 1e-4
     localparam logic signed [31:0] TRAIN_CLIP_DW_Q16 = 32'sd66;   // 1e-3
     localparam logic [31:0]        TRAIN_UPDATE_NT   = 32'd100;
+    localparam logic [31:0]        TRAIN_RETRY_MIN_INJ_SPIKES = 32'd5;
+    localparam logic [15:0]        TRAIN_RETRY_MAX_FR_START   = 16'd32;
+    localparam logic [15:0]        TRAIN_RETRY_MAX_FR_STEP    = 16'd16;
+    localparam logic [15:0]        TRAIN_RETRY_MAX_FR_LIMIT   = 16'd256;
 
     typedef enum logic [2:0] {
         RX_WAIT_SYNC,
@@ -395,7 +401,7 @@ module top_level(
     logic [6:0]  train_stdp_batch_next_row0;
     logic        train_chunk_active;
     train_chunk_state_t train_chunk_state;
-    logic [1:0]  train_chunk_mode; // 0=phase0,1=phase1,2=phase2
+    logic [2:0]  train_chunk_mode; // 0=phase0,1=phase1,2=phase2,3=phase3,4=phase4(retry)
     logic [15:0] train_chunk_samples_left;
     logic [6:0]  train_chunk_tile_rows;
     logic [15:0] train_chunk_steps_left;
@@ -405,6 +411,8 @@ module top_level(
     logic [9:0]  train_chunk_pre_idx;
     logic [31:0] train_chunk_last_infer_spikes;
     logic [31:0] train_chunk_last_blank_spikes;
+    logic [15:0] train_chunk_retry_curr_max_fr;
+    logic [15:0] train_chunk_retry_accepted_max_fr;
     logic        train_gen_active;
     train_gen_state_t train_gen_state;
     logic [31:0] train_gen_base_word;
@@ -1040,6 +1048,8 @@ module top_level(
             train_chunk_pre_idx <= 10'd0;
             train_chunk_last_infer_spikes <= 32'd0;
             train_chunk_last_blank_spikes <= 32'd0;
+            train_chunk_retry_curr_max_fr <= TRAIN_RETRY_MAX_FR_START;
+            train_chunk_retry_accepted_max_fr <= TRAIN_RETRY_MAX_FR_START;
             train_gen_active     <= 1'b0;
             train_gen_state      <= TGK_IDLE;
             train_gen_base_word  <= 32'd0;
@@ -1693,7 +1703,7 @@ module top_level(
                                 train_stdp_batch_active <= 1'b0;
                                 if (train_chunk_active) begin
                                     if (train_chunk_samples_left <= 16'd1) begin
-                                        if (train_chunk_mode == 2'd3) begin
+                                        if ((train_chunk_mode == 3'd3) || (train_chunk_mode == 3'd4)) begin
                                             // Phase3 continues with a blank-period inference after STDP.
                                             train_chunk_samples_left <= 16'd0;
                                             train_chunk_state        <= TCK_BLANK_INFER_START;
@@ -1703,7 +1713,7 @@ module top_level(
                                             train_chunk_mode         <= 2'd0;
                                             train_chunk_samples_left <= 16'd0;
                                             resp_status    <= STATUS_OK;
-                                            if (train_chunk_mode == 2'd2) begin
+                                            if (train_chunk_mode == 3'd2) begin
                                                 resp_result <= train_chunk_last_infer_spikes;
                                                 resp_checksum <= calc_resp_checksum(STATUS_OK, train_chunk_last_infer_spikes);
                                             end else begin
@@ -1810,7 +1820,21 @@ module top_level(
                             if (response_ready && (resp_status == STATUS_OK)) begin
                                 response_ready <= 1'b0;
                             end
-                            train_chunk_state <= TCK_GEN_XIN_START;
+                            if (train_chunk_mode == 3'd4) begin
+                                if (($unsigned(infer_total_spikes) < TRAIN_RETRY_MIN_INJ_SPIKES) &&
+                                    (train_chunk_retry_curr_max_fr + TRAIN_RETRY_MAX_FR_STEP <= TRAIN_RETRY_MAX_FR_LIMIT)) begin
+                                    logic [15:0] next_max_fr_tmp;
+                                    next_max_fr_tmp = train_chunk_retry_curr_max_fr + TRAIN_RETRY_MAX_FR_STEP;
+                                    train_chunk_retry_curr_max_fr <= next_max_fr_tmp;
+                                    infer_poisson_num_const_cfg <= (POISSON_NUM_CONST * next_max_fr_tmp) >> 5;
+                                    train_chunk_state <= TCK_INFER_START;
+                                end else begin
+                                    train_chunk_retry_accepted_max_fr <= train_chunk_retry_curr_max_fr;
+                                    train_chunk_state <= TCK_GEN_XIN_START;
+                                end
+                            end else begin
+                                train_chunk_state <= TCK_GEN_XIN_START;
+                            end
                         end
                     end
                     TCK_BLANK_INFER_START: begin
@@ -1971,11 +1995,14 @@ module top_level(
                         end
                     end
                     TCK_DONE: begin
-                        if (train_chunk_mode == 2'd3) begin
+                        if ((train_chunk_mode == 3'd3) || (train_chunk_mode == 3'd4)) begin
                             train_chunk_active       <= 1'b0;
                             train_chunk_state        <= TCK_IDLE;
                             train_chunk_mode         <= 2'd0;
                             train_chunk_samples_left <= 16'd0;
+                            if (train_chunk_mode == 3'd4) begin
+                                infer_poisson_num_const_cfg <= POISSON_NUM_CONST;
+                            end
                             // Return inj/blank totals packed as [31:16]=blank, [15:0]=inj (truncated)
                             resp_status    <= STATUS_OK;
                             resp_result    <= {train_chunk_last_blank_spikes[15:0], train_chunk_last_infer_spikes[15:0]};
@@ -2078,7 +2105,7 @@ module top_level(
                              (req_opcode == OP_TRACE_UPDATE) || (req_opcode == OP_STDP_UPDATE_TILE) ||
                              (req_opcode == OP_TRAIN_GEN_WORK) || (req_opcode == OP_READ_TRAIN_DEBUG) ||
                              (req_opcode == OP_STDP_UPDATE_ALL) || (req_opcode == OP_TRAIN_RUN_CHUNK) ||
-                             (req_opcode == OP_TRAIN_RUN_SAMPLE_PHASE3))
+                             (req_opcode == OP_TRAIN_RUN_SAMPLE_PHASE3) || (req_opcode == OP_TRAIN_RUN_SAMPLE_PHASE4))
                             && (rx_byte != 8'd2)
                         ) begin
                             rx_state        <= RX_WAIT_SYNC;
@@ -2566,11 +2593,11 @@ module top_level(
                                         !train_chunk_active) begin
                                         train_chunk_active       <= 1'b1;
                                         if (arg0 > 0)
-                                            train_chunk_mode <= 2'd0;
+                                            train_chunk_mode <= 3'd0;
                                         else if (arg1 < 0)
-                                            train_chunk_mode <= 2'd2;
+                                            train_chunk_mode <= 3'd2;
                                         else
-                                            train_chunk_mode <= 2'd1;
+                                            train_chunk_mode <= 3'd1;
                                         train_chunk_state        <= (arg0 < 0) ? ((arg1 < 0) ? TCK_INFER_START : TCK_GEN_XIN_START) : TCK_IDLE;
                                         train_chunk_samples_left <= (arg0 > 0) ? arg0[15:0] : 16'd1;
                                         train_chunk_tile_rows    <= (arg1 > 0) ? arg1 : -arg1;
@@ -2580,6 +2607,9 @@ module top_level(
                                         train_chunk_winner        <= 7'd0;
                                         train_chunk_pre_idx       <= 10'd0;
                                         train_chunk_last_infer_spikes <= 32'd0;
+                                        train_chunk_last_blank_spikes <= 32'd0;
+                                        train_chunk_retry_curr_max_fr <= TRAIN_RETRY_MAX_FR_START;
+                                        train_chunk_retry_accepted_max_fr <= TRAIN_RETRY_MAX_FR_START;
                                         if (arg0 > 0) begin
                                             // Start first STDP batch immediately (phase0)
                                             train_stdp_batch_active    <= 1'b1;
@@ -2619,7 +2649,7 @@ module top_level(
                                         !train_stdp_batch_active &&
                                         !train_chunk_active) begin
                                         train_chunk_active       <= 1'b1;
-                                        train_chunk_mode         <= 2'd3;
+                                        train_chunk_mode         <= 3'd3;
                                         train_chunk_state        <= TCK_INFER_START;
                                         train_chunk_samples_left <= 16'd1;
                                         train_chunk_tile_rows    <= arg1;
@@ -2630,6 +2660,42 @@ module top_level(
                                         train_chunk_pre_idx      <= 10'd0;
                                         train_chunk_last_infer_spikes <= 32'd0;
                                         train_chunk_last_blank_spikes <= 32'd0;
+                                        train_chunk_retry_curr_max_fr <= TRAIN_RETRY_MAX_FR_START;
+                                        train_chunk_retry_accepted_max_fr <= TRAIN_RETRY_MAX_FR_START;
+                                        infer_poisson_num_const_cfg <= POISSON_NUM_CONST;
+                                    end else begin
+                                        resp_status    <= STATUS_BAD_PACKET;
+                                        resp_result    <= TRAIN_CAPS_VALUE;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, TRAIN_CAPS_VALUE);
+                                        response_ready <= 1'b1;
+                                    end
+                                end
+                                OP_TRAIN_RUN_SAMPLE_PHASE4: begin
+                                    // arg0 = inj steps (>0), arg1 = tile_rows (>0); retries max_fr in-FPGA before synthetic trace/STDP + blank.
+                                    if ((req_nargs == 8'd2) &&
+                                        (arg0 > 0) && (arg0 <= 32'sd65535) &&
+                                        (arg1 > 0) && (arg1 <= N_NEURONS) &&
+                                        ddr_calib_complete &&
+                                        !ddr_req_pending_core &&
+                                        !train_trace_active &&
+                                        !train_stdp_active &&
+                                        !train_stdp_batch_active &&
+                                        !train_chunk_active) begin
+                                        train_chunk_active       <= 1'b1;
+                                        train_chunk_mode         <= 3'd4;
+                                        train_chunk_state        <= TCK_INFER_START;
+                                        train_chunk_samples_left <= 16'd1;
+                                        train_chunk_tile_rows    <= arg1;
+                                        train_chunk_steps_left   <= arg0[15:0];
+                                        train_chunk_seed_xin     <= 32'h13579BDF;
+                                        train_chunk_seed_xexc    <= 32'h2468ACE1;
+                                        train_chunk_winner       <= 7'd0;
+                                        train_chunk_pre_idx      <= 10'd0;
+                                        train_chunk_last_infer_spikes <= 32'd0;
+                                        train_chunk_last_blank_spikes <= 32'd0;
+                                        train_chunk_retry_curr_max_fr <= TRAIN_RETRY_MAX_FR_START;
+                                        train_chunk_retry_accepted_max_fr <= TRAIN_RETRY_MAX_FR_START;
+                                        infer_poisson_num_const_cfg <= POISSON_NUM_CONST;
                                     end else begin
                                         resp_status    <= STATUS_BAD_PACKET;
                                         resp_result    <= TRAIN_CAPS_VALUE;
@@ -2714,9 +2780,11 @@ module top_level(
                                             8'd34: train_dbg_value = {30'd0, ddr_lane_sel_ddr};
                                             8'd35: train_dbg_value = {31'd0, train_chunk_active};
                                             8'd36: train_dbg_value = {28'd0, train_chunk_state};
-                                            8'd37: train_dbg_value = {30'd0, train_chunk_mode};
+                                            8'd37: train_dbg_value = {29'd0, train_chunk_mode};
                                             8'd38: train_dbg_value = train_chunk_last_infer_spikes;
                                             8'd39: train_dbg_value = train_chunk_last_blank_spikes;
+                                            8'd40: train_dbg_value = {16'd0, train_chunk_retry_curr_max_fr};
+                                            8'd41: train_dbg_value = {16'd0, train_chunk_retry_accepted_max_fr};
                                             default: train_dbg_value = 32'hDEB00000 | {24'd0, arg0[7:0]};
                                         endcase
                                         resp_status    <= STATUS_OK;

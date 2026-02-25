@@ -52,6 +52,7 @@ OP_READ_TRAIN_DEBUG = 0x34
 OP_STDP_UPDATE_ALL = 0x35
 OP_TRAIN_RUN_CHUNK = 0x36
 OP_TRAIN_RUN_SAMPLE_PHASE3 = 0x37
+OP_TRAIN_RUN_SAMPLE_PHASE4 = 0x38
 
 STATUS_OK = 0x00
 STATUS_BAD_PACKET = 0xE1
@@ -994,6 +995,8 @@ def fpga_read_train_debug(ser: serial.Serial) -> dict[str, int]:
         "chunk_mode",
         "chunk_last_infer_spikes",
         "chunk_last_blank_spikes",
+        "chunk_retry_curr_max_fr",
+        "chunk_retry_accepted_max_fr",
     ]
     out: dict[str, int] = {}
     for idx, key in enumerate(keys):
@@ -1149,6 +1152,31 @@ def fpga_train_run_sample_phase3(ser: serial.Serial, *, inj_steps: int, tile_row
             print(f"Infer debug probe failed: {dbg_exc}")
         raise exc
     require_ok(status, "TRAIN_RUN_SAMPLE_PHASE3")
+    return int(result)
+
+
+def fpga_train_run_sample_phase4(ser: serial.Serial, *, inj_steps: int, tile_rows: int) -> int:
+    timeout_s = max(TRAIN_KERNEL_TIMEOUT_SEC, 300.0)
+    try:
+        status, result = send_request(
+            ser,
+            OP_TRAIN_RUN_SAMPLE_PHASE4,
+            [int(inj_steps), int(tile_rows)],
+            response_timeout=timeout_s,
+            transient_retry_max=0,
+        )
+    except TimeoutError as exc:
+        print(f"TRAIN_RUN_SAMPLE_PHASE4 timeout after {timeout_s:.1f}s; probing train/infer debug...")
+        try:
+            print("Train debug:", ", ".join(f"{k}={v}" for k, v in fpga_read_train_debug(ser).items()))
+        except Exception as dbg_exc:
+            print(f"Train debug probe failed: {dbg_exc}")
+        try:
+            print("Infer debug:", ", ".join(f"{k}={v}" for k, v in fpga_read_infer_debug(ser).items()))
+        except Exception as dbg_exc:
+            print(f"Infer debug probe failed: {dbg_exc}")
+        raise exc
+    require_ok(status, "TRAIN_RUN_SAMPLE_PHASE4")
     return int(result)
 
 
@@ -2512,6 +2540,11 @@ def parse_args() -> argparse.Namespace:
         help="compare phase3 inj/blank spike totals against a Python mine-style simple reference",
     )
     parser.add_argument(
+        "--train-run-sample-phase4",
+        action="store_true",
+        help="run phase4 coarse-grained FPGA sample flow (in-FPGA max_fr retry + synthetic trace/STDP + blank) and exit",
+    )
+    parser.add_argument(
         "--train-run-sample-phase3-retry",
         action="store_true",
         help="mine-like coarse retry: infer-only probes with increasing max_fr, then run one phase3 sample",
@@ -2641,6 +2674,7 @@ if __name__ == "__main__":
             args.train_run_chunk_phase2_verify,
             args.train_run_sample_phase3,
             args.train_run_sample_phase3_verify,
+            args.train_run_sample_phase4,
             args.train_run_sample_phase3_retry,
             args.train_mine_one_sample_replay_selfcheck,
         ])
@@ -2743,6 +2777,35 @@ if __name__ == "__main__":
                 f"result=0x{(int(ret) & 0xFFFFFFFF):08X}, inj_steps={max(1,int(args.chunk_nsteps))}, "
                 f"tile_rows={max(1,int(args.train_tile_rows))}, inj_total_spikes={inj_spikes}, "
                 f"blank_total_spikes={blank_spikes}"
+            )
+            raise SystemExit(0)
+        if args.train_run_sample_phase4:
+            if args.image_source != "fpga":
+                raise ValueError("--train-run-sample-phase4 currently requires --image-source fpga")
+            prepare_fpga_sample_image_via_streamed_load(
+                ser,
+                sample_idx=int(args.sample_idx),
+                start_lba=int(args.start_lba),
+                timeout_sec=float(args.timeout),
+            )
+            ret = fpga_train_run_sample_phase4(
+                ser,
+                inj_steps=max(1, int(args.chunk_nsteps)),
+                tile_rows=max(1, int(args.train_tile_rows)),
+            )
+            inj_spikes = int(ret) & 0xFFFF
+            blank_spikes = (int(ret) >> 16) & 0xFFFF
+            tdbg = {}
+            try:
+                tdbg = fpga_read_train_debug(ser)
+            except Exception:
+                tdbg = {}
+            accepted_max_fr = int(tdbg.get("chunk_retry_accepted_max_fr", 0))
+            print(
+                "TRAIN_RUN_SAMPLE_PHASE4 completed: "
+                f"result=0x{(int(ret) & 0xFFFFFFFF):08X}, inj_steps={max(1,int(args.chunk_nsteps))}, "
+                f"tile_rows={max(1,int(args.train_tile_rows))}, inj_total_spikes={inj_spikes}, "
+                f"blank_total_spikes={blank_spikes}, accepted_max_fr={accepted_max_fr}"
             )
             raise SystemExit(0)
         if args.train_run_sample_phase3_retry:
