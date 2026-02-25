@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import importlib
+import importlib.util
 import struct
+import sys
 import time
+import types
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -595,9 +599,19 @@ def fpga_ddr_smoke_test(ser: serial.Serial, base_addr_word: int = 0x100) -> None
 
 
 def fpga_ddr_zero32(ser: serial.Serial, base_addr_word: int, nwords: int) -> int:
-    status, result = send_request(ser, OP_DDR_ZERO32, [int(base_addr_word), int(nwords)])
-    require_ok(status, f"DDR_ZERO32[base={base_addr_word},n={nwords}]")
-    return int(result)
+    base = int(base_addr_word)
+    rem = int(nwords)
+    total_done = 0
+    # HDL uses train_gen_count_total[15:0], so one request can zero at most 65535 words.
+    max_chunk = 0xFFFF
+    while rem > 0:
+        chunk = rem if rem <= max_chunk else max_chunk
+        status, result = send_request(ser, OP_DDR_ZERO32, [base, chunk])
+        require_ok(status, f"DDR_ZERO32[base={base},n={chunk}]")
+        total_done += int(result) & 0xFFFF
+        base += chunk
+        rem -= chunk
+    return total_done
 
 
 def load_mnist() -> tuple[np.ndarray, np.ndarray]:
@@ -729,6 +743,11 @@ def q16_to_float(arr: np.ndarray) -> np.ndarray:
 def float_to_q16_clip(arr: np.ndarray, lo: int = 0, hi: int = 0xFFFF) -> np.ndarray:
     q = np.rint(np.asarray(arr, dtype=np.float64) * float(1 << FXP_SHIFT))
     return np.clip(q, lo, hi).astype(np.int64)
+
+
+def float_to_s32_q16(arr: np.ndarray) -> np.ndarray:
+    q = np.rint(np.asarray(arr, dtype=np.float64) * float(1 << FXP_SHIFT)).astype(np.int64)
+    return np.clip(q, np.iinfo(np.int32).min, np.iinfo(np.int32).max)
 
 
 def kernel_trace_update_python(
@@ -1199,6 +1218,386 @@ def fpga_train_kernels_selfcheck_all(ser: serial.Serial) -> None:
     fpga_stdp_update_tile_selfcheck(ser)
 
 
+def fpga_train_one_sample_e2e_selfcheck(ser: serial.Serial, seed: int = 7) -> None:
+    """Small end-to-end training loop (trace repeated -> STDP tile), FPGA vs Python.
+
+    This is a "1-sample equivalent" kernel-chain check for development:
+    it uses synthetic per-timestep events/seeds but preserves the same update order
+    (trace accumulation repeated, then STDP tile update) used by mine.py.
+    """
+    rng = np.random.RandomState(seed)
+    layout = build_train_ddr_layout()
+    row0 = 0
+    nrows = 2
+    row1 = row0 + nrows
+    nsteps = 16  # keep runtime practical while validating the end-to-end ordering
+
+    # Build a sparse synthetic "one-sample" event stream.
+    xin_seeds = [int(rng.randint(0, 0x7FFFFFFF)) for _ in range(nsteps)]
+    xexc_seeds = [int(rng.randint(0, 0x7FFFFFFF)) for _ in range(nsteps)]
+    winners: list[int] = []
+    pre_indices: list[int] = []
+    for _ in range(nsteps):
+        winners.append(int(rng.randint(row0, row1)) if (rng.rand() < 0.6) else -1)
+        pre_indices.append(int(rng.randint(0, N_IN)) if (rng.rand() < 0.5) else -1)
+
+    # Python reference buffers (integer q16 values for kernel-level exactness).
+    A_ref = np.zeros((N_NEURONS, N_IN), dtype=np.int64)
+    B_ref = np.zeros((N_IN, N_NEURONS), dtype=np.int64)
+    W0 = rng.randint(0, TRAIN_WMAX_Q16 + 1, size=(N_NEURONS, N_IN), dtype=np.int64)
+    W_ref = np.array(W0, copy=True)
+
+    print(f"Preloading end-to-end training selfcheck data into DDR (rows {row0}..{row1-1})...")
+    # Zero A rows used by STDP tile.
+    for r in range(row0, row1):
+        fpga_ddr_zero32(ser, layout.base_a_q16 + r * N_IN, N_IN)
+    # Zero B_T tile columns for all pres (B_T[c, row0:row1]); required because STDP reads all c.
+    for c in range(N_IN):
+        fpga_ddr_zero32(ser, layout.base_bt_q16 + c * N_NEURONS + row0, nrows)
+    # Preload initial W tile rows only (STDP tile touches only these rows).
+    for r in range(row0, row1):
+        fpga_ddr_write_block32(
+            ser,
+            layout.base_w_q16 + r * N_IN,
+            W0[r, :],
+            label=f"W_init_row[{r}]",
+            progress_every=196,
+        )
+
+    print(f"Running end-to-end kernel chain for {nsteps} timesteps (trace only), then STDP tile...")
+    for t in range(nsteps):
+        x_in = gen_train_work_values_from_seed(xin_seeds[t], N_IN)
+        x_exc = gen_train_work_values_from_seed(xexc_seeds[t], N_NEURONS)
+        fpga_train_gen_work(ser, seed=xin_seeds[t], region="x_in")
+        fpga_train_gen_work(ser, seed=xexc_seeds[t], region="x_exc")
+
+        pre = pre_indices[t]
+        if pre >= 0:
+            fpga_ddr_write_block32(
+                ser,
+                layout.base_prelist_work,
+                np.array([pre], dtype=np.int64),
+                label=f"prelist[t={t}]",
+                progress_every=1,
+            )
+            pre_active = np.array([pre], dtype=np.int64)
+            pre_count = 1
+        else:
+            pre_active = np.empty(0, dtype=np.int64)
+            pre_count = 0
+
+        winner = winners[t]
+        kernel_trace_update_python(A_ref, B_ref, x_in, x_exc, winner, pre_active)
+        fpga_trace_update_kernel(ser, winner_idx=winner, pre_count=pre_count)
+
+    kernel_stdp_update_tile_q16_python(W_ref, A_ref, B_ref, row0, nrows)
+    fpga_stdp_update_tile(ser, row0=row0, nrows=nrows)
+
+    print("Reading back end-to-end W tile from DDR for comparison...")
+    max_diff = 0
+    for r in range(row0, row1):
+        w_fpga = fpga_ddr_read_block32(
+            ser,
+            layout.base_w_q16 + r * N_IN,
+            N_IN,
+            label=f"W_e2e_readback[{r}]",
+            progress_every=196,
+        ).astype(np.int64)
+        row_diff = int(np.max(np.abs(w_fpga - W_ref[r, :])))
+        max_diff = max(max_diff, row_diff)
+    print(f"Train one-sample e2e selfcheck: max|W_fpga-W_ref|={max_diff} (nsteps={nsteps}, rows={nrows})")
+    if max_diff != 0:
+        raise RuntimeError("train one-sample e2e selfcheck failed")
+
+
+class _CallRecorder:
+    def __init__(self, inner):
+        self._inner = inner
+        self.last = None
+
+    def __call__(self, *args, **kwargs):
+        out = self._inner(*args, **kwargs)
+        self.last = np.array(out, copy=True)
+        return out
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+def _install_mine_models_shim() -> None:
+    if "Models" in sys.modules:
+        return
+    repo_root = Path(__file__).resolve().parents[2]
+    candidates = [
+        repo_root / "STDP_no_supervising",
+        repo_root / "snn_cuda" / "STDP_no_supervising",
+    ]
+    src_dir = next((p for p in candidates if p.exists()), None)
+    if src_dir is None:
+        raise ModuleNotFoundError("Models (and STDP_no_supervising fallback) not found")
+    sys.path.insert(0, str(src_dir))
+    pkg = types.ModuleType("Models")
+    sys.modules["Models"] = pkg
+    for name in ("Neurons", "Synapses", "Connections"):
+        mod = importlib.import_module(name)
+        setattr(pkg, name, mod)
+        sys.modules[f"Models.{name}"] = mod
+
+
+def _import_mine_reference_module():
+    mine_path = Path(__file__).resolve().parents[1] / "LIF_WTA_STDP_MNIST_mine.py"
+    if not mine_path.exists():
+        raise FileNotFoundError(f"mine.py not found: {mine_path}")
+    for attempt in (0, 1):
+        try:
+            spec = importlib.util.spec_from_file_location("mine_ref_mod", mine_path)
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Failed to create import spec for {mine_path}")
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules["mine_ref_mod"] = mod
+            sys.path.insert(0, str(mine_path.parent))
+            spec.loader.exec_module(mod)
+            return mod
+        except ModuleNotFoundError as exc:
+            if attempt == 0 and exc.name == "Models":
+                _install_mine_models_shim()
+                continue
+            raise
+
+
+def _load_image_u8_for_train_replay(ser: serial.Serial, args: argparse.Namespace) -> tuple[list[int], int]:
+    if args.image_source == "raw":
+        raw_bin_path = resolve_raw_bin_path(args.raw_bin)
+        return read_raw1_image_u8(str(raw_bin_path), sample_idx=args.sample_idx)
+    if args.image_source == "mnist":
+        return read_mnist_image_u8(args.sample_idx)
+    img_idx = int(args.sample_idx)
+    if img_idx < 0:
+        raise ValueError(f"--sample-idx must be >=0 for --image-source fpga, got {img_idx}")
+    img_byte_off = RAW1_HEADER_BYTES + RAW1_NUM_IMAGES_DEFAULT + (img_idx * N_IN)
+    img_sector_off = img_byte_off // 512
+    img_byte_in_sector = img_byte_off % 512
+    sectors_needed = (img_byte_in_sector + N_IN + 511) // 512
+    print(
+        "Using streamed FPGA image load path for mine replay: "
+        f"sample_idx={img_idx}, sector_off={img_sector_off}, sectors={sectors_needed}, "
+        f"byte_in_sector={img_byte_in_sector}"
+    )
+    fpga_sd_sectors_to_ddr(
+        ser=ser,
+        start_lba=args.start_lba + img_sector_off,
+        num_sectors=sectors_needed,
+        timeout_sec=args.timeout,
+    )
+    fpga_load_image_from_ddr(
+        ser=ser,
+        base_addr_byte=img_byte_in_sector,
+        n_bytes=N_IN,
+        timeout_sec=args.timeout,
+    )
+    image_u8 = fpga_read_raw_image_u8(ser)
+    label = -1
+    if args.raw_bin:
+        try:
+            _, label = read_raw1_image_u8(str(resolve_raw_bin_path(args.raw_bin)), sample_idx=args.sample_idx)
+        except Exception:
+            label = -1
+    return image_u8, label
+
+
+def _record_mine_one_sample_events(
+    image_u8: list[int],
+    *,
+    sample_seed: int,
+    dt: float = 1e-3,
+    nt_inj: int = 350,
+    nt_blank: int = 150,
+    init_max_fr: int = 32,
+) -> tuple[np.ndarray, np.ndarray, list[dict[str, object]], dict[str, int]]:
+    mine = _import_mine_reference_module()
+    img_f = (np.asarray(image_u8, dtype=np.float32).reshape(1, N_IN) / 255.0)
+    np_state = np.random.get_state()
+    try:
+        np.random.seed(int(sample_seed) & 0xFFFFFFFF)
+        net = mine.DiehlAndCook2015Network(
+            n_in=N_IN,
+            n_neurons=N_NEURONS,
+            wexc=2.25,
+            winh=0.85,
+            dt=dt,
+            wmin=0.0,
+            wmax=5e-2,
+            lr=(1e-2, 1e-4),
+            update_nt=nt_inj,
+            profile_every=0,
+        )
+        net.initialize_states()
+        xin_tap = _CallRecorder(net.input_synaptictrace)
+        xexc_tap = _CallRecorder(net.exc_synaptictrace)
+        net.input_synaptictrace = xin_tap
+        net.exc_synaptictrace = xexc_tap
+
+        w_init = np.array(net.input_conn.W, copy=True)
+        blank_input = np.zeros(N_IN, dtype=np.uint8)
+        max_fr = int(init_max_fr)
+        all_events: list[dict[str, object]] = []
+        attempts = 0
+        total_spikes = 0
+        accepted_max_fr = max_fr
+        while True:
+            attempts += 1
+            input_spikes = mine.online_load_and_encoding_dataset(img_f, 0, dt, nt_inj, max_fr)
+            attempt_events: list[dict[str, object]] = []
+            spike_sum = 0
+            for t in range(nt_inj):
+                s_in = np.asarray(input_spikes[t], dtype=np.uint8)
+                pre_active = np.flatnonzero(s_in).astype(np.int64)
+                s_exc = np.asarray(net(s_in, stdp=True), dtype=np.uint8)
+                spike_sum += int(np.sum(s_exc))
+                x_in = np.asarray(xin_tap.last, dtype=np.float64)
+                x_exc = np.asarray(xexc_tap.last, dtype=np.float64)
+                p = int(np.argmax(s_exc))
+                winner = p if int(s_exc[p]) != 0 else -1
+                attempt_events.append(
+                    {
+                        "t": t,
+                        "pre_active": pre_active,
+                        "winner": winner,
+                        "x_in": x_in,
+                        "x_exc": x_exc,
+                    }
+                )
+            for _ in range(nt_blank):
+                _ = net(blank_input, stdp=False)
+            all_events.extend(attempt_events)
+            total_spikes += spike_sum
+            if spike_sum >= 5:
+                accepted_max_fr = max_fr
+                break
+            max_fr += 16
+        w_final = np.array(net.input_conn.W, copy=True)
+        meta = {
+            "attempts": attempts,
+            "accepted_max_fr": int(accepted_max_fr),
+            "nt_inj": int(nt_inj),
+            "nt_blank": int(nt_blank),
+            "total_events": int(len(all_events)),
+            "total_exc_spikes": int(total_spikes),
+        }
+        return w_init, w_final, all_events, meta
+    finally:
+        np.random.set_state(np_state)
+
+
+def fpga_train_mine_one_sample_replay_selfcheck(
+    ser: serial.Serial,
+    args: argparse.Namespace,
+    *,
+    seed: int = 123,
+    tile_rows: int = 10,
+) -> None:
+    """Replay a real mine.py 1-sample training update at kernel granularity.
+
+    mine.py itself is executed as the reference to generate the actual per-timestep
+    event stream (`x_in`, `x_exc`, pre_active, winner) for one sample. To keep UART
+    traffic tractable, the replay uses the sufficient statistics (A/B_T) aggregated
+    from that event stream, then runs FPGA STDP tile kernels across all rows.
+    """
+    image_u8, label = _load_image_u8_for_train_replay(ser, args)
+    print(
+        f"Running mine.py one-sample reference and recording events "
+        f"(sample_idx={int(args.sample_idx)}, label={label if label >= 0 else 'unknown'})..."
+    )
+    w0_f, w1_f, events, meta = _record_mine_one_sample_events(image_u8, sample_seed=seed)
+    print(
+        "mine.py replay source stats: "
+        f"attempts={meta['attempts']}, accepted_max_fr={meta['accepted_max_fr']}, "
+        f"events={meta['total_events']}, total_exc_spikes={meta['total_exc_spikes']}"
+    )
+
+    A_f = np.zeros((N_NEURONS, N_IN), dtype=np.float64)
+    B_T_f = np.zeros((N_IN, N_NEURONS), dtype=np.float64)
+    for ev in events:
+        kernel_trace_update_python(
+            A_f,
+            B_T_f,
+            np.asarray(ev["x_in"], dtype=np.float64),
+            np.asarray(ev["x_exc"], dtype=np.float64),
+            int(ev["winner"]),
+            np.asarray(ev["pre_active"], dtype=np.int64),
+        )
+
+    W0_q16 = float_to_q16_clip(w0_f, 0, TRAIN_WMAX_Q16).astype(np.int64)
+    A_q16 = float_to_s32_q16(A_f).astype(np.int64)
+    B_T_q16 = float_to_s32_q16(B_T_f).astype(np.int64)
+    W_ref_q16 = np.array(W0_q16, copy=True)
+    for row0 in range(0, N_NEURONS, int(tile_rows)):
+        kernel_stdp_update_tile_q16_python(W_ref_q16, A_q16, B_T_q16, row0, int(tile_rows))
+    W_mine_final_q16 = float_to_q16_clip(w1_f, 0, TRAIN_WMAX_Q16).astype(np.int64)
+
+    layout = build_train_ddr_layout()
+    print("Preloading mine-replay W/A/B_T into DDR (this can take a while over UART)...")
+    fpga_ddr_zero32(ser, layout.base_a_q16, N_NEURONS * N_IN)
+    fpga_ddr_zero32(ser, layout.base_bt_q16, N_IN * N_NEURONS)
+    for r in range(N_NEURONS):
+        fpga_ddr_write_block32(
+            ser,
+            layout.base_w_q16 + r * N_IN,
+            W0_q16[r, :],
+            label=f"W0_row[{r}]",
+            progress_every=196,
+        )
+    touched_a_rows = np.flatnonzero(np.any(A_q16 != 0, axis=1))
+    touched_b_rows = np.flatnonzero(np.any(B_T_q16 != 0, axis=1))
+    print(
+        f"Writing touched traces only: A_rows={int(touched_a_rows.size)}/{N_NEURONS}, "
+        f"B_T_rows={int(touched_b_rows.size)}/{N_IN}"
+    )
+    for r in touched_a_rows:
+        fpga_ddr_write_block32(
+            ser,
+            layout.base_a_q16 + int(r) * N_IN,
+            A_q16[int(r), :],
+            label=f"A_row[{int(r)}]",
+            progress_every=196,
+        )
+    for c in touched_b_rows:
+        fpga_ddr_write_block32(
+            ser,
+            layout.base_bt_q16 + int(c) * N_NEURONS,
+            B_T_q16[int(c), :],
+            label=f"BT_row[{int(c)}]",
+            progress_every=50,
+        )
+
+    print(f"Running FPGA STDP_UPDATE_TILE over all rows (tile_rows={int(tile_rows)})...")
+    for row0 in range(0, N_NEURONS, int(tile_rows)):
+        fpga_stdp_update_tile(ser, row0=row0, nrows=int(tile_rows))
+
+    print("Reading back full W for mine one-sample replay comparison...")
+    W_fpga_q16 = np.zeros((N_NEURONS, N_IN), dtype=np.int64)
+    for r in range(N_NEURONS):
+        W_fpga_q16[r, :] = fpga_ddr_read_block32(
+            ser,
+            layout.base_w_q16 + r * N_IN,
+            N_IN,
+            label=f"W_replay_readback[{r}]",
+            progress_every=196,
+        ).astype(np.int64)
+
+    max_diff_fpga_vs_ref = int(np.max(np.abs(W_fpga_q16 - W_ref_q16)))
+    max_diff_ref_vs_mine = int(np.max(np.abs(W_ref_q16 - W_mine_final_q16)))
+    max_diff_fpga_vs_mine = int(np.max(np.abs(W_fpga_q16 - W_mine_final_q16)))
+    print(
+        "Mine one-sample replay selfcheck: "
+        f"max|W_fpga-W_ref_q16|={max_diff_fpga_vs_ref}, "
+        f"max|W_ref_q16-W_mine_q16|={max_diff_ref_vs_mine}, "
+        f"max|W_fpga-W_mine_q16|={max_diff_fpga_vs_mine}"
+    )
+    if max_diff_fpga_vs_ref != 0:
+        raise RuntimeError("mine one-sample replay selfcheck failed (FPGA vs q16 replay ref)")
+
+
 def lcg_next_u32(state: int) -> int:
     return (state * LCG_A + LCG_C) & 0xFFFFFFFF
 
@@ -1572,6 +1971,28 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="run FPGA trace+STDP kernel self-checks and exit",
     )
+    parser.add_argument(
+        "--train-one-sample-e2e-selfcheck",
+        action="store_true",
+        help="run a small end-to-end training kernel-chain selfcheck (trace loop + STDP tile) and exit",
+    )
+    parser.add_argument(
+        "--train-mine-one-sample-replay-selfcheck",
+        action="store_true",
+        help="run a real mine.py one-sample replay selfcheck (aggregated A/B_T -> FPGA STDP tiles) and exit",
+    )
+    parser.add_argument(
+        "--train-mine-seed",
+        type=int,
+        default=123,
+        help="seed for mine.py one-sample replay selfcheck (weight init + Poisson encoding)",
+    )
+    parser.add_argument(
+        "--train-tile-rows",
+        type=int,
+        default=10,
+        help="row tile size for FPGA STDP_UPDATE_TILE loops in training selfchecks",
+    )
     return parser.parse_args()
 
 
@@ -1629,6 +2050,17 @@ if __name__ == "__main__":
             raise SystemExit(0)
         if args.train_fpga_selfcheck_all:
             fpga_train_kernels_selfcheck_all(ser)
+            raise SystemExit(0)
+        if args.train_one_sample_e2e_selfcheck:
+            fpga_train_one_sample_e2e_selfcheck(ser)
+            raise SystemExit(0)
+        if args.train_mine_one_sample_replay_selfcheck:
+            fpga_train_mine_one_sample_replay_selfcheck(
+                ser,
+                args,
+                seed=int(args.train_mine_seed),
+                tile_rows=max(1, int(args.train_tile_rows)),
+            )
             raise SystemExit(0)
 
         if args.ddr_smoke:
