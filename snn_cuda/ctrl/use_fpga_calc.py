@@ -50,6 +50,7 @@ OP_TRAIN_GEN_WORK = 0x33
 OP_READ_TRAIN_DEBUG = 0x34
 OP_STDP_UPDATE_ALL = 0x35
 OP_TRAIN_RUN_CHUNK = 0x36
+OP_TRAIN_RUN_SAMPLE_PHASE3 = 0x37
 
 STATUS_OK = 0x00
 STATUS_BAD_PACKET = 0xE1
@@ -503,7 +504,15 @@ def fpga_read_spike_counts(ser: serial.Serial) -> list[int]:
 def fpga_read_raw_image_u8(ser: serial.Serial) -> list[int]:
     pixels = []
     for idx in range(N_IN):
-        status, value = send_request(ser, OP_READ_RAW_U8, [idx, 0])
+        if idx and (idx % 32 == 0):
+            time.sleep(0.001)
+        status, value = send_request(
+            ser,
+            OP_READ_RAW_U8,
+            [idx, 0],
+            response_timeout=1.0,
+            transient_retry_max=max(TRANSIENT_RETRY_MAX, 20),
+        )
         require_ok(status, f"READ_RAW_U8[{idx}]")
         pixels.append(int(value) & 0xFF)
     return pixels
@@ -978,6 +987,7 @@ def fpga_read_train_debug(ser: serial.Serial) -> dict[str, int]:
         "chunk_state",
         "chunk_mode",
         "chunk_last_infer_spikes",
+        "chunk_last_blank_spikes",
     ]
     out: dict[str, int] = {}
     for idx, key in enumerate(keys):
@@ -1103,6 +1113,74 @@ def fpga_train_run_chunk_phase2_infer_trace_stdp(ser: serial.Serial, *, nsteps: 
         raise ValueError("tile_rows must be > 0")
     # HDL phase2 uses arg0<0,arg1<0 to mean: infer (-arg0 steps), then synthetic trace loop + STDP batch.
     return fpga_train_run_chunk(ser, nsamples=-int(nsteps), tile_rows=-int(tile_rows))
+
+
+def fpga_train_run_sample_phase3(ser: serial.Serial, *, inj_steps: int, tile_rows: int) -> int:
+    timeout_s = max(TRAIN_KERNEL_TIMEOUT_SEC, 300.0)
+    try:
+        status, result = send_request(
+            ser,
+            OP_TRAIN_RUN_SAMPLE_PHASE3,
+            [int(inj_steps), int(tile_rows)],
+            response_timeout=timeout_s,
+            transient_retry_max=0,
+        )
+    except TimeoutError as exc:
+        print(f"TRAIN_RUN_SAMPLE_PHASE3 timeout after {timeout_s:.1f}s; probing train/infer debug...")
+        try:
+            print("Train debug:", ", ".join(f"{k}={v}" for k, v in fpga_read_train_debug(ser).items()))
+        except Exception as dbg_exc:
+            print(f"Train debug probe failed: {dbg_exc}")
+        try:
+            print("Infer debug:", ", ".join(f"{k}={v}" for k, v in fpga_read_infer_debug(ser).items()))
+        except Exception as dbg_exc:
+            print(f"Infer debug probe failed: {dbg_exc}")
+        raise exc
+    require_ok(status, "TRAIN_RUN_SAMPLE_PHASE3")
+    return int(result)
+
+
+def fpga_train_run_sample_phase3_verify_stats(
+    ser: serial.Serial,
+    *,
+    sample_idx: int,
+    inj_steps: int,
+    tile_rows: int,
+    start_lba: int,
+    timeout_sec: float,
+    image_source: str,
+    raw_bin: str | None,
+) -> None:
+    if image_source != "fpga":
+        raise ValueError("phase3 verify currently requires --image-source fpga")
+    prepare_fpga_sample_image_via_streamed_load(
+        ser, sample_idx=int(sample_idx), start_lba=int(start_lba), timeout_sec=float(timeout_sec)
+    )
+    # Python reference image is read from the original MNIST dataset (same source family as import_MNIST_raw.py),
+    # not from RAW1 file or FPGA UART readback. This avoids UART overhead and RAW-file dependency.
+    image_u8, py_label = read_mnist_image_u8(int(sample_idx))
+    print(f"Using MNIST dataset image for phase3 Python reference (sample_idx={int(sample_idx)}, label={py_label}).")
+    thresholds = build_poisson_thresholds_u11(image_u8)
+    py_inj, py_blank = run_mine_style_python_inj_blank_stats_with_thresholds(
+        thresholds,
+        inj_steps=int(inj_steps),
+        blank_steps=150,
+        seed=0x12345678,
+    )
+
+    # Reload image because phase3 mutates internal inference state and requires raw_image0_u8 preloaded.
+    prepare_fpga_sample_image_via_streamed_load(
+        ser, sample_idx=int(sample_idx), start_lba=int(start_lba), timeout_sec=float(timeout_sec)
+    )
+    ret = fpga_train_run_sample_phase3(ser, inj_steps=int(inj_steps), tile_rows=int(tile_rows))
+    fpga_inj = int(ret) & 0xFFFF
+    fpga_blank = (int(ret) >> 16) & 0xFFFF
+
+    print("Phase3 stats compare (Python mine-style simple ref vs FPGA phase3):")
+    print(f"  inj_total_spikes:   python={py_inj}, fpga={fpga_inj}, diff={fpga_inj - py_inj}")
+    print(f"  blank_total_spikes: python={py_blank}, fpga={fpga_blank}, diff={fpga_blank - py_blank}")
+    if py_inj != fpga_inj or py_blank != fpga_blank:
+        raise RuntimeError("phase3 verify failed: inj/blank spike totals mismatch")
 
 
 def prepare_fpga_sample_image_via_streamed_load(
@@ -2071,6 +2149,106 @@ def run_mine_style_python_poisson_with_thresholds(
     return spike_count.astype(np.int64).tolist()
 
 
+def run_mine_style_python_inj_blank_stats_with_thresholds(
+    thresholds: list[int],
+    inj_steps: int,
+    blank_steps: int,
+    seed: int,
+    w_in: np.ndarray | None = None,
+) -> tuple[int, int]:
+    """Mine-style inference statistics for injection then blank (no-input), continuous state.
+
+    Returns:
+        (inj_total_spikes, blank_total_spikes)
+    """
+    dt = MINE_DT
+    n = N_NEURONS
+    n_in = N_IN
+
+    rng_state = seed & 0xFFFFFFFF
+    if w_in is None:
+        w_in = _build_fixed_w_in_for_mine_like()
+    inh_coeff = MINE_WINH / (n - 1)
+
+    input_td = 1e-3
+    exc_td = 1e-3
+    inh_td = 2e-3
+    input_decay = 1.0 - dt / input_td
+    input_scale = 1.0 / input_td
+    c_in_state = np.zeros(n_in, dtype=np.float64)
+    g_in_state = np.zeros(n, dtype=np.float64)
+    exc_syn_r = np.zeros(n, dtype=np.float64)
+    inh_syn_r = np.zeros(n, dtype=np.float64)
+    delay_input = np.zeros((n, max(1, round(5e-3 / dt))), dtype=np.float64)
+    delay_exc2inh = np.zeros((n, max(1, round(2e-3 / dt))), dtype=np.float64)
+    g_inh = np.zeros(n, dtype=np.float64)
+
+    v_exc = np.full(n, -65.0, dtype=np.float64)
+    tlast_exc = np.zeros(n, dtype=np.float64)
+    theta = np.zeros(n, dtype=np.float64)
+    vthr_exc = np.full(n, -52.0, dtype=np.float64)
+    exc_tcount = 0
+
+    v_inh = np.full(n, -45.0, dtype=np.float64)
+    tlast_inh = np.zeros(n, dtype=np.float64)
+    vthr_inh = np.full(n, -40.0, dtype=np.float64)
+    inh_tcount = 0
+
+    thresholds_arr = np.asarray(thresholds, dtype=np.uint16)
+
+    def _run_steps(n_steps: int, *, force_no_input: bool) -> int:
+        nonlocal rng_state, c_in_state, g_in_state, exc_syn_r, inh_syn_r, delay_input, delay_exc2inh, g_inh
+        nonlocal v_exc, tlast_exc, theta, vthr_exc, exc_tcount, v_inh, tlast_inh, vthr_inh, inh_tcount
+        total_spikes = 0
+        for _ in range(int(n_steps)):
+            s_in = np.zeros(n_in, dtype=np.uint8)
+            if not force_no_input:
+                for i in range(n_in):
+                    rng_state = lcg_next_u32(rng_state)
+                    rand11 = (rng_state >> 21) & 0x7FF
+                    s_in[i] = 1 if rand11 < int(thresholds_arr[i]) else 0
+            pre_active = np.flatnonzero(s_in)
+
+            c_in_state = c_in_state * input_decay + input_scale * s_in.astype(np.float64)
+            g_in_state *= input_decay
+            if pre_active.size > 0:
+                g_in_state += input_scale * np.sum(w_in[:, pre_active], axis=1)
+            delayed_g_in, delay_input = _delay_step(delay_input, g_in_state)
+
+            v_exc, tlast_exc, s_exc = _conductance_lif_step(
+                v_exc, tlast_exc, exc_tcount, delayed_g_in, g_inh,
+                dt=dt, tref=5e-3, tc_m=1e-1,
+                vrest=-65.0, vreset=-65.0, vthr=vthr_exc, vpeak=20.0,
+                e_exc=0.0, e_inh=-100.0,
+            )
+            theta = (1.0 - dt / 1e4) * theta + 0.05 * s_exc.astype(np.float64)
+            theta = np.clip(theta, 0.0, 35.0)
+            vthr_exc = theta + (-52.0)
+            exc_tcount += 1
+            total_spikes += int(np.sum(s_exc, dtype=np.int64))
+
+            exc_syn_r = _single_exp_step(exc_syn_r, s_exc.astype(np.float64), dt, exc_td)
+            g_exc = MINE_WEXC * exc_syn_r
+            delayed_g_exc, delay_exc2inh = _delay_step(delay_exc2inh, g_exc)
+
+            v_inh, tlast_inh, s_inh = _conductance_lif_step(
+                v_inh, tlast_inh, inh_tcount, delayed_g_exc, np.zeros(n, dtype=np.float64),
+                dt=dt, tref=2e-3, tc_m=1e-2,
+                vrest=-60.0, vreset=-45.0, vthr=vthr_inh, vpeak=20.0,
+                e_exc=0.0, e_inh=-85.0,
+            )
+            inh_tcount += 1
+
+            inh_syn_r = _single_exp_step(inh_syn_r, s_inh.astype(np.float64), dt, inh_td)
+            sum_c_inh = float(np.sum(inh_syn_r))
+            g_inh = inh_coeff * (sum_c_inh - inh_syn_r)
+        return total_spikes
+
+    inj_total = _run_steps(int(inj_steps), force_no_input=False)
+    blank_total = _run_steps(int(blank_steps), force_no_input=True)
+    return int(inj_total), int(blank_total)
+
+
 def simulate_poisson_debug_counts(thresholds: list[int], n_steps: int, seed: int) -> dict[str, int]:
     rng_state = seed & 0xFFFFFFFF
     total_input = 0
@@ -2231,6 +2409,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="compare standalone inference vs TRAIN_RUN_CHUNK phase2 using final infer statistics only",
     )
+    parser.add_argument(
+        "--train-run-sample-phase3",
+        action="store_true",
+        help="run phase3 coarse-grained FPGA sample flow (infer inj + synthetic trace/STDP + infer blank) and exit",
+    )
+    parser.add_argument(
+        "--train-run-sample-phase3-verify",
+        action="store_true",
+        help="compare phase3 inj/blank spike totals against a Python mine-style simple reference",
+    )
     parser.add_argument("--chunk-nsamples", type=int, default=1, help="sample count for --train-run-chunk-phase0")
     parser.add_argument("--chunk-nsteps", type=int, default=16, help="step count for --train-run-chunk-phase1/phase2")
     parser.add_argument(
@@ -2312,11 +2500,53 @@ if __name__ == "__main__":
         timeout=TIMEOUT_SEC,
         write_timeout=WRITE_TIMEOUT_SEC
     ) as ser:
+        # Let the USB-UART/FPGA side settle after open and drop any stale bytes from a prior run.
+        time.sleep(0.05)
+        try:
+            ser.reset_input_buffer()
+            ser.reset_output_buffer()
+        except Exception:
+            pass
+        caps_ok = False
         try:
             caps = fpga_train_query_caps(ser)
             print(f"Train kernel caps: 0x{caps:08X}")
+            caps_ok = True
         except Exception as exc:
             print(f"Train kernel caps query skipped/failed: {exc}")
+            # One short retry after a small gap; this often recovers from port-open timing.
+            try:
+                time.sleep(0.05)
+                ser.reset_input_buffer()
+            except Exception:
+                pass
+            try:
+                caps = fpga_train_query_caps(ser)
+                print(f"Train kernel caps (retry): 0x{caps:08X}")
+                caps_ok = True
+            except Exception as exc2:
+                print(f"Train kernel caps retry failed: {exc2}")
+
+        needs_reliable_link = any([
+            args.ddr_smoke,
+            args.train_trace_fpga_selfcheck,
+            args.train_stdp_fpga_selfcheck,
+            args.train_fpga_selfcheck_all,
+            args.train_one_sample_e2e_selfcheck,
+            args.train_run_chunk_phase0,
+            args.train_run_chunk_phase1,
+            args.train_run_chunk_phase2,
+            args.train_run_chunk_phase2_verify,
+            args.train_run_sample_phase3,
+            args.train_run_sample_phase3_verify,
+            args.train_mine_one_sample_replay_selfcheck,
+        ])
+        if needs_reliable_link and not caps_ok:
+            raise RuntimeError(
+                "FPGA UART link is not responding (TRAIN_QUERY_CAPS timeout). "
+                "This often happens if a prior run left the FPGA busy/stuck. "
+                "Reset/power-cycle the FPGA board and retry."
+            )
 
         if args.train_trace_fpga_selfcheck:
             fpga_trace_update_kernel_selfcheck(ser)
@@ -2387,6 +2617,41 @@ if __name__ == "__main__":
                 tile_rows=max(1, int(args.train_tile_rows)),
                 start_lba=int(args.start_lba),
                 timeout_sec=float(args.timeout),
+            )
+            raise SystemExit(0)
+        if args.train_run_sample_phase3:
+            if args.image_source != "fpga":
+                raise ValueError("--train-run-sample-phase3 currently requires --image-source fpga")
+            prepare_fpga_sample_image_via_streamed_load(
+                ser,
+                sample_idx=int(args.sample_idx),
+                start_lba=int(args.start_lba),
+                timeout_sec=float(args.timeout),
+            )
+            ret = fpga_train_run_sample_phase3(
+                ser,
+                inj_steps=max(1, int(args.chunk_nsteps)),
+                tile_rows=max(1, int(args.train_tile_rows)),
+            )
+            inj_spikes = int(ret) & 0xFFFF
+            blank_spikes = (int(ret) >> 16) & 0xFFFF
+            print(
+                "TRAIN_RUN_SAMPLE_PHASE3 completed: "
+                f"result=0x{(int(ret) & 0xFFFFFFFF):08X}, inj_steps={max(1,int(args.chunk_nsteps))}, "
+                f"tile_rows={max(1,int(args.train_tile_rows))}, inj_total_spikes={inj_spikes}, "
+                f"blank_total_spikes={blank_spikes}"
+            )
+            raise SystemExit(0)
+        if args.train_run_sample_phase3_verify:
+            fpga_train_run_sample_phase3_verify_stats(
+                ser,
+                sample_idx=int(args.sample_idx),
+                inj_steps=max(1, int(args.chunk_nsteps)),
+                tile_rows=max(1, int(args.train_tile_rows)),
+                start_lba=int(args.start_lba),
+                timeout_sec=float(args.timeout),
+                image_source=str(args.image_source),
+                raw_bin=args.raw_bin,
             )
             raise SystemExit(0)
         if args.train_mine_one_sample_replay_selfcheck:
