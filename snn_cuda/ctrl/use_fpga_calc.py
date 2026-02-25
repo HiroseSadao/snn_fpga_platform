@@ -48,6 +48,8 @@ OP_TRACE_UPDATE = 0x31
 OP_STDP_UPDATE_TILE = 0x32
 OP_TRAIN_GEN_WORK = 0x33
 OP_READ_TRAIN_DEBUG = 0x34
+OP_STDP_UPDATE_ALL = 0x35
+OP_TRAIN_RUN_CHUNK = 0x36
 
 STATUS_OK = 0x00
 STATUS_BAD_PACKET = 0xE1
@@ -972,6 +974,10 @@ def fpga_read_train_debug(ser: serial.Serial) -> dict[str, int]:
         "ddr_req_addr_word_ddr",
         "ddr_req_from_sd_ddr",
         "ddr_lane_sel_ddr",
+        "chunk_active",
+        "chunk_state",
+        "chunk_mode",
+        "chunk_last_infer_spikes",
     ]
     out: dict[str, int] = {}
     for idx, key in enumerate(keys):
@@ -1030,6 +1036,157 @@ def fpga_stdp_update_tile(
     )
     require_ok(status, "STDP_UPDATE_TILE")
     return int(result)
+
+
+def fpga_stdp_update_all(ser: serial.Serial, *, tile_rows: int) -> int:
+    status, result = send_request(
+        ser,
+        OP_STDP_UPDATE_ALL,
+        [int(tile_rows), 0],
+        response_timeout=max(TRAIN_KERNEL_TIMEOUT_SEC, 120.0),
+        transient_retry_max=0,
+    )
+    require_ok(status, "STDP_UPDATE_ALL")
+    return int(result)
+
+
+def fpga_train_run_chunk(ser: serial.Serial, *, nsamples: int, tile_rows: int) -> int:
+    timeout_s = max(TRAIN_KERNEL_TIMEOUT_SEC, 60.0)
+    try:
+        status, result = send_request(
+            ser,
+            OP_TRAIN_RUN_CHUNK,
+            [int(nsamples), int(tile_rows)],
+            response_timeout=timeout_s,
+            transient_retry_max=0,
+        )
+    except TimeoutError as exc:
+        print(f"TRAIN_RUN_CHUNK timeout after {timeout_s:.1f}s; probing train/infer debug...")
+        try:
+            tdbg = fpga_read_train_debug(ser)
+            print("Train debug:", ", ".join(f"{k}={v}" for k, v in tdbg.items()))
+        except Exception as dbg_exc:
+            print(f"Train debug probe failed: {dbg_exc}")
+        try:
+            idbg = fpga_read_infer_debug(ser)
+            print("Infer debug:", ", ".join(f"{k}={v}" for k, v in idbg.items()))
+        except Exception as dbg_exc:
+            print(f"Infer debug probe failed: {dbg_exc}")
+        raise exc
+    if status == STATUS_BAD_PACKET and (((int(result) >> 24) & 0xFF) == 0x31):
+        print("TRAIN_RUN_CHUNK returned TRAIN_BUSY; probing train/infer debug...")
+        try:
+            tdbg = fpga_read_train_debug(ser)
+            print("Train debug:", ", ".join(f"{k}={v}" for k, v in tdbg.items()))
+        except Exception as dbg_exc:
+            print(f"Train debug probe failed: {dbg_exc}")
+        try:
+            idbg = fpga_read_infer_debug(ser)
+            print("Infer debug:", ", ".join(f"{k}={v}" for k, v in idbg.items()))
+        except Exception as dbg_exc:
+            print(f"Infer debug probe failed: {dbg_exc}")
+    require_ok(status, "TRAIN_RUN_CHUNK")
+    return int(result)
+
+
+def fpga_train_run_chunk_phase1_trace_stdp(ser: serial.Serial, *, nsteps: int, tile_rows: int) -> int:
+    if int(nsteps) <= 0:
+        raise ValueError("nsteps must be > 0")
+    # HDL phase1 uses arg0<0,arg1>0 to mean internal synthetic trace loop + one STDP batch.
+    return fpga_train_run_chunk(ser, nsamples=-int(nsteps), tile_rows=int(tile_rows))
+
+
+def fpga_train_run_chunk_phase2_infer_trace_stdp(ser: serial.Serial, *, nsteps: int, tile_rows: int) -> int:
+    if int(nsteps) <= 0:
+        raise ValueError("nsteps must be > 0")
+    if int(tile_rows) <= 0:
+        raise ValueError("tile_rows must be > 0")
+    # HDL phase2 uses arg0<0,arg1<0 to mean: infer (-arg0 steps), then synthetic trace loop + STDP batch.
+    return fpga_train_run_chunk(ser, nsamples=-int(nsteps), tile_rows=-int(tile_rows))
+
+
+def prepare_fpga_sample_image_via_streamed_load(
+    ser: serial.Serial,
+    *,
+    sample_idx: int,
+    start_lba: int,
+    timeout_sec: float,
+) -> None:
+    if int(sample_idx) < 0:
+        raise ValueError(f"sample_idx must be >=0, got {sample_idx}")
+    img_byte_off = RAW1_HEADER_BYTES + RAW1_NUM_IMAGES_DEFAULT + (int(sample_idx) * N_IN)
+    img_sector_off = img_byte_off // 512
+    img_byte_in_sector = img_byte_off % 512
+    sectors_needed = (img_byte_in_sector + N_IN + 511) // 512
+    print(
+        "Preparing input image via streamed FPGA image load path: "
+        f"sample_idx={int(sample_idx)}, sector_off={img_sector_off}, sectors={sectors_needed}, "
+        f"byte_in_sector={img_byte_in_sector}"
+    )
+    fpga_sd_sectors_to_ddr(
+        ser=ser,
+        start_lba=int(start_lba) + img_sector_off,
+        num_sectors=sectors_needed,
+        timeout_sec=timeout_sec,
+    )
+    fpga_load_image_from_ddr(
+        ser=ser,
+        base_addr_byte=img_byte_in_sector,
+        n_bytes=N_IN,
+        timeout_sec=timeout_sec,
+    )
+
+
+def fpga_train_run_chunk_phase2_verify_infer_stats(
+    ser: serial.Serial,
+    *,
+    sample_idx: int,
+    nsteps: int,
+    tile_rows: int,
+    start_lba: int,
+    timeout_sec: float,
+) -> None:
+    print("Preparing image for standalone inference baseline...")
+    prepare_fpga_sample_image_via_streamed_load(
+        ser, sample_idx=sample_idx, start_lba=start_lba, timeout_sec=timeout_sec
+    )
+    baseline_total = fpga_run_sample_infer(ser, seed=0x12345678, n_steps=int(nsteps))
+    baseline_dbg = fpga_read_infer_debug(ser)
+
+    print("Preparing image for TRAIN_RUN_CHUNK phase2 run...")
+    prepare_fpga_sample_image_via_streamed_load(
+        ser, sample_idx=sample_idx, start_lba=start_lba, timeout_sec=timeout_sec
+    )
+    chunk_total = fpga_train_run_chunk_phase2_infer_trace_stdp(
+        ser, nsteps=int(nsteps), tile_rows=int(tile_rows)
+    )
+    chunk_dbg = fpga_read_infer_debug(ser)
+
+    keys = [
+        "infer_total_spikes",
+        "infer_steps_target",
+        "raw_image0_sum_u8",
+        "total_input_spikes_generated",
+        "total_syn_hits_applied",
+        "first_step_input_spikes",
+        "last_step_input_spikes",
+    ]
+    print("Phase2 infer stats compare (standalone vs chunk phase2):")
+    mismatches = 0
+    for k in keys:
+        a = int(baseline_dbg.get(k, 0))
+        b = int(chunk_dbg.get(k, 0))
+        if a != b:
+            mismatches += 1
+        print(f"  {k}: baseline={a}, chunk={b}, diff={b-a}")
+    print(
+        f"  returned_total: baseline={int(baseline_total)}, chunk_return={int(chunk_total)}, "
+        f"diff={int(chunk_total)-int(baseline_total)}"
+    )
+    if int(chunk_total) != int(baseline_total):
+        raise RuntimeError("phase2 verify failed: returned infer_total_spikes mismatch")
+    if mismatches != 0:
+        raise RuntimeError(f"phase2 verify failed: infer debug mismatches={mismatches}")
 
 
 def fpga_train_gen_work(ser: serial.Serial, *, seed: int, region: str) -> int:
@@ -1495,6 +1652,10 @@ def fpga_train_mine_one_sample_replay_selfcheck(
     *,
     seed: int = 123,
     tile_rows: int = 10,
+    verify_row0: int | None = None,
+    verify_nrows: int | None = None,
+    verify_mode: str = "exact",
+    verify_sample_cols: int = 32,
 ) -> None:
     """Replay a real mine.py 1-sample training update at kernel granularity.
 
@@ -1531,15 +1692,29 @@ def fpga_train_mine_one_sample_replay_selfcheck(
     A_q16 = float_to_s32_q16(A_f).astype(np.int64)
     B_T_q16 = float_to_s32_q16(B_T_f).astype(np.int64)
     W_ref_q16 = np.array(W0_q16, copy=True)
-    for row0 in range(0, N_NEURONS, int(tile_rows)):
-        kernel_stdp_update_tile_q16_python(W_ref_q16, A_q16, B_T_q16, row0, int(tile_rows))
+    if verify_row0 is None:
+        row0_sel = 0
+    else:
+        row0_sel = max(0, min(N_NEURONS - 1, int(verify_row0)))
+    if verify_nrows is None:
+        nrows_sel = N_NEURONS - row0_sel
+    else:
+        nrows_sel = max(1, min(N_NEURONS - row0_sel, int(verify_nrows)))
+    row1_sel = row0_sel + nrows_sel
+    for row0 in range(row0_sel, row1_sel, int(tile_rows)):
+        kernel_stdp_update_tile_q16_python(W_ref_q16, A_q16, B_T_q16, row0, min(int(tile_rows), row1_sel - row0))
     W_mine_final_q16 = float_to_q16_clip(w1_f, 0, TRAIN_WMAX_Q16).astype(np.int64)
 
     layout = build_train_ddr_layout()
-    print("Preloading mine-replay W/A/B_T into DDR (this can take a while over UART)...")
-    fpga_ddr_zero32(ser, layout.base_a_q16, N_NEURONS * N_IN)
-    fpga_ddr_zero32(ser, layout.base_bt_q16, N_IN * N_NEURONS)
-    for r in range(N_NEURONS):
+    print(
+        "Preloading mine-replay W/A/B_T into DDR "
+        f"(verify rows {row0_sel}..{row1_sel-1}; this can still take time over UART)..."
+    )
+    fpga_ddr_zero32(ser, layout.base_a_q16 + row0_sel * N_IN, nrows_sel * N_IN)
+    # Zero only the B_T columns corresponding to selected post rows: shape [N_IN, nrows_sel]
+    for c in range(N_IN):
+        fpga_ddr_zero32(ser, layout.base_bt_q16 + c * N_NEURONS + row0_sel, nrows_sel)
+    for r in range(row0_sel, row1_sel):
         fpga_ddr_write_block32(
             ser,
             layout.base_w_q16 + r * N_IN,
@@ -1547,10 +1722,10 @@ def fpga_train_mine_one_sample_replay_selfcheck(
             label=f"W0_row[{r}]",
             progress_every=196,
         )
-    touched_a_rows = np.flatnonzero(np.any(A_q16 != 0, axis=1))
+    touched_a_rows = np.flatnonzero(np.any(A_q16[row0_sel:row1_sel, :] != 0, axis=1)) + row0_sel
     touched_b_rows = np.flatnonzero(np.any(B_T_q16 != 0, axis=1))
     print(
-        f"Writing touched traces only: A_rows={int(touched_a_rows.size)}/{N_NEURONS}, "
+        f"Writing touched traces only (selected rows): A_rows={int(touched_a_rows.size)}/{nrows_sel}, "
         f"B_T_rows={int(touched_b_rows.size)}/{N_IN}"
     )
     for r in touched_a_rows:
@@ -1564,19 +1739,73 @@ def fpga_train_mine_one_sample_replay_selfcheck(
     for c in touched_b_rows:
         fpga_ddr_write_block32(
             ser,
-            layout.base_bt_q16 + int(c) * N_NEURONS,
-            B_T_q16[int(c), :],
+            layout.base_bt_q16 + int(c) * N_NEURONS + row0_sel,
+            B_T_q16[int(c), row0_sel:row1_sel],
             label=f"BT_row[{int(c)}]",
             progress_every=50,
         )
 
-    print(f"Running FPGA STDP_UPDATE_TILE over all rows (tile_rows={int(tile_rows)})...")
-    for row0 in range(0, N_NEURONS, int(tile_rows)):
-        fpga_stdp_update_tile(ser, row0=row0, nrows=int(tile_rows))
+    caps = fpga_train_query_caps(ser)
+    if (row0_sel == 0) and (row1_sel == N_NEURONS) and (caps & (1 << 12)):
+        print(f"Running FPGA TRAIN_RUN_CHUNK phase0 (nsamples=1, tile_rows={int(tile_rows)})...")
+        fpga_train_run_chunk(ser, nsamples=1, tile_rows=int(tile_rows))
+    elif (row0_sel == 0) and (row1_sel == N_NEURONS) and (caps & (1 << 11)):
+        print(f"Running FPGA STDP_UPDATE_ALL (tile_rows={int(tile_rows)})...")
+        fpga_stdp_update_all(ser, tile_rows=int(tile_rows))
+    else:
+        print(
+            f"Running FPGA STDP_UPDATE_TILE over selected rows "
+            f"{row0_sel}..{row1_sel-1} (tile_rows={int(tile_rows)})..."
+        )
+        for row0 in range(row0_sel, row1_sel, int(tile_rows)):
+            fpga_stdp_update_tile(ser, row0=row0, nrows=min(int(tile_rows), row1_sel - row0))
 
-    print("Reading back full W for mine one-sample replay comparison...")
-    W_fpga_q16 = np.zeros((N_NEURONS, N_IN), dtype=np.int64)
-    for r in range(N_NEURONS):
+    mode = str(verify_mode).lower()
+    if mode == "none":
+        max_diff_fpga_vs_ref = -1
+        max_diff_ref_vs_mine = int(np.max(np.abs(W_ref_q16[row0_sel:row1_sel, :] - W_mine_final_q16[row0_sel:row1_sel, :])))
+        max_diff_fpga_vs_mine = -1
+        print(
+            "Mine one-sample replay selfcheck (no readback): "
+            f"rows={row0_sel}..{row1_sel-1}, "
+            f"max|W_ref_q16-W_mine_q16|={max_diff_ref_vs_mine}"
+        )
+        return
+
+    if mode == "sampled":
+        nsamp = max(1, min(N_IN, int(verify_sample_cols)))
+        cols = np.linspace(0, N_IN - 1, nsamp, dtype=np.int64)
+        cols = np.unique(cols)
+        print(
+            f"Reading back sampled W entries for rows {row0_sel}..{row1_sel-1} "
+            f"(sampled_cols={int(cols.size)})..."
+        )
+        max_diff_fpga_vs_ref = 0
+        max_diff_fpga_vs_mine = 0
+        for r in range(row0_sel, row1_sel):
+            for c in cols:
+                got = np.int64(np.int32(fpga_ddr_read32(ser, layout.base_w_q16 + r * N_IN + int(c))))
+                d1 = int(abs(int(got) - int(W_ref_q16[r, int(c)])))
+                d2 = int(abs(int(got) - int(W_mine_final_q16[r, int(c)])))
+                if d1 > max_diff_fpga_vs_ref:
+                    max_diff_fpga_vs_ref = d1
+                if d2 > max_diff_fpga_vs_mine:
+                    max_diff_fpga_vs_mine = d2
+        max_diff_ref_vs_mine = int(np.max(np.abs(W_ref_q16[row0_sel:row1_sel, cols] - W_mine_final_q16[row0_sel:row1_sel, cols])))
+        print(
+            "Mine one-sample replay selfcheck (sampled): "
+            f"rows={row0_sel}..{row1_sel-1}, cols={int(cols.size)}, "
+            f"max|W_fpga-W_ref_q16|={max_diff_fpga_vs_ref}, "
+            f"max|W_ref_q16-W_mine_q16|={max_diff_ref_vs_mine}, "
+            f"max|W_fpga-W_mine_q16|={max_diff_fpga_vs_mine}"
+        )
+        if max_diff_fpga_vs_ref != 0:
+            raise RuntimeError("mine one-sample replay sampled selfcheck failed (FPGA vs q16 replay ref)")
+        return
+
+    print(f"Reading back selected W rows {row0_sel}..{row1_sel-1} for mine replay comparison...")
+    W_fpga_q16 = np.array(W0_q16, copy=True)
+    for r in range(row0_sel, row1_sel):
         W_fpga_q16[r, :] = fpga_ddr_read_block32(
             ser,
             layout.base_w_q16 + r * N_IN,
@@ -1585,11 +1814,12 @@ def fpga_train_mine_one_sample_replay_selfcheck(
             progress_every=196,
         ).astype(np.int64)
 
-    max_diff_fpga_vs_ref = int(np.max(np.abs(W_fpga_q16 - W_ref_q16)))
-    max_diff_ref_vs_mine = int(np.max(np.abs(W_ref_q16 - W_mine_final_q16)))
-    max_diff_fpga_vs_mine = int(np.max(np.abs(W_fpga_q16 - W_mine_final_q16)))
+    max_diff_fpga_vs_ref = int(np.max(np.abs(W_fpga_q16[row0_sel:row1_sel, :] - W_ref_q16[row0_sel:row1_sel, :])))
+    max_diff_ref_vs_mine = int(np.max(np.abs(W_ref_q16[row0_sel:row1_sel, :] - W_mine_final_q16[row0_sel:row1_sel, :])))
+    max_diff_fpga_vs_mine = int(np.max(np.abs(W_fpga_q16[row0_sel:row1_sel, :] - W_mine_final_q16[row0_sel:row1_sel, :])))
     print(
         "Mine one-sample replay selfcheck: "
+        f"rows={row0_sel}..{row1_sel-1}, "
         f"max|W_fpga-W_ref_q16|={max_diff_fpga_vs_ref}, "
         f"max|W_ref_q16-W_mine_q16|={max_diff_ref_vs_mine}, "
         f"max|W_fpga-W_mine_q16|={max_diff_fpga_vs_mine}"
@@ -1982,6 +2212,28 @@ def parse_args() -> argparse.Namespace:
         help="run a real mine.py one-sample replay selfcheck (aggregated A/B_T -> FPGA STDP tiles) and exit",
     )
     parser.add_argument(
+        "--train-run-chunk-phase0",
+        action="store_true",
+        help="run phase0 coarse-grained FPGA train chunk (repeats STDP all-rows on current DDR-resident buffers) and exit",
+    )
+    parser.add_argument(
+        "--train-run-chunk-phase1",
+        action="store_true",
+        help="run phase1 coarse-grained FPGA train chunk (internal synthetic trace loop + one STDP batch) and exit",
+    )
+    parser.add_argument(
+        "--train-run-chunk-phase2",
+        action="store_true",
+        help="run phase2 coarse-grained FPGA train chunk (infer + synthetic trace loop + one STDP batch) and exit",
+    )
+    parser.add_argument(
+        "--train-run-chunk-phase2-verify",
+        action="store_true",
+        help="compare standalone inference vs TRAIN_RUN_CHUNK phase2 using final infer statistics only",
+    )
+    parser.add_argument("--chunk-nsamples", type=int, default=1, help="sample count for --train-run-chunk-phase0")
+    parser.add_argument("--chunk-nsteps", type=int, default=16, help="step count for --train-run-chunk-phase1/phase2")
+    parser.add_argument(
         "--train-mine-seed",
         type=int,
         default=123,
@@ -1992,6 +2244,30 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=10,
         help="row tile size for FPGA STDP_UPDATE_TILE loops in training selfchecks",
+    )
+    parser.add_argument(
+        "--train-verify-row0",
+        type=int,
+        default=0,
+        help="start row for lightweight mine replay verification (default 0)",
+    )
+    parser.add_argument(
+        "--train-verify-nrows",
+        type=int,
+        default=0,
+        help="number of rows for lightweight mine replay verification (0 means all rows)",
+    )
+    parser.add_argument(
+        "--train-verify-mode",
+        choices=["exact", "sampled", "none"],
+        default="exact",
+        help="mine replay verification readback mode: exact rows, sampled columns, or none",
+    )
+    parser.add_argument(
+        "--train-verify-sample-cols",
+        type=int,
+        default=32,
+        help="number of sampled columns when --train-verify-mode sampled",
     )
     return parser.parse_args()
 
@@ -2054,12 +2330,75 @@ if __name__ == "__main__":
         if args.train_one_sample_e2e_selfcheck:
             fpga_train_one_sample_e2e_selfcheck(ser)
             raise SystemExit(0)
+        if args.train_run_chunk_phase0:
+            ret = fpga_train_run_chunk(
+                ser,
+                nsamples=max(1, int(args.chunk_nsamples)),
+                tile_rows=max(1, int(args.train_tile_rows)),
+            )
+            print(
+                "TRAIN_RUN_CHUNK phase0 completed: "
+                f"result=0x{(int(ret) & 0xFFFFFFFF):08X}, nsamples={max(1,int(args.chunk_nsamples))}, "
+                f"tile_rows={max(1,int(args.train_tile_rows))}"
+            )
+            raise SystemExit(0)
+        if args.train_run_chunk_phase1:
+            ret = fpga_train_run_chunk_phase1_trace_stdp(
+                ser,
+                nsteps=max(1, int(args.chunk_nsteps)),
+                tile_rows=max(1, int(args.train_tile_rows)),
+            )
+            print(
+                "TRAIN_RUN_CHUNK phase1 completed: "
+                f"result=0x{(int(ret) & 0xFFFFFFFF):08X}, nsteps={max(1,int(args.chunk_nsteps))}, "
+                f"tile_rows={max(1,int(args.train_tile_rows))}"
+            )
+            raise SystemExit(0)
+        if args.train_run_chunk_phase2:
+            if args.image_source != "fpga":
+                raise ValueError(
+                    "--train-run-chunk-phase2 currently requires --image-source fpga "
+                    "(it expects raw_image0_u8 to be loaded on FPGA from SD/DDR)"
+                )
+            prepare_fpga_sample_image_via_streamed_load(
+                ser,
+                sample_idx=int(args.sample_idx),
+                start_lba=int(args.start_lba),
+                timeout_sec=float(args.timeout),
+            )
+            ret = fpga_train_run_chunk_phase2_infer_trace_stdp(
+                ser,
+                nsteps=max(1, int(args.chunk_nsteps)),
+                tile_rows=max(1, int(args.train_tile_rows)),
+            )
+            print(
+                "TRAIN_RUN_CHUNK phase2 completed: "
+                f"result=0x{(int(ret) & 0xFFFFFFFF):08X}, nsteps={max(1,int(args.chunk_nsteps))}, "
+                f"tile_rows={max(1,int(args.train_tile_rows))}, infer_total_spikes={int(ret) & 0xFFFFFFFF}"
+            )
+            raise SystemExit(0)
+        if args.train_run_chunk_phase2_verify:
+            if args.image_source != "fpga":
+                raise ValueError("--train-run-chunk-phase2-verify currently requires --image-source fpga")
+            fpga_train_run_chunk_phase2_verify_infer_stats(
+                ser,
+                sample_idx=int(args.sample_idx),
+                nsteps=max(1, int(args.chunk_nsteps)),
+                tile_rows=max(1, int(args.train_tile_rows)),
+                start_lba=int(args.start_lba),
+                timeout_sec=float(args.timeout),
+            )
+            raise SystemExit(0)
         if args.train_mine_one_sample_replay_selfcheck:
             fpga_train_mine_one_sample_replay_selfcheck(
                 ser,
                 args,
                 seed=int(args.train_mine_seed),
                 tile_rows=max(1, int(args.train_tile_rows)),
+                verify_row0=max(0, int(args.train_verify_row0)),
+                verify_nrows=(None if int(args.train_verify_nrows) <= 0 else int(args.train_verify_nrows)),
+                verify_mode=str(args.train_verify_mode),
+                verify_sample_cols=max(1, int(args.train_verify_sample_cols)),
             )
             raise SystemExit(0)
 
