@@ -131,6 +131,7 @@ module top_level(
     // STDP tile kernel (phase1) fixed-point params, q16.16.
     localparam logic signed [31:0] TRAIN_WMAX_Q16    = 32'sd3277; // 0.05
     localparam logic signed [31:0] TRAIN_WMIN_Q16    = 32'sd0;
+    localparam logic signed [31:0] TRAIN_NORM_Q16    = 32'sd6554; // 0.1
     localparam logic signed [31:0] TRAIN_LR_P_Q16    = 32'sd655;  // 1e-2
     localparam logic signed [31:0] TRAIN_LR_M_Q16    = 32'sd7;    // 1e-4
     localparam logic signed [31:0] TRAIN_CLIP_DW_Q16 = 32'sd66;   // 1e-3
@@ -189,8 +190,10 @@ module top_level(
         TRK_B_WRITE_BT_WAIT,
         TRK_DONE
     } train_trace_state_t;
-    typedef enum logic [3:0] {
+    typedef enum logic [4:0] {
         TSK_IDLE,
+        TSK_SUM_READ_W_REQ,
+        TSK_SUM_READ_W_WAIT,
         TSK_READ_W_REQ,
         TSK_READ_W_WAIT,
         TSK_READ_A_REQ,
@@ -362,6 +365,7 @@ module top_level(
     logic signed [31:0] train_stdp_a_val;
     logic signed [31:0] train_stdp_bt_val;
     logic signed [31:0] train_stdp_w_new;
+    logic [31:0] train_stdp_row_sum_abs;
     logic        train_gen_active;
     train_gen_state_t train_gen_state;
     logic [31:0] train_gen_base_word;
@@ -712,19 +716,38 @@ module top_level(
         end
     endfunction
 
-    function automatic signed [31:0] stdp_phase1_update_q16(
+    function automatic [31:0] s32_abs_u(
+        input signed [31:0] v
+    );
+        begin
+            if (v < 0) begin
+                s32_abs_u = $unsigned(-v);
+            end else begin
+                s32_abs_u = $unsigned(v);
+            end
+        end
+    endfunction
+
+    function automatic signed [31:0] stdp_phase2_update_q16(
         input signed [31:0] w_q16,
         input signed [31:0] a_q16,
-        input signed [31:0] bt_q16
+        input signed [31:0] bt_q16,
+        input [31:0] sum_abs_q16
     );
         logic signed [31:0] pot_term;
         logic signed [31:0] dep_term;
         logic signed [31:0] dW_q16;
         logic signed [31:0] dW_step_q16;
         logic signed [31:0] w_next_q16;
+        logic signed [31:0] w_norm_q16;
+        logic [31:0] denom_q16;
+        logic signed [63:0] norm_num;
         begin
-            pot_term = fxp_mul_s16_16(fxp_mul_s16_16(TRAIN_LR_P_Q16, (TRAIN_WMAX_Q16 - w_q16)), a_q16);
-            dep_term = fxp_mul_s16_16(fxp_mul_s16_16(TRAIN_LR_M_Q16, w_q16), bt_q16);
+            denom_q16 = (sum_abs_q16 == 32'd0) ? 32'd1 : sum_abs_q16;
+            norm_num = $signed(w_q16) * $signed(TRAIN_NORM_Q16);
+            w_norm_q16 = $signed(norm_num / $signed({1'b0, denom_q16}));
+            pot_term = fxp_mul_s16_16(fxp_mul_s16_16(TRAIN_LR_P_Q16, (TRAIN_WMAX_Q16 - w_norm_q16)), a_q16);
+            dep_term = fxp_mul_s16_16(fxp_mul_s16_16(TRAIN_LR_M_Q16, w_norm_q16), bt_q16);
             dW_q16 = pot_term - dep_term;
             dW_step_q16 = dW_q16 / $signed(TRAIN_UPDATE_NT);
             if (dW_step_q16 > TRAIN_CLIP_DW_Q16) begin
@@ -732,13 +755,13 @@ module top_level(
             end else if (dW_step_q16 < -TRAIN_CLIP_DW_Q16) begin
                 dW_step_q16 = -TRAIN_CLIP_DW_Q16;
             end
-            w_next_q16 = w_q16 + dW_step_q16;
+            w_next_q16 = w_norm_q16 + dW_step_q16;
             if (w_next_q16 > TRAIN_WMAX_Q16) begin
                 w_next_q16 = TRAIN_WMAX_Q16;
             end else if (w_next_q16 < TRAIN_WMIN_Q16) begin
                 w_next_q16 = TRAIN_WMIN_Q16;
             end
-            stdp_phase1_update_q16 = w_next_q16;
+            stdp_phase2_update_q16 = w_next_q16;
         end
     endfunction
 
@@ -959,6 +982,7 @@ module top_level(
             train_stdp_a_val     <= 32'sd0;
             train_stdp_bt_val    <= 32'sd0;
             train_stdp_w_new     <= 32'sd0;
+            train_stdp_row_sum_abs <= 32'd0;
             train_gen_active     <= 1'b0;
             train_gen_state      <= TGK_IDLE;
             train_gen_base_word  <= 32'd0;
@@ -1130,6 +1154,17 @@ module top_level(
                         endcase
                     end else if (train_stdp_active) begin
                         case (train_stdp_state)
+                            TSK_SUM_READ_W_WAIT: begin
+                                if (train_stdp_col_idx == (N_IN - 1)) begin
+                                    train_stdp_row_sum_abs <= train_stdp_row_sum_abs + s32_abs_u($signed(ddr_resp_rdata_async));
+                                    train_stdp_col_idx <= 10'd0;
+                                    train_stdp_state <= TSK_READ_W_REQ;
+                                end else begin
+                                    train_stdp_row_sum_abs <= train_stdp_row_sum_abs + s32_abs_u($signed(ddr_resp_rdata_async));
+                                    train_stdp_col_idx <= train_stdp_col_idx + 10'd1;
+                                    train_stdp_state <= TSK_SUM_READ_W_REQ;
+                                end
+                            end
                             TSK_READ_W_WAIT: begin
                                 train_stdp_w_val <= $signed(ddr_resp_rdata_async);
                                 train_stdp_state <= TSK_READ_A_REQ;
@@ -1140,10 +1175,11 @@ module top_level(
                             end
                             TSK_READ_BT_WAIT: begin
                                 train_stdp_bt_val <= $signed(ddr_resp_rdata_async);
-                                train_stdp_w_new <= stdp_phase1_update_q16(
+                                train_stdp_w_new <= stdp_phase2_update_q16(
                                     train_stdp_w_val,
                                     train_stdp_a_val,
-                                    $signed(ddr_resp_rdata_async)
+                                    $signed(ddr_resp_rdata_async),
+                                    train_stdp_row_sum_abs
                                 );
                                 train_stdp_state <= TSK_WRITE_W_REQ;
                             end
@@ -1154,7 +1190,8 @@ module top_level(
                                     end else begin
                                         train_stdp_row_idx <= train_stdp_row_idx + 7'd1;
                                         train_stdp_col_idx <= 10'd0;
-                                        train_stdp_state   <= TSK_READ_W_REQ;
+                                        train_stdp_row_sum_abs <= 32'd0;
+                                        train_stdp_state   <= TSK_SUM_READ_W_REQ;
                                     end
                                 end else begin
                                     train_stdp_col_idx <= train_stdp_col_idx + 10'd1;
@@ -1492,6 +1529,21 @@ module top_level(
 
             if (train_stdp_active && !ddr_req_pending_core && !response_ready && !sd_ddr_flush_active && !imgload_word_valid && !train_trace_active) begin
                 case (train_stdp_state)
+                    TSK_SUM_READ_W_REQ: begin
+                        ddr_req_pending_core      <= 1'b1;
+                        ddr_req_we_core           <= 1'b0;
+                        ddr_req_from_sd_core      <= 1'b0;
+                        ddr_req_from_imgload_core <= 1'b0;
+                        ddr_req_from_train_core   <= 1'b1;
+                        ddr_req_addr_word_core    <= TRAIN_BASE_W_Q16_WORDS + ({25'd0, train_stdp_row_idx} * N_IN) + {22'd0, train_stdp_col_idx};
+                        ddr_req_wdata_core        <= 32'd0;
+                        ddr_req_wide_core         <= 1'b0;
+                        ddr_req_wdata128_core     <= 128'd0;
+                        ddr_req_sel16_core        <= 16'd0;
+                        ddr_req_word_count_core   <= 3'd1;
+                        ddr_req_toggle_core       <= ~ddr_req_toggle_core;
+                        train_stdp_state          <= TSK_SUM_READ_W_WAIT;
+                    end
                     TSK_READ_W_REQ: begin
                         ddr_req_pending_core      <= 1'b1;
                         ddr_req_we_core           <= 1'b0;
@@ -2060,7 +2112,8 @@ module top_level(
                                         train_stdp_a_val   <= 32'sd0;
                                         train_stdp_bt_val  <= 32'sd0;
                                         train_stdp_w_new   <= 32'sd0;
-                                        train_stdp_state   <= TSK_READ_W_REQ;
+                                        train_stdp_row_sum_abs <= 32'd0;
+                                        train_stdp_state   <= TSK_SUM_READ_W_REQ;
                                     end else begin
                                         resp_status    <= STATUS_BAD_PACKET;
                                         resp_result    <= TRAIN_CAPS_VALUE;

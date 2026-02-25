@@ -819,6 +819,44 @@ def kernel_stdp_update_tile_q16_phase1_python(
             W_q16[r, c] = np.int64(w_new)
 
 
+def kernel_stdp_update_tile_q16_python(
+    W_q16: np.ndarray,
+    A_q16: np.ndarray,
+    B_T_q16: np.ndarray,
+    row0: int,
+    nrows: int,
+) -> None:
+    row1 = min(int(row0) + int(nrows), int(W_q16.shape[0]))
+    if row1 <= int(row0):
+        return
+    for r in range(int(row0), row1):
+        sum_abs = 0
+        for c in range(N_IN):
+            sum_abs += abs(to_s32(int(W_q16[r, c])))
+        if sum_abs == 0:
+            sum_abs = 1
+        for c in range(N_IN):
+            w = to_s32(int(W_q16[r, c]))
+            a = to_s32(int(A_q16[r, c]))
+            bt = to_s32(int(B_T_q16[c, r]))
+            w_norm = trunc_div_toward_zero(int(w) * int(TRAIN_NORM_Q16), int(sum_abs))
+            w_norm = to_s32(w_norm)
+            pot = fxp_mul_s16_16_py(fxp_mul_s16_16_py(TRAIN_LR_P_Q16, to_s32(TRAIN_WMAX_Q16 - w_norm)), a)
+            dep = fxp_mul_s16_16_py(fxp_mul_s16_16_py(TRAIN_LR_M_Q16, w_norm), bt)
+            dW = to_s32(pot - dep)
+            dW_step = trunc_div_toward_zero(dW, 100)
+            if dW_step > TRAIN_CLIP_DW_Q16:
+                dW_step = TRAIN_CLIP_DW_Q16
+            elif dW_step < -TRAIN_CLIP_DW_Q16:
+                dW_step = -TRAIN_CLIP_DW_Q16
+            w_new = to_s32(w_norm + dW_step)
+            if w_new > TRAIN_WMAX_Q16:
+                w_new = TRAIN_WMAX_Q16
+            elif w_new < TRAIN_WMIN_Q16:
+                w_new = TRAIN_WMIN_Q16
+            W_q16[r, c] = np.int64(w_new)
+
+
 def selfcheck_training_kernels(seed: int = 0) -> None:
     rng = np.random.RandomState(seed)
     w = 1e-3 * rng.rand(N_NEURONS, N_IN)
@@ -1133,7 +1171,7 @@ def fpga_stdp_update_tile_selfcheck(ser: serial.Serial, seed: int = 1) -> None:
     A0 = rng.randint(0, 1 << 15, size=(N_NEURONS, N_IN), dtype=np.int64)
     B0 = rng.randint(0, 1 << 15, size=(N_IN, N_NEURONS), dtype=np.int64)
     W_ref = np.array(W0, copy=True)
-    kernel_stdp_update_tile_q16_phase1_python(W_ref, A0, B0, row0, nrows)
+    kernel_stdp_update_tile_q16_python(W_ref, A0, B0, row0, nrows)
 
     print(f"Preloading STDP tile selfcheck data into DDR (rows {row0}..{row1-1})...")
     for r in range(row0, row1):
@@ -1142,7 +1180,7 @@ def fpga_stdp_update_tile_selfcheck(ser: serial.Serial, seed: int = 1) -> None:
     for c in range(N_IN):
         fpga_ddr_write_block32(ser, layout.base_bt_q16 + c * N_NEURONS + row0, B0[c, row0:row1])
 
-    print(f"Running FPGA STDP_UPDATE_TILE kernel (phase1): row0={row0}, nrows={nrows}")
+    print(f"Running FPGA STDP_UPDATE_TILE kernel (row-normalized): row0={row0}, nrows={nrows}")
     fpga_stdp_update_tile(ser, row0=row0, nrows=nrows)
 
     print("Reading back W tile from DDR for comparison...")
@@ -1151,9 +1189,9 @@ def fpga_stdp_update_tile_selfcheck(ser: serial.Serial, seed: int = 1) -> None:
         w_fpga = fpga_ddr_read_block32(ser, layout.base_w_q16 + r * N_IN, N_IN).astype(np.int64)
         row_diff = int(np.max(np.abs(w_fpga - W_ref[r, :])))
         max_diff = max(max_diff, row_diff)
-    print(f"STDP_UPDATE_TILE selfcheck (phase1): max|W_fpga-W_ref|={max_diff}")
+    print(f"STDP_UPDATE_TILE selfcheck (row-normalized): max|W_fpga-W_ref|={max_diff}")
     if max_diff != 0:
-        raise RuntimeError("STDP_UPDATE_TILE selfcheck failed (phase1)")
+        raise RuntimeError("STDP_UPDATE_TILE selfcheck failed (row-normalized)")
 
 
 def fpga_train_kernels_selfcheck_all(ser: serial.Serial) -> None:
