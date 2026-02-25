@@ -51,6 +51,7 @@ module top_level(
     localparam logic [7:0] OP_READ_POISSON_THRESH = 8'h23;
     localparam logic [7:0] OP_READ_INFER_DEBUG = 8'h24;
     localparam logic [7:0] OP_WRITE_INFER_WEIGHT = 8'h25;
+    localparam logic [7:0] OP_SET_POISSON_MAX_FR = 8'h26;
     localparam logic [7:0] OP_TRAIN_QUERY_CAPS = 8'h30;
     localparam logic [7:0] OP_TRACE_UPDATE = 8'h31;
     localparam logic [7:0] OP_STDP_UPDATE_TILE = 8'h32;
@@ -453,6 +454,7 @@ module top_level(
     logic signed [31:0] infer_sum_c_inh;
     logic [31:0] infer_total_spikes;
     logic [31:0] infer_rng_state;
+    logic [31:0] infer_poisson_num_const_cfg;
     (* ram_style = "block" *) logic [10:0] infer_poisson_thresh [0:N_IN-1];
     logic [9:0]  infer_poisson_thresh_rd_addr;
     logic [10:0] infer_poisson_thresh_rd_data;
@@ -1063,6 +1065,7 @@ module top_level(
             infer_sum_c_inh     <= 32'sd0;
             infer_total_spikes  <= 32'd0;
             infer_rng_state     <= 32'd0;
+            infer_poisson_num_const_cfg <= POISSON_NUM_CONST;
             infer_dividend      <= 32'd0;
             infer_divisor       <= 32'd1;
             infer_div_valid     <= 1'b0;
@@ -2071,7 +2074,7 @@ module top_level(
                              (req_opcode == OP_DDR_READ32) || (req_opcode == OP_LOAD_IMAGE_FROM_DDR) || (req_opcode == OP_DDR_ZERO32) || (req_opcode == OP_RUN_SAMPLE_INFER) ||
                              (req_opcode == OP_READ_SPIKE_COUNT) || (req_opcode == OP_READ_RAW_U8) ||
                              (req_opcode == OP_READ_POISSON_THRESH) || (req_opcode == OP_READ_INFER_DEBUG) ||
-                             (req_opcode == OP_WRITE_INFER_WEIGHT) || (req_opcode == OP_TRAIN_QUERY_CAPS) ||
+                             (req_opcode == OP_WRITE_INFER_WEIGHT) || (req_opcode == OP_SET_POISSON_MAX_FR) || (req_opcode == OP_TRAIN_QUERY_CAPS) ||
                              (req_opcode == OP_TRACE_UPDATE) || (req_opcode == OP_STDP_UPDATE_TILE) ||
                              (req_opcode == OP_TRAIN_GEN_WORK) || (req_opcode == OP_READ_TRAIN_DEBUG) ||
                              (req_opcode == OP_STDP_UPDATE_ALL) || (req_opcode == OP_TRAIN_RUN_CHUNK) ||
@@ -2389,7 +2392,7 @@ module top_level(
                                     end
                                 end
                                 OP_READ_INFER_DEBUG: begin
-                                    if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < 32'sd12)) begin
+                                    if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < 32'sd13)) begin
                                         logic signed [31:0] dbg_value;
                                         resp_status <= STATUS_OK;
                                         case (arg0[4:0])
@@ -2404,7 +2407,8 @@ module top_level(
                                             5'd8: dbg_value = infer_steps_target;
                                             5'd9: dbg_value = {16'd0, infer_step_idx};
                                             5'd10: dbg_value = {29'd0, infer_state};
-                                            default: dbg_value = raw_image0_sum_u8;
+                                            5'd11: dbg_value = raw_image0_sum_u8;
+                                            default: dbg_value = infer_poisson_num_const_cfg;
                                         endcase
                                         resp_result    <= dbg_value;
                                         resp_checksum  <= calc_resp_checksum(STATUS_OK, dbg_value);
@@ -2428,6 +2432,22 @@ module top_level(
                                         resp_status    <= STATUS_BAD_PACKET;
                                         resp_result    <= {BADDBG_WRITE_WEIGHT, req_opcode, arg0[15:0]};
                                         resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {BADDBG_WRITE_WEIGHT, req_opcode, arg0[15:0]});
+                                        response_ready <= 1'b1;
+                                    end
+                                end
+                                OP_SET_POISSON_MAX_FR: begin
+                                    // arg0=max_fr (positive integer), arg1 reserved.
+                                    // Runtime Poisson numerator scales linearly from the default 32 Hz base.
+                                    if ((req_nargs == 8'd2) && (arg0 > 0) && (arg0 <= 32'sd4096) && !infer_active) begin
+                                        infer_poisson_num_const_cfg <= (POISSON_NUM_CONST * arg0[15:0]) >> 5; // *max_fr/32
+                                        resp_status    <= STATUS_OK;
+                                        resp_result    <= (POISSON_NUM_CONST * arg0[15:0]) >> 5;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_OK, (POISSON_NUM_CONST * arg0[15:0]) >> 5);
+                                        response_ready <= 1'b1;
+                                    end else begin
+                                        resp_status    <= STATUS_BAD_PACKET;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
                                         response_ready <= 1'b1;
                                     end
                                 end
@@ -2857,7 +2877,7 @@ module top_level(
                     INFER_PREP_DIV_START: begin
                         if (infer_prep_idx < N_IN) begin
                             if (!infer_div_busy) begin
-                                infer_dividend <= POISSON_NUM_CONST * {24'd0, raw_image0_u8[infer_prep_idx]};
+                                infer_dividend <= infer_poisson_num_const_cfg * {24'd0, raw_image0_u8[infer_prep_idx]};
                                 infer_divisor  <= raw_image0_sum_u8;
                                 infer_div_valid <= 1'b1;
                                 infer_state <= INFER_PREP_DIV_WAIT;

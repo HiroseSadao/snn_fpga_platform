@@ -43,6 +43,7 @@ OP_READ_RAW_U8 = 0x22
 OP_READ_POISSON_THRESH = 0x23
 OP_READ_INFER_DEBUG = 0x24
 OP_WRITE_INFER_WEIGHT = 0x25
+OP_SET_POISSON_MAX_FR = 0x26
 OP_TRAIN_QUERY_CAPS = 0x30
 OP_TRACE_UPDATE = 0x31
 OP_STDP_UPDATE_TILE = 0x32
@@ -541,11 +542,16 @@ def fpga_read_infer_debug(ser: serial.Serial) -> dict[str, int]:
         9: "infer_step_idx",
         10: "infer_state",
         11: "raw_image0_sum_u8",
+        12: "poisson_num_const_cfg",
     }
     out: dict[str, int] = {}
     for idx, name in names.items():
         status, value = send_request(ser, OP_READ_INFER_DEBUG, [idx, 0])
-        require_ok(status, f"READ_INFER_DEBUG[{idx}]")
+        if status != STATUS_OK:
+            # Backward compatibility: older bitstreams expose indices 0..11 only.
+            if idx >= 12:
+                continue
+            require_ok(status, f"READ_INFER_DEBUG[{idx}]")
         out[name] = int(value) & 0xFFFFFFFF
     return out
 
@@ -997,6 +1003,12 @@ def fpga_read_train_debug(ser: serial.Serial) -> dict[str, int]:
     return out
 
 
+def fpga_set_poisson_max_fr(ser: serial.Serial, max_fr: int) -> int:
+    status, value = send_request(ser, OP_SET_POISSON_MAX_FR, [int(max_fr), 0])
+    require_ok(status, f"SET_POISSON_MAX_FR[{int(max_fr)}]")
+    return int(value) & 0xFFFFFFFF
+
+
 def fpga_trace_update_kernel(
     ser: serial.Serial,
     *,
@@ -1181,6 +1193,86 @@ def fpga_train_run_sample_phase3_verify_stats(
     print(f"  blank_total_spikes: python={py_blank}, fpga={fpga_blank}, diff={fpga_blank - py_blank}")
     if py_inj != fpga_inj or py_blank != fpga_blank:
         raise RuntimeError("phase3 verify failed: inj/blank spike totals mismatch")
+
+
+def fpga_train_run_sample_phase3_retry_coarse(
+    ser: serial.Serial,
+    *,
+    sample_idx: int,
+    inj_steps: int,
+    tile_rows: int,
+    start_lba: int,
+    timeout_sec: float,
+    image_source: str,
+    seed: int = 0x12345678,
+    max_fr_start: int = 32,
+    max_fr_step: int = 16,
+    max_fr_limit: int = 256,
+    min_inj_spikes: int = 5,
+) -> tuple[int, int, int, int]:
+    """Mine-like coarse retry: probe infer-only with increasing max_fr, then run phase3 once."""
+    if image_source != "fpga":
+        raise ValueError("--train-run-sample-phase3-retry currently requires --image-source fpga")
+    if max_fr_start <= 0 or max_fr_step <= 0 or max_fr_limit < max_fr_start:
+        raise ValueError("invalid max_fr retry parameters")
+    prepare_fpga_sample_image_via_streamed_load(
+        ser, sample_idx=int(sample_idx), start_lba=int(start_lba), timeout_sec=float(timeout_sec)
+    )
+
+    accepted_max_fr = None
+    probe_total = None
+    tried: list[tuple[int, int]] = []
+    for max_fr in range(int(max_fr_start), int(max_fr_limit) + 1, int(max_fr_step)):
+        scaled = fpga_set_poisson_max_fr(ser, max_fr)
+        print(
+            f"Probing infer-only for max_fr={max_fr} "
+            f"(poisson_num_const_cfg={scaled})..."
+        )
+        total = int(
+            fpga_run_sample_infer(
+                ser=ser,
+                seed=int(seed),
+                n_steps=int(inj_steps),
+                timeout_sec=max(float(timeout_sec), 60.0),
+            )
+        )
+        tried.append((int(max_fr), total))
+        if total >= int(min_inj_spikes):
+            accepted_max_fr = int(max_fr)
+            probe_total = total
+            break
+    if accepted_max_fr is None:
+        accepted_max_fr, probe_total = tried[-1]
+        print(
+            f"No retry candidate reached min_inj_spikes={int(min_inj_spikes)}; "
+            f"using last max_fr={accepted_max_fr} (probe_total={probe_total})."
+        )
+    else:
+        print(
+            f"Accepted max_fr={accepted_max_fr} from infer-only probe "
+            f"(inj_total_spikes={probe_total}, threshold={int(min_inj_spikes)})."
+        )
+
+    fpga_set_poisson_max_fr(ser, accepted_max_fr)
+    ret = fpga_train_run_sample_phase3(ser, inj_steps=int(inj_steps), tile_rows=int(tile_rows))
+    fpga_inj = int(ret) & 0xFFFF
+    fpga_blank = (int(ret) >> 16) & 0xFFFF
+    print(
+        "TRAIN_RUN_SAMPLE_PHASE3 retry coarse completed: "
+        f"accepted_max_fr={accepted_max_fr}, probe_inj_total={probe_total}, "
+        f"phase3_inj_total={fpga_inj}, phase3_blank_total={fpga_blank}"
+    )
+    if probe_total is not None and int(probe_total) != int(fpga_inj):
+        print(
+            "Warning: phase3 inj_total differs from accepted infer-only probe "
+            f"(probe={int(probe_total)}, phase3={int(fpga_inj)})."
+        )
+    # Restore mine.py default max_fr=32 equivalent for later commands.
+    try:
+        fpga_set_poisson_max_fr(ser, 32)
+    except Exception as exc:
+        print(f"Warning: failed to restore Poisson max_fr=32: {exc}")
+    return int(accepted_max_fr), int(probe_total), int(fpga_inj), int(fpga_blank)
 
 
 def prepare_fpga_sample_image_via_streamed_load(
@@ -2419,8 +2511,18 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="compare phase3 inj/blank spike totals against a Python mine-style simple reference",
     )
+    parser.add_argument(
+        "--train-run-sample-phase3-retry",
+        action="store_true",
+        help="mine-like coarse retry: infer-only probes with increasing max_fr, then run one phase3 sample",
+    )
     parser.add_argument("--chunk-nsamples", type=int, default=1, help="sample count for --train-run-chunk-phase0")
     parser.add_argument("--chunk-nsteps", type=int, default=16, help="step count for --train-run-chunk-phase1/phase2")
+    parser.add_argument("--infer-max-fr", type=int, default=32, help="runtime max_fr for Poisson threshold scaling (OP_SET_POISSON_MAX_FR)")
+    parser.add_argument("--train-retry-max-fr-start", type=int, default=32, help="starting max_fr for coarse phase3 retry")
+    parser.add_argument("--train-retry-max-fr-step", type=int, default=16, help="max_fr increment for coarse phase3 retry")
+    parser.add_argument("--train-retry-max-fr-limit", type=int, default=256, help="max_fr upper limit for coarse phase3 retry")
+    parser.add_argument("--train-retry-min-inj-spikes", type=int, default=5, help="acceptance threshold on inj_total_spikes for coarse phase3 retry")
     parser.add_argument(
         "--train-mine-seed",
         type=int,
@@ -2539,6 +2641,7 @@ if __name__ == "__main__":
             args.train_run_chunk_phase2_verify,
             args.train_run_sample_phase3,
             args.train_run_sample_phase3_verify,
+            args.train_run_sample_phase3_retry,
             args.train_mine_one_sample_replay_selfcheck,
         ])
         if needs_reliable_link and not caps_ok:
@@ -2640,6 +2743,29 @@ if __name__ == "__main__":
                 f"result=0x{(int(ret) & 0xFFFFFFFF):08X}, inj_steps={max(1,int(args.chunk_nsteps))}, "
                 f"tile_rows={max(1,int(args.train_tile_rows))}, inj_total_spikes={inj_spikes}, "
                 f"blank_total_spikes={blank_spikes}"
+            )
+            raise SystemExit(0)
+        if args.train_run_sample_phase3_retry:
+            if args.image_source != "fpga":
+                raise ValueError("--train-run-sample-phase3-retry currently requires --image-source fpga")
+            accepted_max_fr, probe_inj, phase3_inj, phase3_blank = fpga_train_run_sample_phase3_retry_coarse(
+                ser,
+                sample_idx=int(args.sample_idx),
+                inj_steps=max(1, int(args.chunk_nsteps)),
+                tile_rows=max(1, int(args.train_tile_rows)),
+                start_lba=int(args.start_lba),
+                timeout_sec=float(args.timeout),
+                image_source=str(args.image_source),
+                seed=int(args.seed),
+                max_fr_start=max(1, int(args.train_retry_max_fr_start)),
+                max_fr_step=max(1, int(args.train_retry_max_fr_step)),
+                max_fr_limit=max(1, int(args.train_retry_max_fr_limit)),
+                min_inj_spikes=max(0, int(args.train_retry_min_inj_spikes)),
+            )
+            print(
+                "TRAIN_RUN_SAMPLE_PHASE3 retry coarse summary: "
+                f"accepted_max_fr={accepted_max_fr}, probe_inj_total={probe_inj}, "
+                f"phase3_inj_total={phase3_inj}, phase3_blank_total={phase3_blank}"
             )
             raise SystemExit(0)
         if args.train_run_sample_phase3_verify:
