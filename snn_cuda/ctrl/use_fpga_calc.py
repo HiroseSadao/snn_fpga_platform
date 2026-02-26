@@ -624,7 +624,39 @@ def fpga_ddr_zero32(ser: serial.Serial, base_addr_word: int, nwords: int) -> int
     max_chunk = 0xFFFF
     while rem > 0:
         chunk = rem if rem <= max_chunk else max_chunk
-        status, result = send_request(ser, OP_DDR_ZERO32, [base, chunk])
+        # DDR_ZERO32 runs an internal word-by-word generator/write loop in FPGA and can take
+        # noticeably longer than simple single-word DDR commands, especially for large chunks.
+        # Use a chunk-scaled timeout to avoid spurious host-side UART timeouts.
+        zero_timeout_s = max(2.0, min(60.0, float(chunk) / 4000.0))
+        try:
+            status, result = send_request(
+                ser,
+                OP_DDR_ZERO32,
+                [base, chunk],
+                response_timeout=zero_timeout_s,
+                transient_retry_max=max(TRANSIENT_RETRY_MAX, 8),
+            )
+        except TimeoutError as exc:
+            print(
+                "DDR_ZERO32 timeout: "
+                f"base_word=0x{int(base):08X}, chunk={int(chunk)}, total_done={int(total_done)}, rem={int(rem)}"
+            )
+            try:
+                mdbg = fpga_read_train_debug_minimal(ser)
+                print("Train debug minimal:", ", ".join(f"{k}={v}" for k, v in mdbg.items()))
+                flags = int(mdbg.get("ddr_flags", 0))
+                print(
+                    "Train debug minimal (decoded ddr_flags): "
+                    f"req_toggle_ddr_sync2={flags & 1}, "
+                    f"req_toggle_ddr_seen={(flags >> 1) & 1}, "
+                    f"rsp_toggle_core_sync2={(flags >> 2) & 1}, "
+                    f"rsp_toggle_core_seen={(flags >> 3) & 1}, "
+                    f"ddr_req_we_core={(flags >> 4) & 1}, "
+                    f"ddr_req_from_train_core={(flags >> 5) & 1}"
+                )
+            except Exception as dbg_exc:
+                print(f"Train debug minimal probe failed: {dbg_exc}")
+            raise exc
         require_ok(status, f"DDR_ZERO32[base={base},n={chunk}]")
         total_done += int(result) & 0xFFFF
         base += chunk
@@ -1006,6 +1038,26 @@ def fpga_read_train_debug(ser: serial.Serial) -> dict[str, int]:
     return out
 
 
+def fpga_read_train_debug_minimal(ser: serial.Serial) -> dict[str, int]:
+    """Always-on minimal train/DDR debug IDs exposed even when TRAIN_DEBUG_ENABLE=0."""
+    ids = [
+        (48, "gen_active"),
+        (49, "gen_state"),
+        (50, "gen_idx"),
+        (51, "gen_count_total"),
+        (52, "ddr_req_pending_core"),
+        (53, "ddr_bridge_state"),
+        (54, "ddr_req_addr_word_core"),
+        (55, "ddr_flags"),
+    ]
+    out: dict[str, int] = {}
+    for idx, key in ids:
+        status, value = send_request(ser, OP_READ_TRAIN_DEBUG, [idx, 0], response_timeout=1.0, transient_retry_max=0)
+        require_ok(status, f"READ_TRAIN_DEBUG_MIN[{idx}]")
+        out[key] = int(value) & 0xFFFFFFFF
+    return out
+
+
 def fpga_set_poisson_max_fr(ser: serial.Serial, max_fr: int) -> int:
     status, value = send_request(ser, OP_SET_POISSON_MAX_FR, [int(max_fr), 0])
     require_ok(status, f"SET_POISSON_MAX_FR[{int(max_fr)}]")
@@ -1180,6 +1232,69 @@ def fpga_train_run_sample_phase4(ser: serial.Serial, *, inj_steps: int, tile_row
     return int(result)
 
 
+def build_poisson_thresholds_u11_with_max_fr(image_u8: list[int], max_fr: int) -> list[int]:
+    """Match FPGA runtime Poisson scaling: POISSON_NUM_CONST * max_fr / 32, then per-pixel normalize."""
+    sum_u8 = int(sum(image_u8))
+    if sum_u8 <= 0:
+        return [0] * N_IN
+    scaled_num_const = (int(POISSON_NUM_CONST) * int(max_fr)) >> 5
+    out: list[int] = []
+    for px in image_u8:
+        q = (scaled_num_const * int(px)) // sum_u8
+        if q > RNG_MAX:
+            q = RNG_MAX
+        out.append(int(q))
+    return out
+
+
+def run_mine_style_python_phase4_retry_stats_with_image(
+    image_u8: list[int],
+    *,
+    inj_steps: int,
+    blank_steps: int,
+    seed: int,
+    max_fr_start: int,
+    max_fr_step: int,
+    max_fr_limit: int,
+    min_inj_spikes: int,
+) -> tuple[int, int, int, int]:
+    """Python coarse retry reference for FPGA phase4: retry max_fr, then run inj+blank once."""
+    if int(max_fr_start) <= 0 or int(max_fr_step) <= 0 or int(max_fr_limit) < int(max_fr_start):
+        raise ValueError("invalid max_fr retry parameters")
+    accepted_max_fr: int | None = None
+    probe_inj_total: int | None = None
+    for max_fr in range(int(max_fr_start), int(max_fr_limit) + 1, int(max_fr_step)):
+        thresholds = build_poisson_thresholds_u11_with_max_fr(image_u8, max_fr)
+        probe_inj, _ = run_mine_style_python_inj_blank_stats_with_thresholds(
+            thresholds,
+            inj_steps=int(inj_steps),
+            blank_steps=0,
+            seed=int(seed),
+        )
+        if int(probe_inj) >= int(min_inj_spikes):
+            accepted_max_fr = int(max_fr)
+            probe_inj_total = int(probe_inj)
+            break
+    if accepted_max_fr is None:
+        accepted_max_fr = int(max_fr_limit)
+        thresholds = build_poisson_thresholds_u11_with_max_fr(image_u8, accepted_max_fr)
+        probe_inj_total, _ = run_mine_style_python_inj_blank_stats_with_thresholds(
+            thresholds,
+            inj_steps=int(inj_steps),
+            blank_steps=0,
+            seed=int(seed),
+        )
+
+    final_thresholds = build_poisson_thresholds_u11_with_max_fr(image_u8, accepted_max_fr)
+    py_inj, py_blank = run_mine_style_python_inj_blank_stats_with_thresholds(
+        final_thresholds,
+        inj_steps=int(inj_steps),
+        blank_steps=int(blank_steps),
+        seed=int(seed),
+    )
+    return int(accepted_max_fr), int(probe_inj_total), int(py_inj), int(py_blank)
+
+
 def fpga_train_run_sample_phase3_verify_stats(
     ser: serial.Serial,
     *,
@@ -1193,6 +1308,16 @@ def fpga_train_run_sample_phase3_verify_stats(
 ) -> None:
     if image_source != "fpga":
         raise ValueError("phase3 verify currently requires --image-source fpga")
+    caps = fpga_train_query_caps(ser)
+    if caps == 0:
+        raise RuntimeError(
+            "phase3 verify requires a training-enabled FPGA bitstream, but TRAIN_QUERY_CAPS returned 0x00000000 "
+            "(TRAIN_ENABLE=0 inference-only build)."
+        )
+    if (caps & (1 << 13)) == 0:
+        raise RuntimeError(
+            f"phase3 verify requires phase3 training kernel support (caps bit13), but TRAIN_QUERY_CAPS=0x{caps:08X}"
+        )
     prepare_fpga_sample_image_via_streamed_load(
         ser, sample_idx=int(sample_idx), start_lba=int(start_lba), timeout_sec=float(timeout_sec)
     )
@@ -1221,6 +1346,141 @@ def fpga_train_run_sample_phase3_verify_stats(
     print(f"  blank_total_spikes: python={py_blank}, fpga={fpga_blank}, diff={fpga_blank - py_blank}")
     if py_inj != fpga_inj or py_blank != fpga_blank:
         raise RuntimeError("phase3 verify failed: inj/blank spike totals mismatch")
+
+
+def fpga_train_run_sample_phase4_verify_stats(
+    ser: serial.Serial,
+    *,
+    sample_idx: int,
+    inj_steps: int,
+    tile_rows: int,
+    start_lba: int,
+    timeout_sec: float,
+    image_source: str,
+    raw_bin: str | None,
+    seed: int,
+    max_fr_start: int,
+    max_fr_step: int,
+    max_fr_limit: int,
+    min_inj_spikes: int,
+) -> None:
+    if image_source != "fpga":
+        raise ValueError("phase4 verify currently requires --image-source fpga")
+    caps = fpga_train_query_caps(ser)
+    if caps == 0:
+        raise RuntimeError(
+            "phase4 verify requires a training-enabled FPGA bitstream, but TRAIN_QUERY_CAPS returned 0x00000000 "
+            "(TRAIN_ENABLE=0 inference-only build)."
+        )
+    if (caps & (1 << 14)) == 0:
+        raise RuntimeError(
+            f"phase4 verify requires phase4 training kernel support (caps bit14), but TRAIN_QUERY_CAPS=0x{caps:08X}"
+        )
+    prepare_fpga_sample_image_via_streamed_load(
+        ser, sample_idx=int(sample_idx), start_lba=int(start_lba), timeout_sec=float(timeout_sec)
+    )
+    image_u8, py_label = read_mnist_image_u8(int(sample_idx))
+    print(f"Using MNIST dataset image for phase4 Python reference (sample_idx={int(sample_idx)}, label={py_label}).")
+    py_accepted_max_fr, py_probe_inj, py_inj, py_blank = run_mine_style_python_phase4_retry_stats_with_image(
+        image_u8,
+        inj_steps=int(inj_steps),
+        blank_steps=150,
+        seed=int(seed),
+        max_fr_start=int(max_fr_start),
+        max_fr_step=int(max_fr_step),
+        max_fr_limit=int(max_fr_limit),
+        min_inj_spikes=int(min_inj_spikes),
+    )
+    print(
+        "Phase4 Python coarse-retry reference: "
+        f"accepted_max_fr={py_accepted_max_fr}, probe_inj_total={py_probe_inj}, "
+        f"inj_total_spikes={py_inj}, blank_total_spikes={py_blank}"
+    )
+
+    prepare_fpga_sample_image_via_streamed_load(
+        ser, sample_idx=int(sample_idx), start_lba=int(start_lba), timeout_sec=float(timeout_sec)
+    )
+    ret = fpga_train_run_sample_phase4(ser, inj_steps=int(inj_steps), tile_rows=int(tile_rows))
+    fpga_inj = int(ret) & 0xFFFF
+    fpga_blank = (int(ret) >> 16) & 0xFFFF
+
+    fpga_accepted_max_fr = None
+    try:
+        tdbg = fpga_read_train_debug(ser)
+        if "chunk_retry_accepted_max_fr" in tdbg:
+            fpga_accepted_max_fr = int(tdbg["chunk_retry_accepted_max_fr"])
+    except Exception:
+        fpga_accepted_max_fr = None
+
+    print("Phase4 stats compare (Python coarse-retry mine-style ref vs FPGA phase4):")
+    print(f"  inj_total_spikes:   python={py_inj}, fpga={fpga_inj}, diff={fpga_inj - py_inj}")
+    print(f"  blank_total_spikes: python={py_blank}, fpga={fpga_blank}, diff={fpga_blank - py_blank}")
+    if fpga_accepted_max_fr is None:
+        print(f"  accepted_max_fr:    python={py_accepted_max_fr}, fpga=(unavailable: train debug disabled)")
+    else:
+        print(
+            f"  accepted_max_fr:    python={py_accepted_max_fr}, fpga={fpga_accepted_max_fr}, "
+            f"diff={fpga_accepted_max_fr - py_accepted_max_fr}"
+        )
+
+    if py_inj != fpga_inj or py_blank != fpga_blank:
+        raise RuntimeError("phase4 verify failed: inj/blank spike totals mismatch")
+
+
+def fpga_train_phase4_and_mine_replay_selfcheck(
+    ser: serial.Serial,
+    args: argparse.Namespace,
+) -> None:
+    """One-command next-step verification: phase4 coarse flow + mine replay weight-kernel selfcheck."""
+    print(
+        "Running mine one-sample replay weight selfcheck first "
+        "(kernel-level trace/STDP verification), then phase4 coarse verify..."
+    )
+    # Replay selfcheck needs heavy DDR read/write traffic. Running it after phase4 has been
+    # observed to hang on some builds/boards (first DDR_ZERO32 after phase4). Run replay first
+    # so this integrated command remains usable while we keep investigating phase4 post-return
+    # DDR-path recovery in HDL.
+    replay_args = argparse.Namespace(**vars(args))
+    replay_args.image_source = "mnist"
+    if int(getattr(replay_args, "train_verify_nrows", 0)) <= 0:
+        replay_args.train_verify_row0 = 0
+        replay_args.train_verify_nrows = 4
+        print(
+            "Replay selfcheck scope reduced for runtime: "
+            "defaulting to rows 0..3 (override with --train-verify-row0/--train-verify-nrows)."
+        )
+    fpga_train_mine_one_sample_replay_selfcheck(
+        ser,
+        replay_args,
+        seed=int(args.train_mine_seed),
+        tile_rows=max(1, int(args.train_tile_rows)),
+        verify_row0=max(0, int(replay_args.train_verify_row0)),
+        verify_nrows=(None if int(replay_args.train_verify_nrows) <= 0 else int(replay_args.train_verify_nrows)),
+        verify_mode=str(args.train_verify_mode),
+        verify_sample_cols=max(1, int(args.train_verify_sample_cols)),
+    )
+    print("Mine replay selfcheck passed. Running phase4 coarse verify next...")
+    fpga_train_run_sample_phase4_verify_stats(
+        ser,
+        sample_idx=int(args.sample_idx),
+        inj_steps=max(1, int(args.chunk_nsteps)),
+        tile_rows=max(1, int(args.train_tile_rows)),
+        start_lba=int(args.start_lba),
+        timeout_sec=float(args.timeout),
+        image_source=str(args.image_source),
+        raw_bin=args.raw_bin,
+        seed=int(args.seed),
+        max_fr_start=max(1, int(args.train_retry_max_fr_start)),
+        max_fr_step=max(1, int(args.train_retry_max_fr_step)),
+        max_fr_limit=max(1, int(args.train_retry_max_fr_limit)),
+        min_inj_spikes=max(0, int(args.train_retry_min_inj_spikes)),
+    )
+    # Optional light probe after phase4 to make post-phase4 UART recovery issues explicit.
+    try:
+        send_request(ser, OP_ADD_I32, [0, 0], response_timeout=1.0, transient_retry_max=0)
+        print("Post-phase4 UART probe: ADD request responded.")
+    except Exception as exc:
+        print(f"Post-phase4 UART probe warning: no response after phase4 ({exc})")
 
 
 def fpga_train_run_sample_phase3_retry_coarse(
@@ -1906,8 +2166,13 @@ def fpga_train_mine_one_sample_replay_selfcheck(
     )
     fpga_ddr_zero32(ser, layout.base_a_q16 + row0_sel * N_IN, nrows_sel * N_IN)
     # Zero only the B_T columns corresponding to selected post rows: shape [N_IN, nrows_sel]
-    for c in range(N_IN):
-        fpga_ddr_zero32(ser, layout.base_bt_q16 + c * N_NEURONS + row0_sel, nrows_sel)
+    # When selecting all rows, this region is contiguous; zero it in one command to reduce
+    # UART/DDR command overhead and avoid long runs of small DDR_ZERO32 requests.
+    if (row0_sel == 0) and (nrows_sel == N_NEURONS):
+        fpga_ddr_zero32(ser, layout.base_bt_q16, N_IN * N_NEURONS)
+    else:
+        for c in range(N_IN):
+            fpga_ddr_zero32(ser, layout.base_bt_q16 + c * N_NEURONS + row0_sel, nrows_sel)
     for r in range(row0_sel, row1_sel):
         fpga_ddr_write_block32(
             ser,
@@ -2632,6 +2897,16 @@ def parse_args() -> argparse.Namespace:
         help="run phase4 coarse-grained FPGA sample flow (in-FPGA max_fr retry + synthetic trace/STDP + blank) and exit",
     )
     parser.add_argument(
+        "--train-run-sample-phase4-verify",
+        action="store_true",
+        help="compare phase4 inj/blank spike totals against a Python mine-style coarse-retry reference",
+    )
+    parser.add_argument(
+        "--train-phase4-replay-selfcheck",
+        action="store_true",
+        help="run phase4 coarse verify, then run mine one-sample replay weight selfcheck (kernel-level) in one command",
+    )
+    parser.add_argument(
         "--train-run-sample-phase3-retry",
         action="store_true",
         help="mine-like coarse retry: infer-only probes with increasing max_fr, then run one phase3 sample",
@@ -2764,6 +3039,8 @@ if __name__ == "__main__":
             args.train_run_sample_phase3,
             args.train_run_sample_phase3_verify,
             args.train_run_sample_phase4,
+            args.train_run_sample_phase4_verify,
+            args.train_phase4_replay_selfcheck,
             args.train_run_sample_phase3_retry,
             args.train_mine_one_sample_replay_selfcheck,
         ])
@@ -2931,6 +3208,28 @@ if __name__ == "__main__":
                 image_source=str(args.image_source),
                 raw_bin=args.raw_bin,
             )
+            raise SystemExit(0)
+        if args.train_run_sample_phase4_verify:
+            fpga_train_run_sample_phase4_verify_stats(
+                ser,
+                sample_idx=int(args.sample_idx),
+                inj_steps=max(1, int(args.chunk_nsteps)),
+                tile_rows=max(1, int(args.train_tile_rows)),
+                start_lba=int(args.start_lba),
+                timeout_sec=float(args.timeout),
+                image_source=str(args.image_source),
+                raw_bin=args.raw_bin,
+                seed=int(args.seed),
+                max_fr_start=max(1, int(args.train_retry_max_fr_start)),
+                max_fr_step=max(1, int(args.train_retry_max_fr_step)),
+                max_fr_limit=max(1, int(args.train_retry_max_fr_limit)),
+                min_inj_spikes=max(0, int(args.train_retry_min_inj_spikes)),
+            )
+            raise SystemExit(0)
+        if args.train_phase4_replay_selfcheck:
+            if args.image_source != "fpga":
+                raise ValueError("--train-phase4-replay-selfcheck currently requires --image-source fpga")
+            fpga_train_phase4_and_mine_replay_selfcheck(ser, args)
             raise SystemExit(0)
         if args.train_mine_one_sample_replay_selfcheck:
             fpga_train_mine_one_sample_replay_selfcheck(

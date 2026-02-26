@@ -105,9 +105,12 @@ module top_level(
     localparam logic [10:0] RNG_MAX = 11'd2047;
     localparam logic [31:0] LCG_A = 32'd1664525;
     localparam logic [31:0] LCG_C = 32'd1013904223;
-    // Fast-build switch: disable training kernels/FSMs so synthesis/place complete faster.
-    // Set to 1'b1 only for training/phase3/phase4 builds.
-    localparam logic TRAIN_ENABLE = 1'b0;
+    // Build switch: keep training kernels enabled for mine.py-aligned learning builds.
+    // Set to 1'b0 only for inference-only fast-build iteration.
+    localparam logic TRAIN_ENABLE = 1'b1;
+    // Additional training-build switch: disable train debug opcode/mux to reduce build time.
+    // Keep 1'b0 for faster training builds; set 1'b1 only while debugging training hangs.
+    localparam logic TRAIN_DEBUG_ENABLE = 1'b0;
 
     localparam logic [7:0] STATUS_OK             = 8'h00;
     localparam logic [7:0] STATUS_BAD_PACKET     = 8'hE1;
@@ -2311,7 +2314,7 @@ module top_level(
                             response_ready <= 1'b1;
                         end else if (TRAIN_ENABLE &&
                                      (train_trace_active || train_stdp_active || train_gen_active || train_stdp_batch_active || train_chunk_active) &&
-                                     (req_opcode != OP_READ_TRAIN_DEBUG)) begin
+                                     !(req_opcode == OP_READ_TRAIN_DEBUG)) begin
                             resp_status    <= STATUS_BAD_PACKET;
                             resp_result    <= {8'h31, req_opcode, 16'h0000}; // TRAIN_BUSY debug tag
                             resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {8'h31, req_opcode, 16'h0000});
@@ -2319,6 +2322,12 @@ module top_level(
                         end else if (!TRAIN_ENABLE &&
                                      ((req_opcode == OP_DDR_ZERO32) ||
                                       ((req_opcode >= OP_TRACE_UPDATE) && (req_opcode <= OP_TRAIN_RUN_SAMPLE_PHASE4)))) begin
+                            resp_status    <= STATUS_UNSUPPORTED_OP;
+                            resp_result    <= 32'sd0;
+                            resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
+                            response_ready <= 1'b1;
+                        end else if (TRAIN_ENABLE && !TRAIN_DEBUG_ENABLE && (req_opcode == OP_READ_TRAIN_DEBUG) &&
+                                     !((req_nargs == 8'd2) && (arg0 >= 32'sd48) && (arg0 <= 32'sd55))) begin
                             resp_status    <= STATUS_UNSUPPORTED_OP;
                             resp_result    <= 32'sd0;
                             resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
@@ -2902,6 +2911,40 @@ module top_level(
                                     logic [31:0] train_dbg_value;
                                     train_dbg_value = 32'd0;
                                     if (req_nargs == 8'd2) begin
+                                        if (!TRAIN_DEBUG_ENABLE) begin
+                                            // Always-on minimal debug set for diagnosing train_gen/DDR hangs
+                                            // in lightweight builds (TRAIN_DEBUG_ENABLE=0).
+                                            case (arg0[7:0])
+                                                8'd48: train_dbg_value = {31'd0, train_gen_active};
+                                                8'd49: train_dbg_value = {30'd0, train_gen_state};
+                                                8'd50: train_dbg_value = {16'd0, train_gen_idx};
+                                                8'd51: train_dbg_value = {16'd0, train_gen_count_total};
+                                                8'd52: train_dbg_value = {31'd0, ddr_req_pending_core};
+                                                8'd53: train_dbg_value = {29'd0, ddr_bridge_state};
+                                                8'd54: train_dbg_value = ddr_req_addr_word_core;
+                                                8'd55: train_dbg_value = {
+                                                    26'd0,
+                                                    ddr_req_from_train_core,
+                                                    ddr_req_we_core,
+                                                    ddr_rsp_toggle_core_seen,
+                                                    ddr_rsp_toggle_core_sync2,
+                                                    ddr_req_toggle_ddr_seen,
+                                                    ddr_req_toggle_ddr_sync2
+                                                };
+                                                default: begin
+                                                    resp_status    <= STATUS_UNSUPPORTED_OP;
+                                                    resp_result    <= 32'sd0;
+                                                    resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
+                                                    response_ready <= 1'b1;
+                                                end
+                                            endcase
+                                            if (!response_ready) begin
+                                                resp_status    <= STATUS_OK;
+                                                resp_result    <= train_dbg_value;
+                                                resp_checksum  <= calc_resp_checksum(STATUS_OK, train_dbg_value);
+                                                response_ready <= 1'b1;
+                                            end
+                                        end else begin
                                         // Keep the chunk-phase debug IDs used by timeout probes; return 0 for others
                                         // to avoid a very large debug mux on the critical utilization path.
                                         case (arg0[7:0])
@@ -2918,6 +2961,7 @@ module top_level(
                                         resp_result    <= train_dbg_value;
                                         resp_checksum  <= calc_resp_checksum(STATUS_OK, train_dbg_value);
                                         response_ready <= 1'b1;
+                                        end
                                     end else begin
                                         resp_status    <= STATUS_BAD_PACKET;
                                         resp_result    <= 32'sd0;
