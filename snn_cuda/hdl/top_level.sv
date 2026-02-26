@@ -605,11 +605,28 @@ module top_level(
         assign led[7] = (resp_status == STATUS_OK);
     end else begin : gen_release_leds
         assign rgb1 = 3'b000;
-        assign led[7:0] = 8'h00;
+        // Minimal always-on debug for lightweight builds:
+        // led[7]=train_chunk_active, [6]=train_label_stats_active, [5]=train_stdp_active,
+        // [4]=train_trace_active, [3]=ddr_req_pending_core, [2]=imgload_active,
+        // [1]=sd_copy_active, [0]=response_ready
+        assign led[7] = train_chunk_active;
+        assign led[6] = train_label_stats_active;
+        assign led[5] = train_stdp_active;
+        assign led[4] = train_trace_active;
+        assign led[3] = ddr_req_pending_core;
+        assign led[2] = imgload_active;
+        assign led[1] = sd_copy_active;
+        assign led[0] = response_ready;
     end
     assign led[14] = ddr_clk_wiz_locked;         // DDR clock wizard lock
     assign led[15] = ddr_calib_complete;         // DDR3 calibration done
-    assign led[13:8] = 6'h00;
+    // State code (6 bits):
+    // chunk active -> {0, train_chunk_state[4:0]}
+    // else label-stats active -> {3'b100, train_label_stats_state[2:0]}
+    // else STDP active -> {1'b1, train_stdp_state[4:0]}
+    assign led[13:8] = train_chunk_active ? {1'b0, train_chunk_state} :
+                       (train_label_stats_active ? {3'b100, train_label_stats_state} :
+                        (train_stdp_active ? {1'b1, train_stdp_state} : 6'h00));
     assign pmoda = {rgb0[0], rgb0[1], rgb0[2]};
 
     // Default inference weights are initialized on-FPGA at configuration time.
@@ -2239,7 +2256,7 @@ module top_level(
                 endcase
             end
 
-            if (TRAIN_ENABLE && DEV_UART_OPS_ENABLE && train_gen_active && !ddr_req_pending_core && !response_ready && !sd_ddr_flush_active && !imgload_word_valid &&
+            if (TRAIN_ENABLE && train_gen_active && !ddr_req_pending_core && !response_ready && !sd_ddr_flush_active && !imgload_word_valid &&
                 !train_trace_active && !train_stdp_active) begin
                 case (train_gen_state)
                     TGK_WRITE_REQ: begin

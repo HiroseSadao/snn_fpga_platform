@@ -12,6 +12,10 @@ from pathlib import Path
 
 import numpy as np
 try:
+    from tqdm import tqdm
+except Exception:
+    tqdm = None
+try:
     import serial
 except Exception:
     serial = None
@@ -384,8 +388,10 @@ def fpga_sd_sectors_to_ddr(
     start_lba: int,
     num_sectors: int,
     timeout_sec: float = 120.0,
+    verbose: bool = True,
 ) -> int:
-    print(f"Requesting SD sectors->DDR DMA: start_lba={start_lba}, sectors={num_sectors}")
+    if verbose:
+        print(f"Requesting SD sectors->DDR DMA: start_lba={start_lba}, sectors={num_sectors}")
     t0 = time.time()
     status, result = send_request(
         ser=ser,
@@ -395,7 +401,8 @@ def fpga_sd_sectors_to_ddr(
     )
     require_ok(status, "SD sectors->DDR")
     elapsed = time.time() - t0
-    print(f"SD sectors->DDR completed in {elapsed:.2f}s, words_written={result}")
+    if verbose:
+        print(f"SD sectors->DDR completed in {elapsed:.2f}s, words_written={result}")
     return result
 
 
@@ -404,10 +411,12 @@ def fpga_load_image_from_ddr(
     base_addr_byte: int,
     n_bytes: int = N_IN,
     timeout_sec: float = 120.0,
+    verbose: bool = True,
 ) -> None:
     if n_bytes <= 0 or n_bytes > N_IN:
         raise ValueError(f"n_bytes must be in [1, {N_IN}], got {n_bytes}")
-    print(f"Requesting DDR->raw_image0 load: base_byte=0x{base_addr_byte:08X}, n_bytes={n_bytes}")
+    if verbose:
+        print(f"Requesting DDR->raw_image0 load: base_byte=0x{base_addr_byte:08X}, n_bytes={n_bytes}")
     status, result = send_request(
         ser=ser,
         opcode=OP_LOAD_IMAGE_FROM_DDR,
@@ -540,6 +549,50 @@ def fpga_read_train_label_stat_count(ser: serial.Serial, label: int) -> int:
     status, value = send_request(ser, OP_READ_TRAIN_LABEL_STAT_COUNT, [int(label), 0], response_timeout=1.0)
     require_ok(status, f"READ_TRAIN_LABEL_STAT_COUNT[label={int(label)}]")
     return int(value) & 0xFFFFFFFF
+
+
+def fpga_read_train_label_stats_all(ser: serial.Serial) -> tuple[np.ndarray, np.ndarray]:
+    sums = np.zeros((10, N_NEURONS), dtype=np.int64)
+    counts = np.zeros((10,), dtype=np.int64)
+    for lbl in range(10):
+        sums[lbl, :] = np.asarray(fpga_read_train_label_stat_sum_row(ser, lbl), dtype=np.int64)
+        counts[lbl] = np.int64(fpga_read_train_label_stat_count(ser, lbl))
+    return sums, counts
+
+
+def assign_labels_from_aggregated_stats(
+    label_spike_sums: np.ndarray,
+    label_counts: np.ndarray,
+    *,
+    rates_prev: np.ndarray | None = None,
+    alpha: float = 1.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """mine.py::assign_labels() equivalent using aggregated sums/counts instead of per-sample spikes."""
+    sums = np.asarray(label_spike_sums, dtype=np.float32)
+    counts = np.asarray(label_counts, dtype=np.int64)
+    if sums.shape != (10, N_NEURONS):
+        raise ValueError(f"label_spike_sums shape must be (10,{N_NEURONS}), got {sums.shape}")
+    if counts.shape != (10,):
+        raise ValueError(f"label_counts shape must be (10,), got {counts.shape}")
+
+    if rates_prev is None:
+        rates = np.zeros((N_NEURONS, 10), dtype=np.float32)
+    else:
+        rates = np.array(rates_prev, copy=True, dtype=np.float32)
+        if rates.shape != (N_NEURONS, 10):
+            raise ValueError(f"rates_prev shape must be ({N_NEURONS},10), got {rates.shape}")
+
+    for lbl in range(10):
+        n_labeled = int(counts[lbl])
+        if n_labeled > 0:
+            rates[:, lbl] = float(alpha) * rates[:, lbl] + (sums[lbl, :] / float(n_labeled))
+
+    sum_rate = np.sum(rates, axis=1)
+    sum_rate[sum_rate == 0] = 1.0
+    proportions = rates / np.expand_dims(sum_rate, 1)
+    proportions[proportions != proportions] = 0.0
+    assignments = np.argmax(proportions, axis=1).astype(np.uint8)
+    return assignments, rates
 
 
 def fpga_read_raw_image_u8(ser: serial.Serial) -> list[int]:
@@ -705,6 +758,17 @@ def fpga_ddr_zero32(ser: serial.Serial, base_addr_word: int, nwords: int) -> int
 
 def load_mnist() -> tuple[np.ndarray, np.ndarray]:
     try:
+        from snn_cuda.import_MNIST_raw import load_mnist as raw_loader
+        return raw_loader()
+    except Exception:
+        pass
+    try:
+        from import_MNIST_raw import load_mnist as raw_loader_local
+        return raw_loader_local()
+    except Exception:
+        pass
+
+    try:
         from torchvision import datasets
         from torchvision import transforms
 
@@ -745,15 +809,19 @@ def read_mnist_image_u8(sample_idx: int) -> tuple[list[int], int]:
 
 
 def resolve_raw_bin_path(raw_bin_arg: str | None) -> Path:
+    script_dir = Path(__file__).resolve().parent
+    snn_dir = script_dir.parent
+    repo_dir = snn_dir.parent
     candidates: list[Path] = []
     if raw_bin_arg:
         p = Path(raw_bin_arg)
         candidates.extend(
             [
                 p,
-                Path.cwd() / p,
-                Path(__file__).resolve().parent / p,
-                Path(__file__).resolve().parent.parent / p,
+                (Path.cwd() / p),
+                (script_dir / p),
+                (snn_dir / p),
+                (repo_dir / p),
             ]
         )
     else:
@@ -761,16 +829,27 @@ def resolve_raw_bin_path(raw_bin_arg: str | None) -> Path:
             [
                 Path.cwd() / "raw_samples_u8.bin",
                 Path.cwd() / "raw_samples.bin",
-                Path(__file__).resolve().parent.parent / "raw_samples_u8.bin",
-                Path(__file__).resolve().parent.parent / "raw_samples.bin",
+                snn_dir / "raw_samples_u8.bin",
+                snn_dir / "raw_samples.bin",
+                repo_dir / "raw_samples_u8.bin",
+                repo_dir / "raw_samples.bin",
             ]
         )
 
+    seen: set[str] = set()
+    unique_candidates: list[Path] = []
     for p in candidates:
+        key = str(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_candidates.append(p)
+
+    for p in unique_candidates:
         if p.exists() and p.is_file():
             return p.resolve()
 
-    searched = ", ".join(str(x) for x in candidates)
+    searched = ", ".join(str(x) for x in unique_candidates)
     raise FileNotFoundError(
         "RAW1 file not found. Pass the exact file written by import_MNIST_raw.py "
         f"with --raw-bin. searched=[{searched}]"
@@ -808,6 +887,29 @@ def read_raw1_image_u8(raw_bin_path: str, sample_idx: int = 0) -> tuple[list[int
         if len(img) != bytes_per_image:
             raise ValueError("RAW1 image is truncated")
         return list(img), int(labels[sample_idx])
+
+
+def read_raw1_labels_u8(raw_bin_path: str) -> np.ndarray:
+    p = Path(raw_bin_path)
+    with p.open("rb") as f:
+        header = f.read(20)
+        if len(header) != 20:
+            raise ValueError("RAW1 header is too short")
+        magic, version, num_images, n_features, bytes_per_image = struct.unpack("<4sIIII", header)
+        if magic != b"RAW1":
+            raise ValueError("Invalid RAW1 magic")
+        if version != 1:
+            raise ValueError(f"Unsupported RAW1 version: {version}")
+        if n_features != N_IN:
+            raise ValueError(f"Unexpected n_features: {n_features}")
+        if bytes_per_image != N_IN:
+            raise ValueError(
+                f"RAW1 bytes_per_image must be 784 for FPGA Poisson mode, got {bytes_per_image}"
+            )
+        labels = f.read(num_images)
+        if len(labels) != num_images:
+            raise ValueError("RAW1 labels are truncated")
+        return np.frombuffer(labels, dtype=np.uint8).copy()
 
 
 def read_raw1_first_image_u8(raw_bin_path: str) -> tuple[list[int], int]:
@@ -1541,6 +1643,83 @@ def fpga_train_label_stats_one_sample_verify(
         raise RuntimeError("label-stats verify failed: label sum row does not match inj snapshot")
 
 
+def fpga_phase4_build_assignments_from_raw1(
+    ser: serial.Serial,
+    args: argparse.Namespace,
+) -> None:
+    if str(args.image_source) != "fpga":
+        raise ValueError("--train-phase4-build-assignments currently requires --image-source fpga")
+    if tqdm is None:
+        raise RuntimeError("tqdm is required for --train-phase4-build-assignments (pip install tqdm)")
+
+    caps = fpga_train_query_caps(ser)
+    if caps == 0 or (caps & (1 << 14)) == 0:
+        raise RuntimeError(f"phase4 assignment build requires phase4-capable training build, caps=0x{caps:08X}")
+
+    _, all_labels = load_mnist()
+    n_total = int(len(all_labels))
+    n_train = int(getattr(args, "train_split_train", 9000))
+    n_test = int(getattr(args, "train_split_test", 1000))
+    n_epoch = int(getattr(args, "train_epochs", 30))
+    if n_train <= 0 or n_test <= 0 or n_epoch <= 0:
+        raise ValueError("train/test/epoch counts must be positive")
+    if (n_train + n_test) > n_total:
+        raise ValueError(f"RAW1 labels count={n_total} is smaller than train+test={n_train+n_test}")
+
+    inj_steps = int(args.chunk_nsteps)
+    tile_rows = int(args.train_tile_rows)
+    start_lba = int(args.start_lba)
+    timeout_sec = float(args.timeout)
+    rates_prev: np.ndarray | None = None
+    assignments: np.ndarray | None = None
+
+    print(
+        "FPGA phase4 training (label-stats aggregation) start: "
+        f"epochs={n_epoch}, train={n_train}, test={n_test}, inj_steps={inj_steps}, tile_rows={tile_rows}"
+    )
+    print("Using Python-side labels from load_mnist() (same source family as import_MNIST_raw.py).")
+
+    for epoch in range(n_epoch):
+        print(f"[epoch {epoch+1}/{n_epoch}] reset FPGA label stats")
+        fpga_train_label_stats_reset(ser)
+
+        pbar = tqdm(
+            total=n_train,
+            desc=f"train e{epoch+1}/{n_epoch}",
+            unit="img",
+            miniters=100,
+            leave=True,
+        )
+        for sample_idx in range(n_train):
+            prepare_fpga_sample_image_via_streamed_load(
+                ser,
+                sample_idx=int(sample_idx),
+                start_lba=start_lba,
+                timeout_sec=timeout_sec,
+                verbose=False,
+            )
+            fpga_train_run_sample_phase4(ser, inj_steps=inj_steps, tile_rows=tile_rows)
+            lbl = int(all_labels[sample_idx])
+            if lbl < 0 or lbl >= 10:
+                raise RuntimeError(f"invalid Python label: sample_idx={sample_idx}, label={lbl}")
+            fpga_train_label_stats_accum(ser, lbl)
+            pbar.update(1)
+        pbar.close()
+
+        sums, counts = fpga_read_train_label_stats_all(ser)
+        assignments, rates_prev = assign_labels_from_aggregated_stats(sums, counts, rates_prev=rates_prev, alpha=1.0)
+        print(f"[epoch {epoch+1}/{n_epoch}] label_counts={counts.astype(int).tolist()}")
+        print(f"[epoch {epoch+1}/{n_epoch}] assignment_hist={[int(np.sum(assignments == i)) for i in range(10)]}")
+
+    assert assignments is not None
+    out_dir = Path(__file__).resolve().parent.parent / "obj"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "fpga_phase4_assignments.npy"
+    np.save(out_path, assignments.astype(np.uint8))
+    print(f"Saved final assignments to {out_path}")
+    print("Training-side aggregation/assignment build completed. Next step is FPGA-side test prediction label return.")
+
+
 def fpga_train_phase4_and_mine_replay_selfcheck(
     ser: serial.Serial,
     args: argparse.Namespace,
@@ -1683,6 +1862,7 @@ def prepare_fpga_sample_image_via_streamed_load(
     sample_idx: int,
     start_lba: int,
     timeout_sec: float,
+    verbose: bool = True,
 ) -> None:
     if int(sample_idx) < 0:
         raise ValueError(f"sample_idx must be >=0, got {sample_idx}")
@@ -1690,22 +1870,25 @@ def prepare_fpga_sample_image_via_streamed_load(
     img_sector_off = img_byte_off // 512
     img_byte_in_sector = img_byte_off % 512
     sectors_needed = (img_byte_in_sector + N_IN + 511) // 512
-    print(
-        "Preparing input image via streamed FPGA image load path: "
-        f"sample_idx={int(sample_idx)}, sector_off={img_sector_off}, sectors={sectors_needed}, "
-        f"byte_in_sector={img_byte_in_sector}"
-    )
+    if verbose:
+        print(
+            "Preparing input image via streamed FPGA image load path: "
+            f"sample_idx={int(sample_idx)}, sector_off={img_sector_off}, sectors={sectors_needed}, "
+            f"byte_in_sector={img_byte_in_sector}"
+        )
     fpga_sd_sectors_to_ddr(
         ser=ser,
         start_lba=int(start_lba) + img_sector_off,
         num_sectors=sectors_needed,
         timeout_sec=timeout_sec,
+        verbose=verbose,
     )
     fpga_load_image_from_ddr(
         ser=ser,
         base_addr_byte=img_byte_in_sector,
         n_bytes=N_IN,
         timeout_sec=timeout_sec,
+        verbose=verbose,
     )
 
 
@@ -3031,12 +3214,20 @@ def parse_args() -> argparse.Namespace:
         help="run phase4 coarse verify, then run mine one-sample replay weight selfcheck (kernel-level) in one command",
     )
     parser.add_argument(
+        "--train-phase4-build-assignments",
+        action="store_true",
+        help="run FPGA phase4 over train split, aggregate label stats on FPGA, and build mine-style assignments in Python",
+    )
+    parser.add_argument(
         "--train-run-sample-phase3-retry",
         action="store_true",
         help="mine-like coarse retry: infer-only probes with increasing max_fr, then run one phase3 sample",
     )
     parser.add_argument("--chunk-nsamples", type=int, default=1, help="sample count for --train-run-chunk-phase0")
     parser.add_argument("--chunk-nsteps", type=int, default=16, help="step count for --train-run-chunk-phase1/phase2")
+    parser.add_argument("--train-epochs", type=int, default=30, help="epoch count for train phase4 assignment build (mine.py default=30)")
+    parser.add_argument("--train-split-train", type=int, default=9000, help="number of train samples (default 9000)")
+    parser.add_argument("--train-split-test", type=int, default=1000, help="number of test samples (default 1000)")
     parser.add_argument("--infer-max-fr", type=int, default=32, help="runtime max_fr for Poisson threshold scaling (OP_SET_POISSON_MAX_FR)")
     parser.add_argument("--train-retry-max-fr-start", type=int, default=32, help="starting max_fr for coarse phase3 retry")
     parser.add_argument("--train-retry-max-fr-step", type=int, default=16, help="max_fr increment for coarse phase3 retry")
@@ -3167,6 +3358,7 @@ if __name__ == "__main__":
             args.train_label_stats_one_sample_verify,
             args.train_run_sample_phase4_verify,
             args.train_phase4_replay_selfcheck,
+            args.train_phase4_build_assignments,
             args.train_run_sample_phase3_retry,
             args.train_mine_one_sample_replay_selfcheck,
         ])
@@ -3356,6 +3548,9 @@ if __name__ == "__main__":
                 image_source=str(args.image_source),
                 raw_bin=args.raw_bin,
             )
+            raise SystemExit(0)
+        if args.train_phase4_build_assignments:
+            fpga_phase4_build_assignments_from_raw1(ser, args)
             raise SystemExit(0)
         if args.train_run_sample_phase4_verify:
             fpga_train_run_sample_phase4_verify_stats(
