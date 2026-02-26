@@ -54,6 +54,10 @@ OP_STDP_UPDATE_ALL = 0x35
 OP_TRAIN_RUN_CHUNK = 0x36
 OP_TRAIN_RUN_SAMPLE_PHASE3 = 0x37
 OP_TRAIN_RUN_SAMPLE_PHASE4 = 0x38
+OP_TRAIN_LABEL_STATS_RESET = 0x39
+OP_TRAIN_LABEL_STATS_ACCUM = 0x3A
+OP_READ_TRAIN_LABEL_STAT_SUM = 0x3B
+OP_READ_TRAIN_LABEL_STAT_COUNT = 0x3C
 
 STATUS_OK = 0x00
 STATUS_BAD_PACKET = 0xE1
@@ -511,6 +515,31 @@ def fpga_read_train_inj_spike_counts(ser: serial.Serial) -> list[int]:
         require_ok(status, f"READ_TRAIN_INJ_SPIKE_COUNT[{neuron_idx}]")
         counts.append(int(value) & 0xFFFF)
     return counts
+
+
+def fpga_train_label_stats_reset(ser: serial.Serial) -> None:
+    status, result = send_request(ser, OP_TRAIN_LABEL_STATS_RESET, [0, 0], response_timeout=max(10.0, TRAIN_KERNEL_TIMEOUT_SEC))
+    require_ok(status, "TRAIN_LABEL_STATS_RESET")
+
+
+def fpga_train_label_stats_accum(ser: serial.Serial, label: int) -> None:
+    status, result = send_request(ser, OP_TRAIN_LABEL_STATS_ACCUM, [int(label), 0], response_timeout=max(5.0, TRAIN_KERNEL_TIMEOUT_SEC))
+    require_ok(status, f"TRAIN_LABEL_STATS_ACCUM[label={int(label)}]")
+
+
+def fpga_read_train_label_stat_sum_row(ser: serial.Serial, label: int) -> list[int]:
+    out: list[int] = []
+    for n in range(N_NEURONS):
+        status, value = send_request(ser, OP_READ_TRAIN_LABEL_STAT_SUM, [int(label), n], response_timeout=1.0)
+        require_ok(status, f"READ_TRAIN_LABEL_STAT_SUM[label={int(label)},n={n}]")
+        out.append(int(np.int32(value)))
+    return out
+
+
+def fpga_read_train_label_stat_count(ser: serial.Serial, label: int) -> int:
+    status, value = send_request(ser, OP_READ_TRAIN_LABEL_STAT_COUNT, [int(label), 0], response_timeout=1.0)
+    require_ok(status, f"READ_TRAIN_LABEL_STAT_COUNT[label={int(label)}]")
+    return int(value) & 0xFFFFFFFF
 
 
 def fpga_read_raw_image_u8(ser: serial.Serial) -> list[int]:
@@ -1471,6 +1500,45 @@ def fpga_train_run_sample_phase4_inj_snapshot_verify(
     print(f"  inj_snapshot_winner_idx={winner_idx}, winner_count={winner_count}")
     if inj_sum != fpga_inj:
         raise RuntimeError("phase4 inj snapshot verify failed: sum(inj_snapshot_counts) != phase4 inj_total")
+
+
+def fpga_train_label_stats_one_sample_verify(
+    ser: serial.Serial,
+    *,
+    sample_idx: int,
+    inj_steps: int,
+    tile_rows: int,
+    start_lba: int,
+    timeout_sec: float,
+    image_source: str,
+) -> None:
+    if image_source != "fpga":
+        raise ValueError("label-stats verify currently requires --image-source fpga")
+    _, label = read_mnist_image_u8(int(sample_idx))
+    print(f"Label-stats one-sample verify using MNIST label={label} for sample_idx={int(sample_idx)}")
+
+    fpga_train_label_stats_reset(ser)
+    fpga_train_run_sample_phase4_inj_snapshot_verify(
+        ser,
+        sample_idx=int(sample_idx),
+        inj_steps=int(inj_steps),
+        tile_rows=int(tile_rows),
+        start_lba=int(start_lba),
+        timeout_sec=float(timeout_sec),
+        image_source=str(image_source),
+    )
+    inj_counts = fpga_read_train_inj_spike_counts(ser)
+    fpga_train_label_stats_accum(ser, int(label))
+    sum_row = fpga_read_train_label_stat_sum_row(ser, int(label))
+    count_val = fpga_read_train_label_stat_count(ser, int(label))
+    max_diff = max(abs(int(a) - int(b)) for a, b in zip(sum_row, inj_counts))
+    print("Label-stats one-sample verify:")
+    print(f"  label={int(label)}, label_count={int(count_val)}")
+    print(f"  max|sum_row[label]-inj_snapshot|={int(max_diff)}")
+    if int(count_val) != 1:
+        raise RuntimeError(f"label-stats verify failed: expected label_count=1, got {int(count_val)}")
+    if int(max_diff) != 0:
+        raise RuntimeError("label-stats verify failed: label sum row does not match inj snapshot")
 
 
 def fpga_train_phase4_and_mine_replay_selfcheck(
@@ -2948,6 +3016,11 @@ def parse_args() -> argparse.Namespace:
         help="run phase4 and verify inj-side per-neuron spike-count snapshot sum matches returned inj_total",
     )
     parser.add_argument(
+        "--train-label-stats-one-sample-verify",
+        action="store_true",
+        help="reset FPGA label stats, run one phase4 sample, accumulate by MNIST label, and verify aggregated row/count",
+    )
+    parser.add_argument(
         "--train-run-sample-phase4-verify",
         action="store_true",
         help="compare phase4 inj/blank spike totals against a Python mine-style coarse-retry reference",
@@ -3091,6 +3164,7 @@ if __name__ == "__main__":
             args.train_run_sample_phase3_verify,
             args.train_run_sample_phase4,
             args.train_run_sample_phase4_inj_snapshot_verify,
+            args.train_label_stats_one_sample_verify,
             args.train_run_sample_phase4_verify,
             args.train_phase4_replay_selfcheck,
             args.train_run_sample_phase3_retry,
@@ -3228,6 +3302,17 @@ if __name__ == "__main__":
             raise SystemExit(0)
         if args.train_run_sample_phase4_inj_snapshot_verify:
             fpga_train_run_sample_phase4_inj_snapshot_verify(
+                ser,
+                sample_idx=int(args.sample_idx),
+                inj_steps=max(1, int(args.chunk_nsteps)),
+                tile_rows=max(1, int(args.train_tile_rows)),
+                start_lba=int(args.start_lba),
+                timeout_sec=float(args.timeout),
+                image_source=str(args.image_source),
+            )
+            raise SystemExit(0)
+        if args.train_label_stats_one_sample_verify:
+            fpga_train_label_stats_one_sample_verify(
                 ser,
                 sample_idx=int(args.sample_idx),
                 inj_steps=max(1, int(args.chunk_nsteps)),

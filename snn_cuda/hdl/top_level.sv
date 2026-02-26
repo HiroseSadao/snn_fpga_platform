@@ -62,6 +62,10 @@ module top_level(
     localparam logic [7:0] OP_TRAIN_RUN_CHUNK = 8'h36;
     localparam logic [7:0] OP_TRAIN_RUN_SAMPLE_PHASE3 = 8'h37;
     localparam logic [7:0] OP_TRAIN_RUN_SAMPLE_PHASE4 = 8'h38;
+    localparam logic [7:0] OP_TRAIN_LABEL_STATS_RESET = 8'h39;
+    localparam logic [7:0] OP_TRAIN_LABEL_STATS_ACCUM = 8'h3A;
+    localparam logic [7:0] OP_READ_TRAIN_LABEL_STAT_SUM = 8'h3B;
+    localparam logic [7:0] OP_READ_TRAIN_LABEL_STAT_COUNT = 8'h3C;
     localparam logic [31:0] DDR_ADDR_WORD_LIMIT = 32'd16777216; // 64MiB / 4
     localparam logic [7:0] MAX_SUPPORTED_NARGS = 8'd2;
     // Increase RX timeout margin to tolerate host-side inter-byte gaps on UART.
@@ -112,6 +116,9 @@ module top_level(
     // Additional training-build switch: disable train debug opcode/mux to reduce build time.
     // Keep 1'b0 for faster training builds; set 1'b1 only while debugging training hangs.
     localparam logic TRAIN_DEBUG_ENABLE = 1'b0;
+    // Release-oriented switch: disable development/self-check UART opcodes that are not needed
+    // for the final mine.py-like train/test flow (phase3/phase4 + aggregate stats).
+    localparam logic DEV_UART_OPS_ENABLE = 1'b0;
 
     localparam logic [7:0] STATUS_OK             = 8'h00;
     localparam logic [7:0] STATUS_BAD_PACKET     = 8'hE1;
@@ -175,7 +182,9 @@ module top_level(
         MEMRD_SPIKE_COUNT,
         MEMRD_RAW_U8,
         MEMRD_POISSON_THRESH,
-        MEMRD_TRAIN_INJ_SPIKE_COUNT
+        MEMRD_TRAIN_INJ_SPIKE_COUNT,
+        MEMRD_TRAIN_LABEL_STAT_SUM,
+        MEMRD_TRAIN_LABEL_STAT_COUNT
     } memrd_kind_t;
     typedef enum logic [2:0] {
         INFER_IDLE,
@@ -234,6 +243,15 @@ module top_level(
         TGK_WRITE_WAIT,
         TGK_DONE
     } train_gen_state_t;
+    typedef enum logic [2:0] {
+        TLS_IDLE,
+        TLS_RESET_SUM,
+        TLS_RESET_COUNT,
+        TLS_ACCUM_READ,
+        TLS_ACCUM_WAIT,
+        TLS_ACCUM_WRITE,
+        TLS_DONE
+    } train_label_stats_state_t;
     typedef enum logic [4:0] {
         TCK_IDLE,
         TCK_INFER_START,
@@ -463,10 +481,21 @@ module top_level(
     logic [31:0] train_gen_curr_word;
     logic        train_gen_lcg_enable;
     logic [1:0]  train_gen_cache_mode; // 0=none,1=x_in,2=x_exc
+    logic        train_label_stats_active;
+    train_label_stats_state_t train_label_stats_state;
+    logic [3:0]  train_label_stats_label;
+    logic [9:0]  train_label_stats_idx;
+    logic [9:0]  train_label_stats_base_idx;
     logic        train_xin_cache_valid;
     logic        train_xexc_cache_valid;
     (* ram_style = "block" *) logic [31:0] train_xin_cache [0:N_IN-1];
     (* ram_style = "block" *) logic [31:0] train_xexc_cache [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic [31:0] train_label_spike_sum [0:(10*N_NEURONS)-1];
+    (* ram_style = "block" *) logic [31:0] train_label_count [0:9];
+    logic [9:0]  train_label_sum_rd_addr;
+    logic [31:0] train_label_sum_rd_data;
+    logic [3:0]  train_label_count_rd_addr;
+    logic [31:0] train_label_count_rd_data;
 
     logic        infer_active;
     infer_state_t infer_state;
@@ -543,37 +572,41 @@ module top_level(
     assign rgb0[1] = ddr_write_count[0]; // green LED: DDR write activity bit
     assign rgb0[0] = (resp_status == STATUS_OK); // red LED: OK result
 
-    // rgb1 shows coarse progress for bring-up/debug:
-    // 000=idle, 001=sd copy, 010=response pending, 011=infer init clear,
-    // 100=infer prep threshold, 101=gen input spikes, 110=accum excit,
-    // 111=inhib/update passes (APPLY_WTA or WTA_PASS2)
-    always_comb begin
-        dbg_rgb1_state = 3'b000;
-        if (sd_copy_active) begin
-            dbg_rgb1_state = 3'b001;
-        end else if (response_ready) begin
-            dbg_rgb1_state = 3'b010;
-        end else if (infer_active) begin
-            case (infer_state)
-                INFER_INIT_CLEAR:      dbg_rgb1_state = 3'b011;
-                INFER_PREP_DIV_START,
-                INFER_PREP_DIV_WAIT:   dbg_rgb1_state = 3'b100;
-                INFER_GEN_INPUT_SPIKES:dbg_rgb1_state = 3'b101;
-                INFER_ACCUM_NEURON:    dbg_rgb1_state = 3'b110;
-                INFER_APPLY_WTA,
-                INFER_WTA_PASS2:       dbg_rgb1_state = 3'b111;
-                default:               dbg_rgb1_state = 3'b000;
-            endcase
+    if (DEV_UART_OPS_ENABLE) begin : gen_debug_leds
+        // rgb1 shows coarse progress for bring-up/debug:
+        // 000=idle, 001=sd copy, 010=response pending, 011=infer init clear,
+        // 100=infer prep threshold, 101=gen input spikes, 110=accum excit,
+        // 111=inhib/update passes (APPLY_WTA or WTA_PASS2)
+        always_comb begin
+            dbg_rgb1_state = 3'b000;
+            if (sd_copy_active) begin
+                dbg_rgb1_state = 3'b001;
+            end else if (response_ready) begin
+                dbg_rgb1_state = 3'b010;
+            end else if (infer_active) begin
+                case (infer_state)
+                    INFER_INIT_CLEAR:      dbg_rgb1_state = 3'b011;
+                    INFER_PREP_DIV_START,
+                    INFER_PREP_DIV_WAIT:   dbg_rgb1_state = 3'b100;
+                    INFER_GEN_INPUT_SPIKES:dbg_rgb1_state = 3'b101;
+                    INFER_ACCUM_NEURON:    dbg_rgb1_state = 3'b110;
+                    INFER_APPLY_WTA,
+                    INFER_WTA_PASS2:       dbg_rgb1_state = 3'b111;
+                    default:               dbg_rgb1_state = 3'b000;
+                endcase
+            end
         end
+        assign rgb1 = 3'b000;
+        assign led[2:0] = dbg_rgb1_state;
+        assign led[3] = infer_active;
+        assign led[4] = sd_copy_active;
+        assign led[5] = response_ready;
+        assign led[6] = tx_active;
+        assign led[7] = (resp_status == STATUS_OK);
+    end else begin : gen_release_leds
+        assign rgb1 = 3'b000;
+        assign led[7:0] = 8'h00;
     end
-
-    assign rgb1 = 3'b000;
-    assign led[2:0] = dbg_rgb1_state;           // LD0..LD2: coarse state code
-    assign led[3] = infer_active;               // LD3: inference active
-    assign led[4] = sd_copy_active;             // LD4: SD copy active
-    assign led[5] = response_ready;             // LD5: response pending
-    assign led[6] = tx_active;                  // LD6: UART TX active
-    assign led[7] = (resp_status == STATUS_OK); // LD7: last response OK
     assign led[14] = ddr_clk_wiz_locked;         // DDR clock wizard lock
     assign led[15] = ddr_calib_complete;         // DDR3 calibration done
     assign led[13:8] = 6'h00;
@@ -614,6 +647,8 @@ module top_level(
         raw_image0_rd_data <= raw_image0_u8[raw_image0_rd_addr];
         infer_spike_count_rd_data <= infer_spike_count[infer_spike_count_rd_addr];
         train_inj_spike_count_snap_rd_data <= train_inj_spike_count_snap[infer_spike_count_rd_addr];
+        train_label_sum_rd_data <= train_label_spike_sum[train_label_sum_rd_addr];
+        train_label_count_rd_data <= train_label_count[train_label_count_rd_addr];
         infer_poisson_thresh_rd_data <= infer_poisson_thresh[infer_poisson_thresh_rd_addr];
     end
 
@@ -1093,6 +1128,11 @@ module top_level(
             train_gen_curr_word  <= 32'd0;
             train_gen_lcg_enable <= 1'b0;
             train_gen_cache_mode <= 2'd0;
+            train_label_stats_active <= 1'b0;
+            train_label_stats_state <= TLS_IDLE;
+            train_label_stats_label <= 4'd0;
+            train_label_stats_idx <= 10'd0;
+            train_label_stats_base_idx <= 10'd0;
             train_xin_cache_valid <= 1'b0;
             train_xexc_cache_valid <= 1'b0;
             infer_active        <= 1'b0;
@@ -1117,6 +1157,8 @@ module top_level(
             infer_skip_init_clear <= 1'b0;
             infer_force_no_input  <= 1'b0;
             infer_spike_count_rd_addr <= 7'd0;
+            train_label_sum_rd_addr <= 10'd0;
+            train_label_count_rd_addr <= 4'd0;
             infer_poisson_thresh_rd_addr <= 10'd0;
             infer_pre_active_count <= 10'd0;
             infer_last_active_input_idx <= 10'd0;
@@ -1412,6 +1454,18 @@ module top_level(
                             resp_status    <= STATUS_OK;
                             resp_result    <= {16'd0, train_inj_spike_count_snap_rd_data};
                             resp_checksum  <= calc_resp_checksum(STATUS_OK, {16'd0, train_inj_spike_count_snap_rd_data});
+                            response_ready <= 1'b1;
+                        end
+                        MEMRD_TRAIN_LABEL_STAT_SUM: begin
+                            resp_status    <= STATUS_OK;
+                            resp_result    <= train_label_sum_rd_data;
+                            resp_checksum  <= calc_resp_checksum(STATUS_OK, train_label_sum_rd_data);
+                            response_ready <= 1'b1;
+                        end
+                        MEMRD_TRAIN_LABEL_STAT_COUNT: begin
+                            resp_status    <= STATUS_OK;
+                            resp_result    <= train_label_count_rd_data;
+                            resp_checksum  <= calc_resp_checksum(STATUS_OK, train_label_count_rd_data);
                             response_ready <= 1'b1;
                         end
                         default: begin
@@ -2185,7 +2239,7 @@ module top_level(
                 endcase
             end
 
-            if (TRAIN_ENABLE && train_gen_active && !ddr_req_pending_core && !response_ready && !sd_ddr_flush_active && !imgload_word_valid &&
+            if (TRAIN_ENABLE && DEV_UART_OPS_ENABLE && train_gen_active && !ddr_req_pending_core && !response_ready && !sd_ddr_flush_active && !imgload_word_valid &&
                 !train_trace_active && !train_stdp_active) begin
                 case (train_gen_state)
                     TGK_WRITE_REQ: begin
@@ -2227,6 +2281,63 @@ module top_level(
                 endcase
             end
 
+            if (TRAIN_ENABLE && train_label_stats_active && !response_ready && !sd_ddr_flush_active && !imgload_word_valid &&
+                !ddr_req_pending_core && !train_trace_active && !train_stdp_active && !train_gen_active && !train_chunk_active && !infer_active) begin
+                case (train_label_stats_state)
+                    TLS_RESET_SUM: begin
+                        train_label_spike_sum[train_label_stats_idx] <= 32'd0;
+                        if (train_label_stats_idx == ((10*N_NEURONS)-1)) begin
+                            train_label_stats_idx <= 10'd0;
+                            train_label_stats_state <= TLS_RESET_COUNT;
+                        end else begin
+                            train_label_stats_idx <= train_label_stats_idx + 10'd1;
+                        end
+                    end
+                    TLS_RESET_COUNT: begin
+                        train_label_count[train_label_stats_idx[3:0]] <= 32'd0;
+                        if (train_label_stats_idx[3:0] == 4'd9) begin
+                            train_label_stats_state <= TLS_DONE;
+                        end else begin
+                            train_label_stats_idx <= train_label_stats_idx + 10'd1;
+                        end
+                    end
+                    TLS_ACCUM_READ: begin
+                        train_label_sum_rd_addr <= train_label_stats_base_idx + train_label_stats_idx;
+                        train_label_stats_state <= TLS_ACCUM_WAIT;
+                    end
+                    TLS_ACCUM_WAIT: begin
+                        train_label_stats_state <= TLS_ACCUM_WRITE;
+                    end
+                    TLS_ACCUM_WRITE: begin
+                        train_label_spike_sum[train_label_stats_base_idx + train_label_stats_idx]
+                            <= train_label_sum_rd_data + {16'd0, train_inj_spike_count_snap[train_label_stats_idx[6:0]]};
+                        if (train_label_stats_idx == (N_NEURONS-1)) begin
+                            train_label_count[train_label_stats_label] <= train_label_count[train_label_stats_label] + 32'd1;
+                            train_label_stats_state <= TLS_DONE;
+                        end else begin
+                            train_label_stats_idx <= train_label_stats_idx + 10'd1;
+                            train_label_stats_state <= TLS_ACCUM_READ;
+                        end
+                    end
+                    TLS_DONE: begin
+                        train_label_stats_active <= 1'b0;
+                        train_label_stats_state <= TLS_IDLE;
+                        resp_status    <= STATUS_OK;
+                        resp_result    <= {28'd0, train_label_stats_label};
+                        resp_checksum  <= calc_resp_checksum(STATUS_OK, {28'd0, train_label_stats_label});
+                        response_ready <= 1'b1;
+                    end
+                    default: begin
+                        train_label_stats_active <= 1'b0;
+                        train_label_stats_state <= TLS_IDLE;
+                        resp_status    <= STATUS_BAD_PACKET;
+                        resp_result    <= 32'sd0;
+                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                        response_ready <= 1'b1;
+                    end
+                endcase
+            end
+
             if (rx_dv && !response_ready && !memrd_pending && !sd_copy_active && !infer_active && !imgload_active) begin
                 case (rx_state)
                     RX_WAIT_SYNC: begin
@@ -2264,17 +2375,12 @@ module top_level(
                             resp_checksum   <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
                             response_ready  <= 1'b1;
                         end else if (
-                            ((req_opcode == OP_ADD_I32) || (req_opcode == OP_DDR_WRITE32) ||
-                             (req_opcode == OP_SD_TO_DDR_COPY) || (req_opcode == OP_SD_SECTORS_TO_DDR) ||
-                             (req_opcode == OP_DDR_READ32) || (req_opcode == OP_LOAD_IMAGE_FROM_DDR) || (req_opcode == OP_DDR_ZERO32) || (req_opcode == OP_RUN_SAMPLE_INFER) ||
-                             (req_opcode == OP_READ_SPIKE_COUNT) || (req_opcode == OP_READ_RAW_U8) ||
-                             (req_opcode == OP_READ_POISSON_THRESH) || (req_opcode == OP_READ_INFER_DEBUG) ||
-                             (req_opcode == OP_READ_TRAIN_INJ_SPIKE_COUNT) ||
-                             (req_opcode == OP_WRITE_INFER_WEIGHT) || (req_opcode == OP_SET_POISSON_MAX_FR) || (req_opcode == OP_TRAIN_QUERY_CAPS) ||
-                             (req_opcode == OP_TRACE_UPDATE) || (req_opcode == OP_STDP_UPDATE_TILE) ||
-                             (req_opcode == OP_TRAIN_GEN_WORK) || (req_opcode == OP_READ_TRAIN_DEBUG) ||
-                             (req_opcode == OP_STDP_UPDATE_ALL) || (req_opcode == OP_TRAIN_RUN_CHUNK) ||
-                             (req_opcode == OP_TRAIN_RUN_SAMPLE_PHASE3) || (req_opcode == OP_TRAIN_RUN_SAMPLE_PHASE4))
+                            ((req_opcode == OP_ADD_I32) ||
+                             (req_opcode == OP_SD_SECTORS_TO_DDR) || (req_opcode == OP_LOAD_IMAGE_FROM_DDR) ||
+                             (req_opcode == OP_TRAIN_QUERY_CAPS) ||
+                             (req_opcode == OP_TRAIN_RUN_SAMPLE_PHASE3) || (req_opcode == OP_TRAIN_RUN_SAMPLE_PHASE4) ||
+                             (req_opcode == OP_TRAIN_LABEL_STATS_RESET) || (req_opcode == OP_TRAIN_LABEL_STATS_ACCUM) ||
+                             (req_opcode == OP_READ_TRAIN_LABEL_STAT_SUM) || (req_opcode == OP_READ_TRAIN_LABEL_STAT_COUNT))
                             && (rx_byte != 8'd2)
                         ) begin
                             rx_state        <= RX_WAIT_SYNC;
@@ -2331,7 +2437,7 @@ module top_level(
                             resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
                             response_ready <= 1'b1;
                         end else if (TRAIN_ENABLE &&
-                                     (train_trace_active || train_stdp_active || train_gen_active || train_stdp_batch_active || train_chunk_active) &&
+                                     (train_trace_active || train_stdp_active || train_gen_active || train_label_stats_active || train_stdp_batch_active || train_chunk_active) &&
                                      !(req_opcode == OP_READ_TRAIN_DEBUG)) begin
                             resp_status    <= STATUS_BAD_PACKET;
                             resp_result    <= {8'h31, req_opcode, 16'h0000}; // TRAIN_BUSY debug tag
@@ -2339,13 +2445,36 @@ module top_level(
                             response_ready <= 1'b1;
                         end else if (!TRAIN_ENABLE &&
                                      ((req_opcode == OP_DDR_ZERO32) ||
-                                      ((req_opcode >= OP_TRACE_UPDATE) && (req_opcode <= OP_TRAIN_RUN_SAMPLE_PHASE4)))) begin
+                                      ((req_opcode >= OP_TRACE_UPDATE) && (req_opcode <= OP_READ_TRAIN_LABEL_STAT_COUNT)))) begin
                             resp_status    <= STATUS_UNSUPPORTED_OP;
                             resp_result    <= 32'sd0;
                             resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
                             response_ready <= 1'b1;
                         end else if (TRAIN_ENABLE && !TRAIN_DEBUG_ENABLE && (req_opcode == OP_READ_TRAIN_DEBUG) &&
                                      !((req_nargs == 8'd2) && (arg0 >= 32'sd48) && (arg0 <= 32'sd55))) begin
+                            resp_status    <= STATUS_UNSUPPORTED_OP;
+                            resp_result    <= 32'sd0;
+                            resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
+                            response_ready <= 1'b1;
+                        end else if (!DEV_UART_OPS_ENABLE &&
+                                     ((req_opcode == OP_DDR_WRITE32) ||
+                                      (req_opcode == OP_SD_TO_DDR_COPY) ||
+                                      (req_opcode == OP_DDR_READ32) ||
+                                      (req_opcode == OP_DDR_ZERO32) ||
+                                      (req_opcode == OP_RUN_SAMPLE_INFER) ||
+                                      (req_opcode == OP_READ_SPIKE_COUNT) ||
+                                      (req_opcode == OP_READ_RAW_U8) ||
+                                      (req_opcode == OP_WRITE_INFER_WEIGHT) ||
+                                      (req_opcode == OP_SET_POISSON_MAX_FR) ||
+                                      (req_opcode == OP_READ_INFER_DEBUG) ||
+                                      (req_opcode == OP_TRACE_UPDATE) ||
+                                      (req_opcode == OP_STDP_UPDATE_TILE) ||
+                                      (req_opcode == OP_TRAIN_GEN_WORK) ||
+                                      (req_opcode == OP_READ_TRAIN_DEBUG) ||
+                                      (req_opcode == OP_STDP_UPDATE_ALL) ||
+                                      (req_opcode == OP_TRAIN_RUN_CHUNK) ||
+                                      (req_opcode == OP_READ_TRAIN_INJ_SPIKE_COUNT) ||
+                                      (req_opcode == OP_READ_POISSON_THRESH))) begin
                             resp_status    <= STATUS_UNSUPPORTED_OP;
                             resp_result    <= 32'sd0;
                             resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
@@ -2366,7 +2495,12 @@ module top_level(
                                     end
                                 end
                                 OP_DDR_WRITE32: begin
-                                    if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < DDR_ADDR_WORD_LIMIT) &&
+                                    if (!DEV_UART_OPS_ENABLE) begin
+                                        resp_status    <= STATUS_UNSUPPORTED_OP;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
+                                        response_ready <= 1'b1;
+                                    end else if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < DDR_ADDR_WORD_LIMIT) &&
                                         ddr_calib_complete && !ddr_req_pending_core) begin
                                         train_xin_cache_valid  <= 1'b0;
                                         train_xexc_cache_valid <= 1'b0;
@@ -2392,7 +2526,12 @@ module top_level(
                                     end
                                 end
                                 OP_DDR_READ32: begin
-                                    if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < DDR_ADDR_WORD_LIMIT) &&
+                                    if (!DEV_UART_OPS_ENABLE) begin
+                                        resp_status    <= STATUS_UNSUPPORTED_OP;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
+                                        response_ready <= 1'b1;
+                                    end else if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < DDR_ADDR_WORD_LIMIT) &&
                                         ddr_calib_complete && !ddr_req_pending_core) begin
                                         ddr_req_pending_core   <= 1'b1;
                                         ddr_req_we_core        <= 1'b0;
@@ -2491,7 +2630,12 @@ module top_level(
                                     end
                                 end
                                 OP_DDR_ZERO32: begin
-                                    if ((req_nargs == 8'd2) &&
+                                    if (!DEV_UART_OPS_ENABLE) begin
+                                        resp_status    <= STATUS_UNSUPPORTED_OP;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
+                                        response_ready <= 1'b1;
+                                    end else if ((req_nargs == 8'd2) &&
                                         (arg0 >= 0) &&
                                         (arg1 > 0) && (arg1 <= 32'sd65535) &&
                                         ddr_calib_complete &&
@@ -2518,7 +2662,12 @@ module top_level(
                                     end
                                 end
                                 OP_RUN_SAMPLE_INFER: begin
-                                    if (
+                                    if (!DEV_UART_OPS_ENABLE) begin
+                                        resp_status    <= STATUS_UNSUPPORTED_OP;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
+                                        response_ready <= 1'b1;
+                                    end else if (
                                         (req_nargs == 8'd2) &&
                                         (arg1 > 0) &&
                                         raw_image0_valid &&
@@ -2550,7 +2699,12 @@ module top_level(
                                     end
                                 end
                                 OP_READ_SPIKE_COUNT: begin
-                                    if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < N_NEURONS)) begin
+                                    if (!DEV_UART_OPS_ENABLE) begin
+                                        resp_status    <= STATUS_UNSUPPORTED_OP;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
+                                        response_ready <= 1'b1;
+                                    end else if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < N_NEURONS)) begin
                                         infer_spike_count_rd_addr <= arg0[6:0];
                                         memrd_idx     <= arg0[15:0];
                                         memrd_kind    <= MEMRD_SPIKE_COUNT;
@@ -2565,7 +2719,12 @@ module top_level(
                                     end
                                 end
                                 OP_READ_RAW_U8: begin
-                                    if ((req_nargs == 8'd2) && raw_image0_valid && (arg0 >= 0) && (arg0 < N_IN)) begin
+                                    if (!DEV_UART_OPS_ENABLE) begin
+                                        resp_status    <= STATUS_UNSUPPORTED_OP;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
+                                        response_ready <= 1'b1;
+                                    end else if ((req_nargs == 8'd2) && raw_image0_valid && (arg0 >= 0) && (arg0 < N_IN)) begin
                                         raw_image0_rd_addr <= arg0[9:0];
                                         memrd_idx     <= arg0[15:0];
                                         memrd_kind    <= MEMRD_RAW_U8;
@@ -2580,7 +2739,12 @@ module top_level(
                                     end
                                 end
                                 OP_READ_POISSON_THRESH: begin
-                                    if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < N_IN)) begin
+                                    if (!DEV_UART_OPS_ENABLE) begin
+                                        resp_status    <= STATUS_UNSUPPORTED_OP;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
+                                        response_ready <= 1'b1;
+                                    end else if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < N_IN)) begin
                                         infer_poisson_thresh_rd_addr <= arg0[9:0];
                                         memrd_idx     <= arg0[15:0];
                                         memrd_kind    <= MEMRD_POISSON_THRESH;
@@ -2595,7 +2759,12 @@ module top_level(
                                     end
                                 end
                                 OP_READ_TRAIN_INJ_SPIKE_COUNT: begin
-                                    if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < N_NEURONS)) begin
+                                    if (!DEV_UART_OPS_ENABLE) begin
+                                        resp_status    <= STATUS_UNSUPPORTED_OP;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
+                                        response_ready <= 1'b1;
+                                    end else if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < N_NEURONS)) begin
                                         infer_spike_count_rd_addr <= arg0[6:0];
                                         memrd_idx     <= arg0[15:0];
                                         memrd_kind    <= MEMRD_TRAIN_INJ_SPIKE_COUNT;
@@ -2608,8 +2777,76 @@ module top_level(
                                         response_ready <= 1'b1;
                                     end
                                 end
+                                OP_TRAIN_LABEL_STATS_RESET: begin
+                                    if ((req_nargs == 8'd2) &&
+                                        !train_trace_active && !train_stdp_active && !train_gen_active &&
+                                        !train_label_stats_active && !train_chunk_active && !infer_active) begin
+                                        train_label_stats_active <= 1'b1;
+                                        train_label_stats_state <= TLS_RESET_SUM;
+                                        train_label_stats_idx <= 10'd0;
+                                        train_label_stats_label <= 4'd0;
+                                        train_label_stats_base_idx <= 10'd0;
+                                    end else begin
+                                        resp_status    <= STATUS_BAD_PACKET;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                                        response_ready <= 1'b1;
+                                    end
+                                end
+                                OP_TRAIN_LABEL_STATS_ACCUM: begin
+                                    if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < 32'sd10) &&
+                                        !train_trace_active && !train_stdp_active && !train_gen_active &&
+                                        !train_label_stats_active && !train_chunk_active && !infer_active) begin
+                                        logic [9:0] base_tmp;
+                                        base_tmp = ({6'd0, arg0[3:0]} * N_NEURONS);
+                                        train_label_stats_active <= 1'b1;
+                                        train_label_stats_state <= TLS_ACCUM_READ;
+                                        train_label_stats_label <= arg0[3:0];
+                                        train_label_stats_idx <= 10'd0;
+                                        train_label_stats_base_idx <= base_tmp;
+                                    end else begin
+                                        resp_status    <= STATUS_BAD_PACKET;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                                        response_ready <= 1'b1;
+                                    end
+                                end
+                                OP_READ_TRAIN_LABEL_STAT_SUM: begin
+                                    if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < 32'sd10) &&
+                                        (arg1 >= 0) && (arg1 < N_NEURONS)) begin
+                                        train_label_sum_rd_addr <= ({6'd0, arg0[3:0]} * N_NEURONS) + arg1[6:0];
+                                        memrd_idx     <= arg1[15:0];
+                                        memrd_kind    <= MEMRD_TRAIN_LABEL_STAT_SUM;
+                                        memrd_wait    <= 1'b1;
+                                        memrd_pending <= 1'b1;
+                                    end else begin
+                                        resp_status    <= STATUS_BAD_PACKET;
+                                        resp_result    <= {8'h17, req_opcode, arg0[15:0]};
+                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {8'h17, req_opcode, arg0[15:0]});
+                                        response_ready <= 1'b1;
+                                    end
+                                end
+                                OP_READ_TRAIN_LABEL_STAT_COUNT: begin
+                                    if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < 32'sd10)) begin
+                                        train_label_count_rd_addr <= arg0[3:0];
+                                        memrd_idx     <= arg0[15:0];
+                                        memrd_kind    <= MEMRD_TRAIN_LABEL_STAT_COUNT;
+                                        memrd_wait    <= 1'b1;
+                                        memrd_pending <= 1'b1;
+                                    end else begin
+                                        resp_status    <= STATUS_BAD_PACKET;
+                                        resp_result    <= {8'h18, req_opcode, arg0[15:0]};
+                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {8'h18, req_opcode, arg0[15:0]});
+                                        response_ready <= 1'b1;
+                                    end
+                                end
                                 OP_READ_INFER_DEBUG: begin
-                                    if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < 32'sd13)) begin
+                                    if (!DEV_UART_OPS_ENABLE) begin
+                                        resp_status    <= STATUS_UNSUPPORTED_OP;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
+                                        response_ready <= 1'b1;
+                                    end else if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < 32'sd13)) begin
                                         logic signed [31:0] dbg_value;
                                         resp_status <= STATUS_OK;
                                         case (arg0[4:0])
@@ -2639,7 +2876,12 @@ module top_level(
                                     end
                                 end
                                 OP_WRITE_INFER_WEIGHT: begin
-                                    if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < N_WEIGHTS) && !infer_active) begin
+                                    if (!DEV_UART_OPS_ENABLE) begin
+                                        resp_status    <= STATUS_UNSUPPORTED_OP;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
+                                        response_ready <= 1'b1;
+                                    end else if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < N_WEIGHTS) && !infer_active) begin
                                         infer_w_q16[arg0[16:0]] <= arg1[15:0];
                                         resp_status    <= STATUS_OK;
                                         resp_result    <= arg0;
@@ -2655,7 +2897,12 @@ module top_level(
                                 OP_SET_POISSON_MAX_FR: begin
                                     // arg0=max_fr (positive integer), arg1 reserved.
                                     // Runtime Poisson numerator scales linearly from the default 32 Hz base.
-                                    if ((req_nargs == 8'd2) && (arg0 > 0) && (arg0 <= 32'sd4096) && !infer_active) begin
+                                    if (!DEV_UART_OPS_ENABLE) begin
+                                        resp_status    <= STATUS_UNSUPPORTED_OP;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
+                                        response_ready <= 1'b1;
+                                    end else if ((req_nargs == 8'd2) && (arg0 > 0) && (arg0 <= 32'sd4096) && !infer_active) begin
                                         infer_poisson_num_const_cfg <= (POISSON_NUM_CONST * arg0[15:0]) >> 5; // *max_fr/32
                                         resp_status    <= STATUS_OK;
                                         resp_result    <= (POISSON_NUM_CONST * arg0[15:0]) >> 5;
@@ -2682,7 +2929,12 @@ module top_level(
                                     end
                                 end
                                 OP_TRACE_UPDATE: begin
-                                    if ((req_nargs == 8'd2) &&
+                                    if (!DEV_UART_OPS_ENABLE) begin
+                                        resp_status    <= STATUS_UNSUPPORTED_OP;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
+                                        response_ready <= 1'b1;
+                                    end else if ((req_nargs == 8'd2) &&
                                         (arg0 >= -1) && (arg0 < N_NEURONS) &&
                                         (arg1 >= 0) && (arg1 <= N_IN) &&
                                         ddr_calib_complete &&
@@ -2712,7 +2964,12 @@ module top_level(
                                     end
                                 end
                                 OP_STDP_UPDATE_TILE: begin
-                                    if ((req_nargs == 8'd2) &&
+                                    if (!DEV_UART_OPS_ENABLE) begin
+                                        resp_status    <= STATUS_UNSUPPORTED_OP;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
+                                        response_ready <= 1'b1;
+                                    end else if ((req_nargs == 8'd2) &&
                                         (arg0 >= 0) && (arg0 < N_NEURONS) &&
                                         (arg1 > 0) && ((arg0 + arg1) <= N_NEURONS) &&
                                         ddr_calib_complete &&
@@ -2742,7 +2999,12 @@ module top_level(
                                 end
                                 OP_STDP_UPDATE_ALL: begin
                                     // arg0 = tile_rows (1..N_NEURONS), arg1 reserved
-                                    if ((req_nargs == 8'd2) &&
+                                    if (!DEV_UART_OPS_ENABLE) begin
+                                        resp_status    <= STATUS_UNSUPPORTED_OP;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
+                                        response_ready <= 1'b1;
+                                    end else if ((req_nargs == 8'd2) &&
                                         (arg0 > 0) && (arg0 <= N_NEURONS) &&
                                         ddr_calib_complete &&
                                         !ddr_req_pending_core &&
@@ -2780,7 +3042,12 @@ module top_level(
                                     // Phase0: arg0>0,arg1>0 => repeat full-row STDP batch `arg0` times.
                                     // Phase1: arg0<0,arg1>0 => synthetic trace loop (`-arg0` steps) + STDP batch.
                                     // Phase2: arg0<0,arg1<0 => run infer (`-arg0` steps), then phase1 synthetic trace+STDP with tile_rows=`-arg1`.
-                                    if ((req_nargs == 8'd2) &&
+                                    if (!DEV_UART_OPS_ENABLE) begin
+                                        resp_status    <= STATUS_UNSUPPORTED_OP;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
+                                        response_ready <= 1'b1;
+                                    end else if ((req_nargs == 8'd2) &&
                                         (arg0 != 0) && ((arg0 <= 32'sd65535) && (arg0 >= -32'sd65535)) &&
                                         (((arg1 > 0) && (arg1 <= N_NEURONS)) || ((arg1 < 0) && ((-arg1) <= N_NEURONS))) &&
                                         ddr_calib_complete &&
@@ -2906,7 +3173,12 @@ module top_level(
                                 end
                                 OP_TRAIN_GEN_WORK: begin
                                     // arg1 mode: 0=x_in_work (N_IN), 1=x_exc_work (N_NEURONS)
-                                    if ((req_nargs == 8'd2) &&
+                                    if (!DEV_UART_OPS_ENABLE) begin
+                                        resp_status    <= STATUS_UNSUPPORTED_OP;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
+                                        response_ready <= 1'b1;
+                                    end else if ((req_nargs == 8'd2) &&
                                         ddr_calib_complete &&
                                         !ddr_req_pending_core &&
                                         !train_trace_active &&
@@ -2942,7 +3214,12 @@ module top_level(
                                 OP_READ_TRAIN_DEBUG: begin
                                     logic [31:0] train_dbg_value;
                                     train_dbg_value = 32'd0;
-                                    if (req_nargs == 8'd2) begin
+                                    if (!DEV_UART_OPS_ENABLE) begin
+                                        resp_status    <= STATUS_UNSUPPORTED_OP;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
+                                        response_ready <= 1'b1;
+                                    end else if (req_nargs == 8'd2) begin
                                         if (!TRAIN_DEBUG_ENABLE) begin
                                             // Always-on minimal debug set for diagnosing train_gen/DDR hangs
                                             // in lightweight builds (TRAIN_DEBUG_ENABLE=0).
