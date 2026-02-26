@@ -2733,6 +2733,8 @@ if __name__ == "__main__":
         try:
             caps = fpga_train_query_caps(ser)
             print(f"Train kernel caps: 0x{caps:08X}")
+            if int(caps) == 0:
+                print("Train kernels are disabled in this FPGA build (TRAIN_ENABLE=0 fast-build configuration).")
             caps_ok = True
         except Exception as exc:
             print(f"Train kernel caps query skipped/failed: {exc}")
@@ -3104,10 +3106,15 @@ if __name__ == "__main__":
             seed=args.seed
         )
         print("Poisson-only check (FPGA vs Python):")
-        for k in ["total_input_spikes_generated", "first_step_input_spikes", "last_step_input_spikes"]:
-            fv = infer_dbg[k]
-            pv = py_poisson_dbg[k]
-            print(f"  {k}: fpga={fv}, python={pv}, diff={int(fv)-int(pv)}")
+        poisson_dbg_keys = ["total_input_spikes_generated", "first_step_input_spikes", "last_step_input_spikes"]
+        infer_dbg_poisson_disabled = all(int(infer_dbg.get(k, 0)) == 0 for k in poisson_dbg_keys)
+        if infer_dbg_poisson_disabled:
+            print("  skipped: FPGA build disables Poisson/infer debug counters (values forced to 0).")
+        else:
+            for k in poisson_dbg_keys:
+                fv = infer_dbg[k]
+                pv = py_poisson_dbg[k]
+                print(f"  {k}: fpga={fv}, python={pv}, diff={int(fv)-int(pv)}")
 
         if args.poisson_only:
             result = fpga_add(ser, args.a, args.b)

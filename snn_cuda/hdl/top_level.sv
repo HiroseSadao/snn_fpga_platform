@@ -2318,7 +2318,7 @@ module top_level(
                             response_ready <= 1'b1;
                         end else if (!TRAIN_ENABLE &&
                                      ((req_opcode == OP_DDR_ZERO32) ||
-                                      ((req_opcode >= OP_TRAIN_QUERY_CAPS) && (req_opcode <= OP_TRAIN_RUN_SAMPLE_PHASE4)))) begin
+                                      ((req_opcode >= OP_TRACE_UPDATE) && (req_opcode <= OP_TRAIN_RUN_SAMPLE_PHASE4)))) begin
                             resp_status    <= STATUS_UNSUPPORTED_OP;
                             resp_result    <= 32'sd0;
                             resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
@@ -2630,8 +2630,8 @@ module top_level(
                                 OP_TRAIN_QUERY_CAPS: begin
                                     if (req_nargs == 8'd2) begin
                                         resp_status    <= STATUS_OK;
-                                        resp_result    <= TRAIN_CAPS_VALUE;
-                                        resp_checksum  <= calc_resp_checksum(STATUS_OK, TRAIN_CAPS_VALUE);
+                                        resp_result    <= TRAIN_ENABLE ? TRAIN_CAPS_VALUE : 32'd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_OK, TRAIN_ENABLE ? TRAIN_CAPS_VALUE : 32'd0);
                                         response_ready <= 1'b1;
                                     end else begin
                                         resp_status    <= STATUS_BAD_PACKET;
