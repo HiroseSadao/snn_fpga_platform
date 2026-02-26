@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Thu Feb 26 04:14:42 2026
-| Host         : eecs-digital-03 running 64-bit Ubuntu 24.04.3 LTS
+| Date         : Thu Feb 26 06:29:55 2026
+| Host         : eecs-digital-08 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_drc -file obj/post_imp_drc.rpt
 | Design       : top_level
 | Device       : xc7s50csga324-1
@@ -24,12 +24,12 @@ Table of Contents
       Design limits: <entire design considered>
            Ruledeck: default
              Max checks: <unlimited>
-             Checks found: 37
+             Checks found: 36
 +----------+----------+-----------------------------------------------------+--------+
 | Rule     | Severity | Description                                         | Checks |
 +----------+----------+-----------------------------------------------------+--------+
 | CFGBVS-1 | Warning  | Missing CFGBVS and CONFIG_VOLTAGE Design Properties | 1      |
-| DPIP-1   | Warning  | Input pipelining                                    | 36     |
+| DPIP-1   | Warning  | Input pipelining                                    | 35     |
 +----------+----------+-----------------------------------------------------+--------+
 
 2. REPORT DETAILS
@@ -84,72 +84,72 @@ Related violations: <none>
 
 DPIP-1#8 Warning
 Input pipelining  
-DSP fxp_mul_s16_162__1__0 input fxp_mul_s16_162__1__0/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP fxp_mul_s16_162__1__0 input fxp_mul_s16_162__1__0/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#9 Warning
 Input pipelining  
-DSP fxp_mul_s16_162__1__1 input fxp_mul_s16_162__1__1/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP fxp_mul_s16_162__1__0 input fxp_mul_s16_162__1__0/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#10 Warning
 Input pipelining  
-DSP fxp_mul_s16_162__1__1 input fxp_mul_s16_162__1__1/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP fxp_mul_s16_162__1__1 input fxp_mul_s16_162__1__1/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#11 Warning
 Input pipelining  
-DSP fxp_mul_s16_162__2__0 input fxp_mul_s16_162__2__0/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP fxp_mul_s16_162__1__1 input fxp_mul_s16_162__1__1/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#12 Warning
 Input pipelining  
-DSP fxp_mul_s16_162__2__1 input fxp_mul_s16_162__2__1/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP fxp_mul_s16_162__2__0 input fxp_mul_s16_162__2__0/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#13 Warning
 Input pipelining  
-DSP fxp_mul_s16_162__2__1 input fxp_mul_s16_162__2__1/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP fxp_mul_s16_162__2__0 input fxp_mul_s16_162__2__0/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#14 Warning
 Input pipelining  
-DSP fxp_mul_s16_162__3 input fxp_mul_s16_162__3/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP fxp_mul_s16_162__2__1 input fxp_mul_s16_162__2__1/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#15 Warning
 Input pipelining  
-DSP fxp_mul_s16_162__3__0 input fxp_mul_s16_162__3__0/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP fxp_mul_s16_162__3 input fxp_mul_s16_162__3/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#16 Warning
 Input pipelining  
-DSP fxp_mul_s16_162__3__0 input fxp_mul_s16_162__3__0/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP fxp_mul_s16_162__3__0 input fxp_mul_s16_162__3__0/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#17 Warning
 Input pipelining  
-DSP fxp_mul_s16_162__4 input fxp_mul_s16_162__4/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP fxp_mul_s16_162__3__0 input fxp_mul_s16_162__3__0/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#18 Warning
 Input pipelining  
-DSP fxp_mul_s16_162__4__0 input fxp_mul_s16_162__4__0/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP fxp_mul_s16_162__4 input fxp_mul_s16_162__4/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#19 Warning
 Input pipelining  
-DSP fxp_mul_s16_162__4__0 input fxp_mul_s16_162__4__0/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP fxp_mul_s16_162__4__0 input fxp_mul_s16_162__4__0/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#20 Warning
 Input pipelining  
-DSP fxp_mul_s16_162__5 input fxp_mul_s16_162__5/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP fxp_mul_s16_162__4__0 input fxp_mul_s16_162__4__0/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#21 Warning
 Input pipelining  
-DSP fxp_mul_s16_162__5__0 input fxp_mul_s16_162__5__0/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP fxp_mul_s16_162__5 input fxp_mul_s16_162__5/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#22 Warning
@@ -220,11 +220,6 @@ Related violations: <none>
 DPIP-1#35 Warning
 Input pipelining  
 DSP train_chunk_seed_xin1__0 input train_chunk_seed_xin1__0/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
-Related violations: <none>
-
-DPIP-1#36 Warning
-Input pipelining  
-DSP train_trace_a_row_base0__0 input train_trace_a_row_base0__0/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 

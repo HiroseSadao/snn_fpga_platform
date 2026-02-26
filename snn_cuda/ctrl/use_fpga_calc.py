@@ -44,6 +44,7 @@ OP_READ_POISSON_THRESH = 0x23
 OP_READ_INFER_DEBUG = 0x24
 OP_WRITE_INFER_WEIGHT = 0x25
 OP_SET_POISSON_MAX_FR = 0x26
+OP_READ_TRAIN_INJ_SPIKE_COUNT = 0x27
 OP_TRAIN_QUERY_CAPS = 0x30
 OP_TRACE_UPDATE = 0x31
 OP_STDP_UPDATE_TILE = 0x32
@@ -499,6 +500,15 @@ def fpga_read_spike_counts(ser: serial.Serial) -> list[int]:
     for neuron_idx in range(N_NEURONS):
         status, value = send_request(ser, OP_READ_SPIKE_COUNT, [neuron_idx, 0])
         require_ok(status, f"READ_SPIKE_COUNT[{neuron_idx}]")
+        counts.append(int(value) & 0xFFFF)
+    return counts
+
+
+def fpga_read_train_inj_spike_counts(ser: serial.Serial) -> list[int]:
+    counts = []
+    for neuron_idx in range(N_NEURONS):
+        status, value = send_request(ser, OP_READ_TRAIN_INJ_SPIKE_COUNT, [neuron_idx, 0])
+        require_ok(status, f"READ_TRAIN_INJ_SPIKE_COUNT[{neuron_idx}]")
         counts.append(int(value) & 0xFFFF)
     return counts
 
@@ -1425,6 +1435,42 @@ def fpga_train_run_sample_phase4_verify_stats(
 
     if py_inj != fpga_inj or py_blank != fpga_blank:
         raise RuntimeError("phase4 verify failed: inj/blank spike totals mismatch")
+
+
+def fpga_train_run_sample_phase4_inj_snapshot_verify(
+    ser: serial.Serial,
+    *,
+    sample_idx: int,
+    inj_steps: int,
+    tile_rows: int,
+    start_lba: int,
+    timeout_sec: float,
+    image_source: str,
+) -> None:
+    if image_source != "fpga":
+        raise ValueError("phase4 inj snapshot verify currently requires --image-source fpga")
+    caps = fpga_train_query_caps(ser)
+    if caps == 0 or (caps & (1 << 14)) == 0:
+        raise RuntimeError(f"phase4 inj snapshot verify requires phase4-capable training build, caps=0x{caps:08X}")
+
+    prepare_fpga_sample_image_via_streamed_load(
+        ser, sample_idx=int(sample_idx), start_lba=int(start_lba), timeout_sec=float(timeout_sec)
+    )
+    ret = fpga_train_run_sample_phase4(ser, inj_steps=int(inj_steps), tile_rows=int(tile_rows))
+    fpga_inj = int(ret) & 0xFFFF
+    fpga_blank = (int(ret) >> 16) & 0xFFFF
+    inj_counts = fpga_read_train_inj_spike_counts(ser)
+    inj_sum = int(sum(inj_counts))
+    winner_idx = int(max(range(len(inj_counts)), key=lambda i: inj_counts[i]))
+    winner_count = int(inj_counts[winner_idx])
+
+    print("Phase4 inj snapshot verify:")
+    print(f"  phase4_return_inj_total={fpga_inj}")
+    print(f"  phase4_return_blank_total={fpga_blank}")
+    print(f"  inj_snapshot_sum={inj_sum}, diff={inj_sum - fpga_inj}")
+    print(f"  inj_snapshot_winner_idx={winner_idx}, winner_count={winner_count}")
+    if inj_sum != fpga_inj:
+        raise RuntimeError("phase4 inj snapshot verify failed: sum(inj_snapshot_counts) != phase4 inj_total")
 
 
 def fpga_train_phase4_and_mine_replay_selfcheck(
@@ -2897,6 +2943,11 @@ def parse_args() -> argparse.Namespace:
         help="run phase4 coarse-grained FPGA sample flow (in-FPGA max_fr retry + synthetic trace/STDP + blank) and exit",
     )
     parser.add_argument(
+        "--train-run-sample-phase4-inj-snapshot-verify",
+        action="store_true",
+        help="run phase4 and verify inj-side per-neuron spike-count snapshot sum matches returned inj_total",
+    )
+    parser.add_argument(
         "--train-run-sample-phase4-verify",
         action="store_true",
         help="compare phase4 inj/blank spike totals against a Python mine-style coarse-retry reference",
@@ -3039,6 +3090,7 @@ if __name__ == "__main__":
             args.train_run_sample_phase3,
             args.train_run_sample_phase3_verify,
             args.train_run_sample_phase4,
+            args.train_run_sample_phase4_inj_snapshot_verify,
             args.train_run_sample_phase4_verify,
             args.train_phase4_replay_selfcheck,
             args.train_run_sample_phase3_retry,
@@ -3172,6 +3224,17 @@ if __name__ == "__main__":
                 f"result=0x{(int(ret) & 0xFFFFFFFF):08X}, inj_steps={max(1,int(args.chunk_nsteps))}, "
                 f"tile_rows={max(1,int(args.train_tile_rows))}, inj_total_spikes={inj_spikes}, "
                 f"blank_total_spikes={blank_spikes}, accepted_max_fr={accepted_max_fr}"
+            )
+            raise SystemExit(0)
+        if args.train_run_sample_phase4_inj_snapshot_verify:
+            fpga_train_run_sample_phase4_inj_snapshot_verify(
+                ser,
+                sample_idx=int(args.sample_idx),
+                inj_steps=max(1, int(args.chunk_nsteps)),
+                tile_rows=max(1, int(args.train_tile_rows)),
+                start_lba=int(args.start_lba),
+                timeout_sec=float(args.timeout),
+                image_source=str(args.image_source),
             )
             raise SystemExit(0)
         if args.train_run_sample_phase3_retry:

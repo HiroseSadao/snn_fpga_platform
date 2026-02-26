@@ -52,6 +52,7 @@ module top_level(
     localparam logic [7:0] OP_READ_INFER_DEBUG = 8'h24;
     localparam logic [7:0] OP_WRITE_INFER_WEIGHT = 8'h25;
     localparam logic [7:0] OP_SET_POISSON_MAX_FR = 8'h26;
+    localparam logic [7:0] OP_READ_TRAIN_INJ_SPIKE_COUNT = 8'h27;
     localparam logic [7:0] OP_TRAIN_QUERY_CAPS = 8'h30;
     localparam logic [7:0] OP_TRACE_UPDATE = 8'h31;
     localparam logic [7:0] OP_STDP_UPDATE_TILE = 8'h32;
@@ -169,11 +170,12 @@ module top_level(
         TX_SEND,
         TX_WAIT_DONE
     } tx_state_t;
-    typedef enum logic [1:0] {
+    typedef enum logic [2:0] {
         MEMRD_NONE,
         MEMRD_SPIKE_COUNT,
         MEMRD_RAW_U8,
-        MEMRD_POISSON_THRESH
+        MEMRD_POISSON_THRESH,
+        MEMRD_TRAIN_INJ_SPIKE_COUNT
     } memrd_kind_t;
     typedef enum logic [2:0] {
         INFER_IDLE,
@@ -493,8 +495,10 @@ module top_level(
     (* ram_style = "block" *) logic signed [31:0] infer_g_exc_delay1 [0:N_NEURONS-1];
     logic        infer_s_exc [0:N_NEURONS-1];
     (* ram_style = "block" *) logic [15:0] infer_spike_count [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic [15:0] train_inj_spike_count_snap [0:N_NEURONS-1];
     logic [6:0]  infer_spike_count_rd_addr;
     logic [15:0] infer_spike_count_rd_data;
+    logic [15:0] train_inj_spike_count_snap_rd_data;
     (* ram_style = "block" *) logic [15:0] infer_exc_last_spike_step [0:N_NEURONS-1];
     (* ram_style = "block" *) logic [15:0] infer_inh_last_spike_step [0:N_NEURONS-1];
     logic [6:0]  infer_apply_idx;
@@ -609,6 +613,7 @@ module top_level(
         infer_pre_rd_data <= infer_pre_active_list[infer_pre_rd_addr];
         raw_image0_rd_data <= raw_image0_u8[raw_image0_rd_addr];
         infer_spike_count_rd_data <= infer_spike_count[infer_spike_count_rd_addr];
+        train_inj_spike_count_snap_rd_data <= train_inj_spike_count_snap[infer_spike_count_rd_addr];
         infer_poisson_thresh_rd_data <= infer_poisson_thresh[infer_poisson_thresh_rd_addr];
     end
 
@@ -1115,6 +1120,9 @@ module top_level(
             infer_poisson_thresh_rd_addr <= 10'd0;
             infer_pre_active_count <= 10'd0;
             infer_last_active_input_idx <= 10'd0;
+            for (int i = 0; i < N_NEURONS; i++) begin
+                train_inj_spike_count_snap[i] <= 16'd0;
+            end
             memrd_pending <= 1'b0;
             memrd_wait    <= 1'b0;
             memrd_kind    <= MEMRD_NONE;
@@ -1398,6 +1406,12 @@ module top_level(
                             resp_status    <= STATUS_OK;
                             resp_result    <= {21'd0, infer_poisson_thresh_rd_data};
                             resp_checksum  <= calc_resp_checksum(STATUS_OK, {21'd0, infer_poisson_thresh_rd_data});
+                            response_ready <= 1'b1;
+                        end
+                        MEMRD_TRAIN_INJ_SPIKE_COUNT: begin
+                            resp_status    <= STATUS_OK;
+                            resp_result    <= {16'd0, train_inj_spike_count_snap_rd_data};
+                            resp_checksum  <= calc_resp_checksum(STATUS_OK, {16'd0, train_inj_spike_count_snap_rd_data});
                             response_ready <= 1'b1;
                         end
                         default: begin
@@ -1928,6 +1942,9 @@ module top_level(
                     TCK_INFER_WAIT: begin
                         if (!infer_active) begin
                             train_chunk_last_infer_spikes <= infer_total_spikes;
+                            for (int i = 0; i < N_NEURONS; i++) begin
+                                train_inj_spike_count_snap[i] <= infer_spike_count[i];
+                            end
                             if (response_ready && (resp_status == STATUS_OK)) begin
                                 response_ready <= 1'b0;
                             end
@@ -2252,6 +2269,7 @@ module top_level(
                              (req_opcode == OP_DDR_READ32) || (req_opcode == OP_LOAD_IMAGE_FROM_DDR) || (req_opcode == OP_DDR_ZERO32) || (req_opcode == OP_RUN_SAMPLE_INFER) ||
                              (req_opcode == OP_READ_SPIKE_COUNT) || (req_opcode == OP_READ_RAW_U8) ||
                              (req_opcode == OP_READ_POISSON_THRESH) || (req_opcode == OP_READ_INFER_DEBUG) ||
+                             (req_opcode == OP_READ_TRAIN_INJ_SPIKE_COUNT) ||
                              (req_opcode == OP_WRITE_INFER_WEIGHT) || (req_opcode == OP_SET_POISSON_MAX_FR) || (req_opcode == OP_TRAIN_QUERY_CAPS) ||
                              (req_opcode == OP_TRACE_UPDATE) || (req_opcode == OP_STDP_UPDATE_TILE) ||
                              (req_opcode == OP_TRAIN_GEN_WORK) || (req_opcode == OP_READ_TRAIN_DEBUG) ||
@@ -2573,6 +2591,20 @@ module top_level(
                                         // [31:24]=reason, [23:16]=opcode, [15:0]=arg0[15:0]
                                         resp_result    <= {8'h13, req_opcode, arg0[15:0]};
                                         resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {8'h13, req_opcode, arg0[15:0]});
+                                        response_ready <= 1'b1;
+                                    end
+                                end
+                                OP_READ_TRAIN_INJ_SPIKE_COUNT: begin
+                                    if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < N_NEURONS)) begin
+                                        infer_spike_count_rd_addr <= arg0[6:0];
+                                        memrd_idx     <= arg0[15:0];
+                                        memrd_kind    <= MEMRD_TRAIN_INJ_SPIKE_COUNT;
+                                        memrd_wait    <= 1'b1;
+                                        memrd_pending <= 1'b1;
+                                    end else begin
+                                        resp_status    <= STATUS_BAD_PACKET;
+                                        resp_result    <= {8'h16, req_opcode, arg0[15:0]};
+                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {8'h16, req_opcode, arg0[15:0]});
                                         response_ready <= 1'b1;
                                     end
                                 end

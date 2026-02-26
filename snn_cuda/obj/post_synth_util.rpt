@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Thu Feb 26 04:12:39 2026
-| Host         : eecs-digital-03 running 64-bit Ubuntu 24.04.3 LTS
+| Date         : Thu Feb 26 06:27:33 2026
+| Host         : eecs-digital-08 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_utilization -file obj/post_synth_util.rpt -hierarchical -hierarchical_depth 4
 | Design       : top_level
 | Device       : xc7s50csga324-1
@@ -22,15 +22,15 @@ Table of Contents
 +--------------------------+-----------------+------------+------------+---------+------+-------+--------+--------+------------+
 |         Instance         |      Module     | Total LUTs | Logic LUTs | LUTRAMs | SRLs |  FFs  | RAMB36 | RAMB18 | DSP Blocks |
 +--------------------------+-----------------+------------+------------+---------+------+-------+--------+--------+------------+
-| top_level                |           (top) |      29178 |      27118 |    2060 |    0 | 23195 |     48 |      0 |         45 |
-|   (top_level)            |           (top) |      11294 |       9234 |    2060 |    0 | 20481 |     48 |      0 |         45 |
-|   u_ddr3_top             |        ddr3_top |      11313 |      11313 |       0 |    0 |  2210 |      0 |      0 |          0 |
-|     (u_ddr3_top)         |        ddr3_top |       8479 |       8479 |       0 |    0 |     0 |      0 |      0 |          0 |
+| top_level                |           (top) |      29760 |      27700 |    2060 |    0 | 24819 |     48 |      0 |         45 |
+|   (top_level)            |           (top) |      11725 |       9665 |    2060 |    0 | 22105 |     48 |      0 |         45 |
+|   u_ddr3_top             |        ddr3_top |       4521 |       4521 |       0 |    0 |  2210 |      0 |      0 |          0 |
+|     (u_ddr3_top)         |        ddr3_top |       1687 |       1687 |       0 |    0 |     0 |      0 |      0 |          0 |
 |     ddr3_controller_inst | ddr3_controller |       2820 |       2820 |       0 |    0 |  2187 |      0 |      0 |          0 |
-|   u_poisson_divider      |       divider2b |        220 |        220 |       0 |    0 |   137 |      0 |      0 |          0 |
-|   u_sd_controller        |   sd_controller |       2623 |       2623 |       0 |    0 |   164 |      0 |      0 |          0 |
-|   u_stdp_divider         |     divider2b_0 |       1082 |       1082 |       0 |    0 |   137 |      0 |      0 |          0 |
-|   u_uart_rx              |         uart_rx |       2617 |       2617 |       0 |    0 |    41 |      0 |      0 |          0 |
+|   u_poisson_divider      |       divider2b |        216 |        216 |       0 |    0 |   137 |      0 |      0 |          0 |
+|   u_sd_controller        |   sd_controller |       2717 |       2717 |       0 |    0 |   164 |      0 |      0 |          0 |
+|   u_stdp_divider         |     divider2b_0 |       1221 |       1221 |       0 |    0 |   137 |      0 |      0 |          0 |
+|   u_uart_rx              |         uart_rx |       9329 |       9329 |       0 |    0 |    41 |      0 |      0 |          0 |
 +--------------------------+-----------------+------------+------------+---------+------+-------+--------+--------+------------+
 
 
