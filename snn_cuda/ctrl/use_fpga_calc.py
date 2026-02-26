@@ -1364,10 +1364,6 @@ def fpga_train_run_chunk_phase2_verify_infer_stats(
         "infer_total_spikes",
         "infer_steps_target",
         "raw_image0_sum_u8",
-        "total_input_spikes_generated",
-        "total_syn_hits_applied",
-        "first_step_input_spikes",
-        "last_step_input_spikes",
     ]
     print("Phase2 infer stats compare (standalone vs chunk phase2):")
     mismatches = 0
@@ -2115,6 +2111,97 @@ def run_fixed_point_python_poisson_with_thresholds(thresholds: list[int], n_step
                 diff = 0
             g_inh[n] = to_s32((diff * FXP_INH_COEFF) >> FXP_SHIFT)
     return spike_count
+
+
+def run_fixed_point_python_poisson_with_thresholds_event_driven(
+    thresholds: list[int], n_steps: int, seed: int
+) -> list[int]:
+    """Same simple fixed-point reference as run_fixed_point_python_poisson_with_thresholds(),
+    but accumulates per neuron using a per-step active-input prelist (event-driven style).
+
+    This mirrors the intended HDL direction: generate input spikes once, store active indices,
+    then scan weights only for active presynaptic events.
+    """
+    v = [0] * N_NEURONS
+    v_inh = [0] * N_NEURONS
+    c_inh = [0] * N_NEURONS
+    g_inh = [0] * N_NEURONS
+    g_exc_delay0 = [0] * N_NEURONS
+    g_exc_delay1 = [0] * N_NEURONS
+    spike_count = [0] * N_NEURONS
+    rng_state = seed & 0xFFFFFFFF
+
+    for _ in range(n_steps):
+        pre_active: list[int] = []
+        for i in range(N_IN):
+            rng_state = lcg_next_u32(rng_state)
+            rand11 = (rng_state >> 21) & 0x7FF
+            if rand11 < thresholds[i]:
+                pre_active.append(i)
+
+        s_exc = [0] * N_NEURONS
+
+        for n in range(N_NEURONS):
+            accum = 0
+            for i in pre_active:
+                if (((i + n) & 0x3) == 0):
+                    accum = to_s32(accum + FXP_INPUT_W)
+            v_n_next = to_s32(((to_s32(v[n]) * FXP_ALPHA) >> FXP_SHIFT) + accum - g_inh[n])
+            if v_n_next >= FXP_THRESH:
+                v[n] = to_s32(v_n_next - FXP_THRESH)
+                spike_count[n] += 1
+                s_exc[n] = 1
+            else:
+                v[n] = v_n_next
+
+        sum_c_inh = 0
+        for n in range(N_NEURONS):
+            g_exc_new = FXP_WEXC if s_exc[n] else 0
+            delayed_g_exc = g_exc_delay1[n]
+            g_exc_delay1[n] = g_exc_delay0[n]
+            g_exc_delay0[n] = g_exc_new
+
+            v_inh_next = to_s32(((to_s32(v_inh[n]) * FXP_ALPHA_INH) >> FXP_SHIFT) + delayed_g_exc)
+            s_inh = 1 if v_inh_next >= FXP_INH_THRESH else 0
+            if s_inh:
+                v_inh[n] = to_s32(v_inh_next - FXP_INH_THRESH)
+            else:
+                v_inh[n] = v_inh_next
+
+            c_inh_next = to_s32(c_inh[n] >> 1)
+            if s_inh:
+                c_inh_next = to_s32(c_inh_next + FXP_HALF)
+            c_inh[n] = c_inh_next
+            sum_c_inh = to_s32(sum_c_inh + c_inh_next)
+
+        for n in range(N_NEURONS):
+            diff = sum_c_inh - c_inh[n]
+            if diff < 0:
+                diff = 0
+            g_inh[n] = to_s32((diff * FXP_INH_COEFF) >> FXP_SHIFT)
+    return spike_count
+
+
+def validate_fixed_point_event_driven_inference_equivalence(
+    thresholds: list[int] | None = None,
+    *,
+    n_steps: int = 100,
+    seed: int = 0x12345678,
+) -> tuple[int, int]:
+    """Returns (mismatched_neurons, max_abs_diff) for dense vs event-driven fixed-point ref."""
+    if thresholds is None:
+        rng = np.random.RandomState(123)
+        thresholds = [int(x) for x in rng.randint(0, RNG_MAX + 1, size=N_IN)]
+    dense = run_fixed_point_python_poisson_with_thresholds(thresholds, int(n_steps), int(seed))
+    sparse = run_fixed_point_python_poisson_with_thresholds_event_driven(thresholds, int(n_steps), int(seed))
+    diffs = [abs(int(a) - int(b)) for a, b in zip(dense, sparse)]
+    mismatched = int(sum(1 for d in diffs if d != 0))
+    max_abs_diff = int(max(diffs) if diffs else 0)
+    print(
+        "Fixed-point infer event-driven equivalence: "
+        f"mismatched_neurons={mismatched}, max_abs_diff={max_abs_diff}"
+    )
+    return mismatched, max_abs_diff
 
 
 def _build_fixed_w_in_for_mine_like() -> np.ndarray:
