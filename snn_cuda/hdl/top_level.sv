@@ -105,6 +105,9 @@ module top_level(
     localparam logic [10:0] RNG_MAX = 11'd2047;
     localparam logic [31:0] LCG_A = 32'd1664525;
     localparam logic [31:0] LCG_C = 32'd1013904223;
+    // Fast-build switch: disable training kernels/FSMs so synthesis/place complete faster.
+    // Set to 1'b1 only for training/phase3/phase4 builds.
+    localparam logic TRAIN_ENABLE = 1'b0;
 
     localparam logic [7:0] STATUS_OK             = 8'h00;
     localparam logic [7:0] STATUS_BAD_PACKET     = 8'hE1;
@@ -1173,7 +1176,7 @@ module top_level(
                         imgload_addr_word <= imgload_addr_word + 32'd1;
                         imgload_lane <= 2'd0;
                     end
-                end else if (ddr_req_from_train_core) begin
+                end else if (TRAIN_ENABLE && ddr_req_from_train_core) begin
                     ddr_req_from_train_core <= 1'b0;
                     if (ddr_resp_status_async != STATUS_OK) begin
                         train_trace_active <= 1'b0;
@@ -1337,7 +1340,7 @@ module top_level(
                     // During TRAIN_RUN_CHUNK phase1 prelist staging, a single generic DDR write is issued
                     // intentionally; consume its ACK silently so only the coarse chunk completion response
                     // is visible to the host.
-                    if (train_chunk_active && (train_chunk_state == TCK_PRELIST_WRITE_WAIT)) begin
+                    if (TRAIN_ENABLE && train_chunk_active && (train_chunk_state == TCK_PRELIST_WRITE_WAIT)) begin
                         if ((ddr_resp_status_async == STATUS_OK) && ddr_req_we_core) begin
                             ddr_write_count <= ddr_write_count + 32'd1;
                         end
@@ -1498,7 +1501,7 @@ module top_level(
                 end
             end
 
-            if (train_trace_active && !ddr_req_pending_core && !response_ready && !sd_ddr_flush_active && !imgload_word_valid && !train_stdp_active) begin
+            if (TRAIN_ENABLE && train_trace_active && !ddr_req_pending_core && !response_ready && !sd_ddr_flush_active && !imgload_word_valid && !train_stdp_active) begin
                 case (train_trace_state)
                     TRK_A_READ_X_REQ: begin
                         if (train_xin_cache_valid) begin
@@ -1633,7 +1636,7 @@ module top_level(
                 endcase
             end
 
-            if (train_stdp_active && !ddr_req_pending_core && !response_ready && !sd_ddr_flush_active && !imgload_word_valid && !train_trace_active) begin
+            if (TRAIN_ENABLE && train_stdp_active && !ddr_req_pending_core && !response_ready && !sd_ddr_flush_active && !imgload_word_valid && !train_trace_active) begin
                 case (train_stdp_state)
                     TSK_SUM_READ_W_REQ: begin
                         ddr_req_pending_core      <= 1'b1;
@@ -1887,7 +1890,7 @@ module top_level(
                 endcase
             end
 
-            if (train_chunk_active && !response_ready && !sd_ddr_flush_active && !imgload_word_valid &&
+            if (TRAIN_ENABLE && train_chunk_active && !response_ready && !sd_ddr_flush_active && !imgload_word_valid &&
                 !ddr_req_pending_core && !train_gen_active && !train_trace_active && !train_stdp_active) begin
                 case (train_chunk_state)
                     TCK_INFER_START: begin
@@ -2162,7 +2165,7 @@ module top_level(
                 endcase
             end
 
-            if (train_gen_active && !ddr_req_pending_core && !response_ready && !sd_ddr_flush_active && !imgload_word_valid &&
+            if (TRAIN_ENABLE && train_gen_active && !ddr_req_pending_core && !response_ready && !sd_ddr_flush_active && !imgload_word_valid &&
                 !train_trace_active && !train_stdp_active) begin
                 case (train_gen_state)
                     TGK_WRITE_REQ: begin
@@ -2306,11 +2309,19 @@ module top_level(
                             resp_result    <= 32'sd0;
                             resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
                             response_ready <= 1'b1;
-                        end else if ((train_trace_active || train_stdp_active || train_gen_active || train_stdp_batch_active || train_chunk_active) &&
+                        end else if (TRAIN_ENABLE &&
+                                     (train_trace_active || train_stdp_active || train_gen_active || train_stdp_batch_active || train_chunk_active) &&
                                      (req_opcode != OP_READ_TRAIN_DEBUG)) begin
                             resp_status    <= STATUS_BAD_PACKET;
                             resp_result    <= {8'h31, req_opcode, 16'h0000}; // TRAIN_BUSY debug tag
                             resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {8'h31, req_opcode, 16'h0000});
+                            response_ready <= 1'b1;
+                        end else if (!TRAIN_ENABLE &&
+                                     ((req_opcode == OP_DDR_ZERO32) ||
+                                      ((req_opcode >= OP_TRAIN_QUERY_CAPS) && (req_opcode <= OP_TRAIN_RUN_SAMPLE_PHASE4)))) begin
+                            resp_status    <= STATUS_UNSUPPORTED_OP;
+                            resp_result    <= 32'sd0;
+                            resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
                             response_ready <= 1'b1;
                         end else begin
                             case (req_opcode)
@@ -3286,7 +3297,7 @@ module top_level(
 	                                infer_state <= INFER_IDLE;
                                     infer_skip_init_clear <= 1'b0;
                                     infer_force_no_input  <= 1'b0;
-                                    if (train_chunk_active &&
+                                    if (TRAIN_ENABLE && train_chunk_active &&
                                         ((train_chunk_state == TCK_INFER_WAIT) || (train_chunk_state == TCK_BLANK_INFER_WAIT))) begin
                                         // Sub-step completion for TRAIN_RUN_CHUNK phase2: do not emit host response here.
                                     end else begin
