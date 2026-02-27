@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Fri Feb 27 07:33:25 2026
-| Host         : eecs-digital-13 running 64-bit Ubuntu 24.04.3 LTS
+| Date         : Fri Feb 27 17:32:35 2026
+| Host         : eecs-digital-09 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_utilization -file obj/post_synth_util.rpt -hierarchical -hierarchical_depth 4
 | Design       : top_level
 | Device       : xc7s50csga324-1
@@ -19,18 +19,22 @@ Table of Contents
 1. Utilization by Hierarchy
 ---------------------------
 
-+--------------------------+-----------------+------------+------------+---------+------+-------+--------+--------+------------+
-|         Instance         |      Module     | Total LUTs | Logic LUTs | LUTRAMs | SRLs |  FFs  | RAMB36 | RAMB18 | DSP Blocks |
-+--------------------------+-----------------+------------+------------+---------+------+-------+--------+--------+------------+
-| top_level                |           (top) |      27866 |      26098 |    1768 |    0 | 24781 |      7 |      0 |         41 |
-|   (top_level)            |           (top) |      19671 |      17903 |    1768 |    0 | 22067 |      7 |      0 |         41 |
-|   u_ddr3_top             |        ddr3_top |       3292 |       3292 |       0 |    0 |  2210 |      0 |      0 |          0 |
-|     (u_ddr3_top)         |        ddr3_top |        458 |        458 |       0 |    0 |     0 |      0 |      0 |          0 |
-|     ddr3_controller_inst | ddr3_controller |       2820 |       2820 |       0 |    0 |  2187 |      0 |      0 |          0 |
-|   u_poisson_divider      |       divider2b |        268 |        268 |       0 |    0 |   137 |      0 |      0 |          0 |
-|   u_sd_controller        |   sd_controller |       2809 |       2809 |       0 |    0 |   164 |      0 |      0 |          0 |
-|   u_stdp_divider         |     divider2b_0 |       1249 |       1249 |       0 |    0 |   137 |      0 |      0 |          0 |
-|   u_uart_rx              |         uart_rx |        545 |        545 |       0 |    0 |    41 |      0 |      0 |          0 |
-+--------------------------+-----------------+------------+------------+---------+------+-------+--------+--------+------------+
++----------------------------------+-----------------------------------+------------+------------+---------+------+-------+--------+--------+------------+
+|             Instance             |               Module              | Total LUTs | Logic LUTs | LUTRAMs | SRLs |  FFs  | RAMB36 | RAMB18 | DSP Blocks |
++----------------------------------+-----------------------------------+------------+------------+---------+------+-------+--------+--------+------------+
+| top_level                        |                             (top) |      27149 |      25769 |    1380 |    0 | 24831 |      7 |      2 |         41 |
+|   (top_level)                    |                             (top) |      17672 |      16292 |    1380 |    0 | 22117 |      6 |      0 |         41 |
+|   u_ddr3_top                     |                          ddr3_top |       3134 |       3134 |       0 |    0 |  2210 |      0 |      0 |          0 |
+|     (u_ddr3_top)                 |                          ddr3_top |        300 |        300 |       0 |    0 |     0 |      0 |      0 |          0 |
+|     ddr3_controller_inst         |                   ddr3_controller |       2820 |       2820 |       0 |    0 |  2187 |      0 |      0 |          0 |
+|   u_infer_poisson_thresh_mem     | xpm_memory_sdpram__parameterized1 |        914 |        914 |       0 |    0 |     0 |      0 |      1 |          0 |
+|     (u_infer_poisson_thresh_mem) | xpm_memory_sdpram__parameterized1 |        914 |        914 |       0 |    0 |     0 |      0 |      0 |          0 |
+|   u_poisson_divider              |                         divider2b |        300 |        300 |       0 |    0 |   137 |      0 |      0 |          0 |
+|   u_sd_controller                |                     sd_controller |       2979 |       2979 |       0 |    0 |   164 |      0 |      0 |          0 |
+|   u_stdp_divider                 |                       divider2b_0 |        764 |        764 |       0 |    0 |   137 |      0 |      0 |          0 |
+|   u_train_label_sum_mem          | xpm_memory_sdpram__parameterized0 |        646 |        646 |       0 |    0 |     0 |      1 |      0 |          0 |
+|     (u_train_label_sum_mem)      | xpm_memory_sdpram__parameterized0 |        646 |        646 |       0 |    0 |     0 |      0 |      0 |          0 |
+|   u_uart_rx                      |                           uart_rx |        661 |        661 |       0 |    0 |    41 |      0 |      0 |          0 |
++----------------------------------+-----------------------------------+------------+------------+---------+------+-------+--------+--------+------------+
 
 

@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Fri Feb 27 07:34:15 2026
-| Host         : eecs-digital-13 running 64-bit Ubuntu 24.04.3 LTS
+| Date         : Fri Feb 27 17:33:21 2026
+| Host         : eecs-digital-09 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_timing -file obj/post_place_timing.rpt
 | Design       : top_level
 | Device       : 7s50-csga324
@@ -12,20 +12,20 @@ Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanc
 
 Timing Report
 
-Slack (MET) :             0.515ns  (required time - arrival time)
-  Source:                 u_ddr3_top/ddr3_controller_inst/bank_status_q_reg[2]/C
+Slack (MET) :             0.509ns  (required time - arrival time)
+  Source:                 u_ddr3_top/ddr3_controller_inst/stage2_bank_reg[1]/C
                             (rising edge-triggered cell FDRE clocked by clk_controller_clk_wiz_0  {rise@0.000ns fall@6.000ns period=12.000ns})
-  Destination:            u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_reg/D
-                            (rising edge-triggered cell FDSE clocked by clk_controller_clk_wiz_0  {rise@0.000ns fall@6.000ns period=12.000ns})
+  Destination:            u_ddr3_top/ddr3_controller_inst/o_wb_stall_reg_rep/D
+                            (rising edge-triggered cell FDRE clocked by clk_controller_clk_wiz_0  {rise@0.000ns fall@6.000ns period=12.000ns})
   Path Group:             clk_controller_clk_wiz_0
   Path Type:              Setup (Max at Slow Process Corner)
   Requirement:            12.000ns  (clk_controller_clk_wiz_0 rise@12.000ns - clk_controller_clk_wiz_0 rise@0.000ns)
-  Data Path Delay:        11.306ns  (logic 3.888ns (34.389%)  route 7.418ns (65.611%))
-  Logic Levels:           13  (CARRY4=2 LUT2=1 LUT3=1 LUT4=2 LUT5=1 LUT6=4 MUXF7=2)
-  Clock Path Skew:        -0.042ns (DCD - SCD + CPR)
-    Destination Clock Delay (DCD):    -1.612ns = ( 10.388 - 12.000 ) 
-    Source Clock Delay      (SCD):    -1.018ns
-    Clock Pessimism Removal (CPR):    0.553ns
+  Data Path Delay:        11.418ns  (logic 4.518ns (39.569%)  route 6.900ns (60.431%))
+  Logic Levels:           16  (CARRY4=4 LUT2=1 LUT5=1 LUT6=8 MUXF7=2)
+  Clock Path Skew:        -0.026ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    -1.543ns = ( 10.457 - 12.000 ) 
+    Source Clock Delay      (SCD):    -0.951ns
+    Clock Pessimism Removal (CPR):    0.567ns
   Clock Uncertainty:      0.076ns  ((TSJ^2 + DJ^2)^1/2) / 2 + PE
     Total System Jitter     (TSJ):    0.071ns
     Discrete Jitter          (DJ):    0.134ns
@@ -43,40 +43,48 @@ Slack (MET) :             0.515ns  (required time - arrival time)
                                                      -7.025    -4.352 r  u_ddr_clk_wiz/mmcm_adv_inst/CLKOUT0
                          net (fo=1, estimated)        1.666    -2.686    u_ddr_clk_wiz/clk_controller_clk_wiz_0
     BUFGCTRL_X0Y0        BUFG (Prop_bufg_I_O)         0.096    -2.590 r  u_ddr_clk_wiz/clkout1_buf/O
-                         net (fo=2684, estimated)     1.572    -1.018    u_ddr3_top/ddr3_controller_inst/i_controller_clk
-    SLICE_X55Y7          FDRE                                         r  u_ddr3_top/ddr3_controller_inst/bank_status_q_reg[2]/C
+                         net (fo=2684, estimated)     1.639    -0.951    u_ddr3_top/ddr3_controller_inst/i_controller_clk
+    SLICE_X58Y4          FDRE                                         r  u_ddr3_top/ddr3_controller_inst/stage2_bank_reg[1]/C
   -------------------------------------------------------------------    -------------------
-    SLICE_X55Y7          FDRE (Prop_fdre_C_Q)         0.456    -0.562 r  u_ddr3_top/ddr3_controller_inst/bank_status_q_reg[2]/Q
-                         net (fo=3, estimated)        0.978     0.416    u_ddr3_top/ddr3_controller_inst/bank_status_q_reg_n_0_[2]
-    SLICE_X55Y6          LUT6 (Prop_lut6_I1_O)        0.124     0.540 r  u_ddr3_top/ddr3_controller_inst/o_phy_cmd[70]_INST_0_i_5/O
-                         net (fo=1, routed)           0.000     0.540    u_ddr3_top/ddr3_controller_inst/o_phy_cmd[70]_INST_0_i_5_n_0
-    SLICE_X55Y6          MUXF7 (Prop_muxf7_I0_O)      0.212     0.752 r  u_ddr3_top/ddr3_controller_inst/o_phy_cmd[70]_INST_0_i_3/O
-                         net (fo=23, estimated)       0.886     1.638    u_ddr3_top/ddr3_controller_inst/o_phy_cmd[70]_INST_0_i_3_n_0
-    SLICE_X57Y5          LUT2 (Prop_lut2_I0_O)        0.325     1.963 r  u_ddr3_top/ddr3_controller_inst/o_phy_cmd[70]_INST_0_i_1/O
-                         net (fo=30, estimated)       0.371     2.334    u_ddr3_top/ddr3_controller_inst/o_phy_cmd[70]_INST_0_i_1_n_0
-    SLICE_X57Y6          LUT3 (Prop_lut3_I0_O)        0.332     2.666 f  u_ddr3_top/ddr3_controller_inst/o_phy_cmd[70]_INST_0_i_2/O
-                         net (fo=35, estimated)       0.856     3.522    u_ddr3_top/ddr3_controller_inst/o_phy_cmd[70]_INST_0_i_2_n_0
-    SLICE_X56Y4          LUT4 (Prop_lut4_I3_O)        0.150     3.672 r  u_ddr3_top/ddr3_controller_inst/delay_before_precharge_counter_q[4][2]_i_4/O
-                         net (fo=19, estimated)       1.169     4.841    u_ddr3_top/ddr3_controller_inst/delay_before_precharge_counter_q[4][2]_i_4_n_0
-    SLICE_X46Y1          LUT5 (Prop_lut5_I4_O)        0.321     5.162 r  u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_i_149/O
-                         net (fo=2, estimated)        0.725     5.887    u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_i_149_n_0
-    SLICE_X45Y3          LUT6 (Prop_lut6_I5_O)        0.331     6.218 r  u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_i_120/O
-                         net (fo=1, routed)           0.000     6.218    u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_i_120_n_0
-    SLICE_X45Y3          MUXF7 (Prop_muxf7_I1_O)      0.217     6.435 r  u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_reg_i_79/O
-                         net (fo=1, estimated)        0.825     7.260    u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_reg_i_79_n_0
-    SLICE_X52Y4          LUT6 (Prop_lut6_I3_O)        0.299     7.559 r  u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_i_57/O
-                         net (fo=1, routed)           0.000     7.559    u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_i_57_n_0
-    SLICE_X52Y4          CARRY4 (Prop_carry4_S[3]_CO[3])
-                                                      0.376     7.935 r  u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_reg_i_41/CO[3]
-                         net (fo=1, estimated)        0.000     7.935    u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_reg_i_41_n_0
-    SLICE_X52Y5          CARRY4 (Prop_carry4_CI_CO[0])
-                                                      0.254     8.189 r  u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_reg_i_18/CO[0]
-                         net (fo=1, estimated)        0.574     8.763    u_ddr3_top/ddr3_controller_inst/stage1_stall3
-    SLICE_X50Y5          LUT4 (Prop_lut4_I0_O)        0.367     9.130 f  u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_i_6/O
-                         net (fo=1, estimated)        0.674     9.804    u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_i_6_n_0
-    SLICE_X45Y4          LUT6 (Prop_lut6_I4_O)        0.124     9.928 r  u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_i_1/O
-                         net (fo=5, estimated)        0.360    10.288    u_ddr3_top/ddr3_controller_inst/o_wb_stall_d22_out
-    SLICE_X44Y3          FDSE                                         r  u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_reg/D
+    SLICE_X58Y4          FDRE (Prop_fdre_C_Q)         0.456    -0.495 r  u_ddr3_top/ddr3_controller_inst/stage2_bank_reg[1]/Q
+                         net (fo=116, estimated)      1.051     0.556    u_ddr3_top/ddr3_controller_inst/stage2_bank[1]
+    SLICE_X57Y8          LUT6 (Prop_lut6_I2_O)        0.124     0.680 r  u_ddr3_top/ddr3_controller_inst/o_phy_cmd[23]_INST_0_i_98/O
+                         net (fo=1, routed)           0.000     0.680    u_ddr3_top/ddr3_controller_inst/o_phy_cmd[23]_INST_0_i_98_n_0
+    SLICE_X57Y8          MUXF7 (Prop_muxf7_I1_O)      0.217     0.897 r  u_ddr3_top/ddr3_controller_inst/o_phy_cmd[23]_INST_0_i_59/O
+                         net (fo=2, estimated)        1.034     1.931    u_ddr3_top/ddr3_controller_inst/o_phy_cmd[23]_INST_0_i_59_n_0
+    SLICE_X58Y1          LUT6 (Prop_lut6_I1_O)        0.299     2.230 r  u_ddr3_top/ddr3_controller_inst/o_phy_cmd[23]_INST_0_i_41/O
+                         net (fo=1, routed)           0.000     2.230    u_ddr3_top/ddr3_controller_inst/o_phy_cmd[23]_INST_0_i_41_n_0
+    SLICE_X58Y1          CARRY4 (Prop_carry4_S[3]_CO[3])
+                                                      0.401     2.631 r  u_ddr3_top/ddr3_controller_inst/o_phy_cmd[23]_INST_0_i_21/CO[3]
+                         net (fo=1, estimated)        0.000     2.631    u_ddr3_top/ddr3_controller_inst/o_phy_cmd[23]_INST_0_i_21_n_0
+    SLICE_X58Y2          CARRY4 (Prop_carry4_CI_CO[0])
+                                                      0.271     2.902 f  u_ddr3_top/ddr3_controller_inst/o_phy_cmd[23]_INST_0_i_10/CO[0]
+                         net (fo=3, estimated)        0.412     3.314    u_ddr3_top/ddr3_controller_inst/precharge_slot_busy2
+    SLICE_X57Y2          LUT2 (Prop_lut2_I1_O)        0.373     3.687 f  u_ddr3_top/ddr3_controller_inst/o_phy_cmd[92]_INST_0_i_2/O
+                         net (fo=59, estimated)       0.641     4.328    u_ddr3_top/ddr3_controller_inst/o_phy_cmd[92]_INST_0_i_2_n_0
+    SLICE_X63Y3          LUT6 (Prop_lut6_I1_O)        0.124     4.452 r  u_ddr3_top/ddr3_controller_inst/delay_before_precharge_counter_q[5][1]_i_2/O
+                         net (fo=18, estimated)       1.128     5.580    u_ddr3_top/ddr3_controller_inst/delay_before_precharge_counter_q[5][1]_i_2_n_0
+    SLICE_X51Y8          LUT5 (Prop_lut5_I1_O)        0.118     5.698 r  u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_i_148/O
+                         net (fo=2, estimated)        0.453     6.151    u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_i_148_n_0
+    SLICE_X51Y5          LUT6 (Prop_lut6_I3_O)        0.326     6.477 r  u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_i_96/O
+                         net (fo=1, routed)           0.000     6.477    u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_i_96_n_0
+    SLICE_X51Y5          MUXF7 (Prop_muxf7_I1_O)      0.217     6.694 r  u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_reg_i_65/O
+                         net (fo=1, estimated)        0.992     7.686    u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_reg_i_65_n_0
+    SLICE_X58Y3          LUT6 (Prop_lut6_I3_O)        0.299     7.985 r  u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_i_50/O
+                         net (fo=1, routed)           0.000     7.985    u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_i_50_n_0
+    SLICE_X58Y3          CARRY4 (Prop_carry4_S[3]_CO[3])
+                                                      0.401     8.386 r  u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_reg_i_29/CO[3]
+                         net (fo=1, estimated)        0.000     8.386    u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_reg_i_29_n_0
+    SLICE_X58Y4          CARRY4 (Prop_carry4_CI_CO[0])
+                                                      0.271     8.657 f  u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_reg_i_12/CO[0]
+                         net (fo=1, estimated)        0.300     8.957    u_ddr3_top/ddr3_controller_inst/stage2_stall2
+    SLICE_X59Y6          LUT6 (Prop_lut6_I5_O)        0.373     9.330 r  u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_i_2/O
+                         net (fo=1, estimated)        0.558     9.888    u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_i_2_n_0
+    SLICE_X58Y7          LUT6 (Prop_lut6_I0_O)        0.124    10.012 r  u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_i_1/O
+                         net (fo=5, estimated)        0.331    10.343    u_ddr3_top/ddr3_controller_inst/o_wb_stall_d22_out
+    SLICE_X58Y8          LUT6 (Prop_lut6_I2_O)        0.124    10.467 r  u_ddr3_top/ddr3_controller_inst/o_wb_stall_rep_i_1/O
+                         net (fo=1, routed)           0.000    10.467    u_ddr3_top/ddr3_controller_inst/o_wb_stall_rep_i_1_n_0
+    SLICE_X58Y8          FDRE                                         r  u_ddr3_top/ddr3_controller_inst/o_wb_stall_reg_rep/D
   -------------------------------------------------------------------    -------------------
 
                          (clock clk_controller_clk_wiz_0 rise edge)
@@ -89,16 +97,16 @@ Slack (MET) :             0.515ns  (required time - arrival time)
                                                      -7.279     7.263 r  u_ddr_clk_wiz/mmcm_adv_inst/CLKOUT0
                          net (fo=1, estimated)        1.583     8.846    u_ddr_clk_wiz/clk_controller_clk_wiz_0
     BUFGCTRL_X0Y0        BUFG (Prop_bufg_I_O)         0.091     8.937 r  u_ddr_clk_wiz/clkout1_buf/O
-                         net (fo=2684, estimated)     1.451    10.388    u_ddr3_top/ddr3_controller_inst/i_controller_clk
-    SLICE_X44Y3          FDSE                                         r  u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_reg/C
-                         clock pessimism              0.553    10.940    
-                         clock uncertainty           -0.076    10.865    
-    SLICE_X44Y3          FDSE (Setup_fdse_C_D)       -0.061    10.804    u_ddr3_top/ddr3_controller_inst/o_wb_stall_q_reg
+                         net (fo=2684, estimated)     1.520    10.457    u_ddr3_top/ddr3_controller_inst/i_controller_clk
+    SLICE_X58Y8          FDRE                                         r  u_ddr3_top/ddr3_controller_inst/o_wb_stall_reg_rep/C
+                         clock pessimism              0.567    11.023    
+                         clock uncertainty           -0.076    10.948    
+    SLICE_X58Y8          FDRE (Setup_fdre_C_D)        0.029    10.977    u_ddr3_top/ddr3_controller_inst/o_wb_stall_reg_rep
   -------------------------------------------------------------------
-                         required time                         10.804    
-                         arrival time                         -10.288    
+                         required time                         10.977    
+                         arrival time                         -10.467    
   -------------------------------------------------------------------
-                         slack                                  0.515    
+                         slack                                  0.509    
 
 
 

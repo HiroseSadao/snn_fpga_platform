@@ -366,7 +366,6 @@ module top_level(
     logic        sd_use_sector_limit;
     logic        sd_copy_raw1_mode;
     logic [31:0] sd_copy_dest_base_word;
-    (* ram_style = "block" *) logic [7:0]  raw_image0_u8 [0:N_IN-1];
     logic        raw_image0_valid;
     logic [31:0] raw_num_images;
     logic [31:0] raw_bytes_per_image;
@@ -374,6 +373,9 @@ module top_level(
     logic [31:0] raw_image0_sum_u8;
     logic [9:0]  raw_image0_rd_addr;
     logic [7:0]  raw_image0_rd_data;
+    logic        raw_image0_wr_en;
+    logic [9:0]  raw_image0_wr_addr;
+    logic [7:0]  raw_image0_wr_data;
     logic        imgload_active;
     logic [31:0] imgload_addr_word;
     logic [1:0]  imgload_lane;
@@ -460,10 +462,12 @@ module top_level(
     logic        train_xexc_cache_valid;
     (* ram_style = "block" *) logic [31:0] train_xin_cache [0:N_IN-1];
     (* ram_style = "block" *) logic [31:0] train_xexc_cache [0:N_NEURONS-1];
-    (* ram_style = "block" *) logic [31:0] train_label_spike_sum [0:(10*N_NEURONS)-1];
     (* ram_style = "block" *) logic [31:0] train_label_count [0:9];
     logic [9:0]  train_label_sum_rd_addr;
     logic [31:0] train_label_sum_rd_data;
+    logic        train_label_sum_wr_en;
+    logic [9:0]  train_label_sum_wr_addr;
+    logic [31:0] train_label_sum_wr_data;
     logic [3:0]  train_label_count_rd_addr;
     logic [31:0] train_label_count_rd_data;
 
@@ -505,9 +509,11 @@ module top_level(
     logic [31:0] infer_total_spikes;
     logic [31:0] infer_rng_state;
     logic [31:0] infer_poisson_num_const_cfg;
-    (* ram_style = "block" *) logic [10:0] infer_poisson_thresh [0:N_IN-1];
     logic [9:0]  infer_poisson_thresh_rd_addr;
     logic [10:0] infer_poisson_thresh_rd_data;
+    logic        infer_poisson_thresh_wr_en;
+    logic [9:0]  infer_poisson_thresh_wr_addr;
+    logic [10:0] infer_poisson_thresh_wr_data;
     (* ram_style = "block" *) logic [9:0]  infer_pre_active_list [0:N_IN-1];
     logic [9:0]  infer_pre_active_count;
     logic [9:0]  infer_pre_rd_addr;
@@ -596,13 +602,139 @@ module top_level(
     always_ff @(posedge core_clk) begin
         infer_w_rd_data <= infer_w_q16[infer_w_rd_addr];
         infer_pre_rd_data <= infer_pre_active_list[infer_pre_rd_addr];
-        raw_image0_rd_data <= raw_image0_u8[raw_image0_rd_addr];
         infer_spike_count_rd_data <= infer_spike_count[infer_spike_count_rd_addr];
         train_inj_spike_count_snap_rd_data <= train_inj_spike_count_snap[infer_spike_count_rd_addr];
-        train_label_sum_rd_data <= train_label_spike_sum[train_label_sum_rd_addr];
         train_label_count_rd_data <= train_label_count[train_label_count_rd_addr];
-        infer_poisson_thresh_rd_data <= infer_poisson_thresh[infer_poisson_thresh_rd_addr];
     end
+
+    xpm_memory_sdpram #(
+        .ADDR_WIDTH_A(10),
+        .ADDR_WIDTH_B(10),
+        .AUTO_SLEEP_TIME(0),
+        .BYTE_WRITE_WIDTH_A(8),
+        .CLOCKING_MODE("common_clock"),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE("none"),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("block"),
+        .MEMORY_SIZE(N_IN * 8),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_B(8),
+        .READ_LATENCY_B(1),
+        .READ_RESET_VALUE_B("0"),
+        .RST_MODE_A("SYNC"),
+        .RST_MODE_B("SYNC"),
+        .SIM_ASSERT_CHK(0),
+        .USE_EMBEDDED_CONSTRAINT(0),
+        .USE_MEM_INIT(0),
+        .WAKEUP_TIME("disable_sleep"),
+        .WRITE_DATA_WIDTH_A(8),
+        .WRITE_MODE_B("read_first")
+    ) u_raw_image0_mem (
+        .sleep          (1'b0),
+        .clka           (core_clk),
+        .ena            (raw_image0_wr_en),
+        .wea            (raw_image0_wr_en),
+        .addra          (raw_image0_wr_addr),
+        .dina           (raw_image0_wr_data),
+        .injectsbiterra (1'b0),
+        .injectdbiterra (1'b0),
+        .clkb           (core_clk),
+        .rstb           (btn[0]),
+        .enb            (1'b1),
+        .regceb         (1'b1),
+        .addrb          (raw_image0_rd_addr),
+        .doutb          (raw_image0_rd_data),
+        .sbiterrb       (),
+        .dbiterrb       ()
+    );
+
+    xpm_memory_sdpram #(
+        .ADDR_WIDTH_A(10),
+        .ADDR_WIDTH_B(10),
+        .AUTO_SLEEP_TIME(0),
+        .BYTE_WRITE_WIDTH_A(32),
+        .CLOCKING_MODE("common_clock"),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE("none"),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("block"),
+        .MEMORY_SIZE((10 * N_NEURONS) * 32),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_B(32),
+        .READ_LATENCY_B(1),
+        .READ_RESET_VALUE_B("0"),
+        .RST_MODE_A("SYNC"),
+        .RST_MODE_B("SYNC"),
+        .SIM_ASSERT_CHK(0),
+        .USE_EMBEDDED_CONSTRAINT(0),
+        .USE_MEM_INIT(0),
+        .WAKEUP_TIME("disable_sleep"),
+        .WRITE_DATA_WIDTH_A(32),
+        .WRITE_MODE_B("read_first")
+    ) u_train_label_sum_mem (
+        .sleep          (1'b0),
+        .clka           (core_clk),
+        .ena            (train_label_sum_wr_en),
+        .wea            (train_label_sum_wr_en),
+        .addra          (train_label_sum_wr_addr),
+        .dina           (train_label_sum_wr_data),
+        .injectsbiterra (1'b0),
+        .injectdbiterra (1'b0),
+        .clkb           (core_clk),
+        .rstb           (btn[0]),
+        .enb            (1'b1),
+        .regceb         (1'b1),
+        .addrb          (train_label_sum_rd_addr),
+        .doutb          (train_label_sum_rd_data),
+        .sbiterrb       (),
+        .dbiterrb       ()
+    );
+
+    xpm_memory_sdpram #(
+        .ADDR_WIDTH_A(10),
+        .ADDR_WIDTH_B(10),
+        .AUTO_SLEEP_TIME(0),
+        .BYTE_WRITE_WIDTH_A(11),
+        .CLOCKING_MODE("common_clock"),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE("none"),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("block"),
+        .MEMORY_SIZE(N_IN * 11),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_B(11),
+        .READ_LATENCY_B(1),
+        .READ_RESET_VALUE_B("0"),
+        .RST_MODE_A("SYNC"),
+        .RST_MODE_B("SYNC"),
+        .SIM_ASSERT_CHK(0),
+        .USE_EMBEDDED_CONSTRAINT(0),
+        .USE_MEM_INIT(0),
+        .WAKEUP_TIME("disable_sleep"),
+        .WRITE_DATA_WIDTH_A(11),
+        .WRITE_MODE_B("read_first")
+    ) u_infer_poisson_thresh_mem (
+        .sleep          (1'b0),
+        .clka           (core_clk),
+        .ena            (infer_poisson_thresh_wr_en),
+        .wea            (infer_poisson_thresh_wr_en),
+        .addra          (infer_poisson_thresh_wr_addr),
+        .dina           (infer_poisson_thresh_wr_data),
+        .injectsbiterra (1'b0),
+        .injectdbiterra (1'b0),
+        .clkb           (core_clk),
+        .rstb           (btn[0]),
+        .enb            (1'b1),
+        .regceb         (1'b1),
+        .addrb          (infer_poisson_thresh_rd_addr),
+        .doutb          (infer_poisson_thresh_rd_data),
+        .sbiterrb       (),
+        .dbiterrb       ()
+    );
 
     uart_rx #(
         .CLKS_PER_BIT(CLKS_PER_BIT)
@@ -1008,6 +1140,9 @@ module top_level(
             raw_image0_capture_idx <= 10'd0;
             raw_image0_sum_u8   <= 32'd0;
             raw_image0_rd_addr  <= 10'd0;
+            raw_image0_wr_en    <= 1'b0;
+            raw_image0_wr_addr  <= 10'd0;
+            raw_image0_wr_data  <= 8'd0;
             imgload_active      <= 1'b0;
             imgload_addr_word    <= 32'd0;
             imgload_lane        <= 2'd0;
@@ -1111,7 +1246,13 @@ module top_level(
             infer_spike_count_rd_addr <= 7'd0;
             train_label_sum_rd_addr <= 10'd0;
             train_label_count_rd_addr <= 4'd0;
+            train_label_sum_wr_en <= 1'b0;
+            train_label_sum_wr_addr <= 10'd0;
+            train_label_sum_wr_data <= 32'd0;
             infer_poisson_thresh_rd_addr <= 10'd0;
+            infer_poisson_thresh_wr_en <= 1'b0;
+            infer_poisson_thresh_wr_addr <= 10'd0;
+            infer_poisson_thresh_wr_data <= 11'd0;
             infer_pre_active_count <= 10'd0;
             infer_last_active_input_idx <= 10'd0;
             for (int i = 0; i < N_NEURONS; i++) begin
@@ -1129,6 +1270,9 @@ module top_level(
             sd_wr <= 1'b0;
             infer_div_valid <= 1'b0;
             train_stdp_div_valid <= 1'b0;
+            raw_image0_wr_en <= 1'b0;
+            train_label_sum_wr_en <= 1'b0;
+            infer_poisson_thresh_wr_en <= 1'b0;
             ddr_rsp_toggle_core_sync1 <= ddr_rsp_toggle_ddr;
             ddr_rsp_toggle_core_sync2 <= ddr_rsp_toggle_core_sync1;
 
@@ -1479,7 +1623,9 @@ module top_level(
 
             if (imgload_active && imgload_word_valid && !response_ready) begin
                 if (imgload_byte_idx < imgload_total_bytes) begin
-                    raw_image0_u8[imgload_byte_idx] <= lane_byte_sel(imgload_word_data, imgload_word_lane);
+                    raw_image0_wr_en   <= 1'b1;
+                    raw_image0_wr_addr <= imgload_byte_idx;
+                    raw_image0_wr_data <= lane_byte_sel(imgload_word_data, imgload_word_lane);
                     imgload_sum_u8_accum <= imgload_sum_u8_accum + {24'd0, lane_byte_sel(imgload_word_data, imgload_word_lane)};
                     if ((imgload_byte_idx + 10'd1) >= imgload_total_bytes) begin
                         imgload_active <= 1'b0;
@@ -1946,6 +2092,7 @@ module top_level(
                             infer_total_spikes <= 32'd0;
                             infer_rng_state    <= 32'h12345678;
                             infer_pre_active_count <= 10'd0;
+                            raw_image0_rd_addr <= 10'd0;
                             infer_skip_init_clear <= 1'b0;
                             infer_force_no_input  <= 1'b0;
                             train_chunk_state <= TCK_INFER_WAIT;
@@ -2026,6 +2173,7 @@ module top_level(
                             infer_total_spikes <= 32'd0;
                             infer_rng_state    <= 32'h12345678;
                             infer_pre_active_count <= 10'd0;
+                            infer_poisson_thresh_rd_addr <= 10'd0;
                             infer_skip_init_clear <= 1'b1;
                             infer_force_no_input  <= 1'b1;
                             train_chunk_state <= TCK_BLANK_INFER_WAIT;
@@ -2251,7 +2399,9 @@ module top_level(
                 !ddr_req_pending_core && !train_trace_active && !train_stdp_active && !train_gen_active && !train_chunk_active && !infer_active) begin
                 case (train_label_stats_state)
                     TLS_RESET_SUM: begin
-                        train_label_spike_sum[train_label_stats_idx] <= 32'd0;
+                        train_label_sum_wr_en   <= 1'b1;
+                        train_label_sum_wr_addr <= train_label_stats_idx;
+                        train_label_sum_wr_data <= 32'd0;
                         if (train_label_stats_idx == ((10*N_NEURONS)-1)) begin
                             train_label_stats_idx <= 10'd0;
                             train_label_stats_state <= TLS_RESET_COUNT;
@@ -2275,8 +2425,9 @@ module top_level(
                         train_label_stats_state <= TLS_ACCUM_WRITE;
                     end
                     TLS_ACCUM_WRITE: begin
-                        train_label_spike_sum[train_label_stats_base_idx + train_label_stats_idx]
-                            <= train_label_sum_rd_data + {16'd0, train_inj_spike_count_snap[train_label_stats_idx[6:0]]};
+                        train_label_sum_wr_en   <= 1'b1;
+                        train_label_sum_wr_addr <= train_label_stats_base_idx + train_label_stats_idx;
+                        train_label_sum_wr_data <= train_label_sum_rd_data + {16'd0, train_inj_spike_count_snap[train_label_stats_idx[6:0]]};
                         if (train_label_stats_idx == (N_NEURONS-1)) begin
                             train_label_count[train_label_stats_label] <= train_label_count[train_label_stats_label] + 32'd1;
                             train_label_stats_state <= TLS_DONE;
@@ -2790,7 +2941,7 @@ module top_level(
                     INFER_PREP_DIV_START: begin
                         if (infer_prep_idx < N_IN) begin
                             if (!infer_div_busy) begin
-                                infer_dividend <= infer_poisson_num_const_cfg * {24'd0, raw_image0_u8[infer_prep_idx]};
+                                infer_dividend <= infer_poisson_num_const_cfg * {24'd0, raw_image0_rd_data};
                                 infer_divisor  <= raw_image0_sum_u8;
                                 infer_div_valid <= 1'b1;
                                 infer_state <= INFER_PREP_DIV_WAIT;
@@ -2801,20 +2952,33 @@ module top_level(
 	                            infer_neuron_idx <= 7'd0;
 	                            infer_accum <= 32'sd0;
                                 infer_accum_weight_phase <= 3'd0;
+                                infer_poisson_thresh_rd_addr <= 10'd0;
                         end
                     end
 
                     INFER_PREP_DIV_WAIT: begin
                         if (infer_div_out_valid) begin
                             if (infer_div_q[31:11] != 0) begin
-                                infer_poisson_thresh[infer_prep_idx] <= RNG_MAX;
+                                infer_poisson_thresh_wr_data <= RNG_MAX;
                             end else if (infer_div_q[10:0] > RNG_MAX) begin
-                                infer_poisson_thresh[infer_prep_idx] <= RNG_MAX;
+                                infer_poisson_thresh_wr_data <= RNG_MAX;
                             end else begin
-                                infer_poisson_thresh[infer_prep_idx] <= infer_div_q[10:0];
+                                infer_poisson_thresh_wr_data <= infer_div_q[10:0];
                             end
-                            infer_prep_idx <= infer_prep_idx + 10'd1;
-                            infer_state <= INFER_PREP_DIV_START;
+                            infer_poisson_thresh_wr_en <= 1'b1;
+                            infer_poisson_thresh_wr_addr <= infer_prep_idx;
+                            if (infer_prep_idx == (N_IN - 1)) begin
+	                                infer_state <= INFER_GEN_INPUT_SPIKES;
+	                                infer_input_idx <= 10'd0;
+	                                infer_neuron_idx <= 7'd0;
+	                                infer_accum <= 32'sd0;
+                                infer_accum_weight_phase <= 3'd0;
+                                infer_poisson_thresh_rd_addr <= 10'd0;
+                            end else begin
+                                infer_prep_idx <= infer_prep_idx + 10'd1;
+                                raw_image0_rd_addr <= infer_prep_idx + 10'd1;
+                                infer_state <= INFER_PREP_DIV_START;
+                            end
                         end else if (infer_div_err) begin
                             infer_active <= 1'b0;
                             infer_state <= INFER_IDLE;
@@ -2832,7 +2996,7 @@ module top_level(
                         if (infer_force_no_input) begin
                             spike_in_now = 1'b0;
                         end else begin
-                            spike_in_now = (rng_next[31:21] < infer_poisson_thresh[infer_input_idx]);
+                            spike_in_now = (rng_next[31:21] < infer_poisson_thresh_rd_data);
                         end
                         infer_rng_state <= rng_next;
                         infer_input_spike[infer_input_idx] <= spike_in_now;
@@ -2853,6 +3017,7 @@ module top_level(
                             infer_state <= INFER_ACCUM_NEURON;
                         end else begin
                             infer_input_idx <= infer_input_idx + 10'd1;
+                            infer_poisson_thresh_rd_addr <= infer_input_idx + 10'd1;
                         end
                     end
 
