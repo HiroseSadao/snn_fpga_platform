@@ -757,42 +757,22 @@ def fpga_ddr_zero32(ser: serial.Serial, base_addr_word: int, nwords: int) -> int
 
 
 def load_mnist() -> tuple[np.ndarray, np.ndarray]:
-    try:
-        from snn_cuda.import_MNIST_raw import load_mnist as raw_loader
-        return raw_loader()
-    except Exception:
-        pass
+    """Load MNIST through the exact same loader used by import_MNIST_raw.py."""
+    script_dir = Path(__file__).resolve().parent
+    snn_dir = script_dir.parent
+    repo_dir = snn_dir.parent
+    if str(snn_dir) not in sys.path:
+        sys.path.insert(0, str(snn_dir))
+    if str(repo_dir) not in sys.path:
+        sys.path.insert(0, str(repo_dir))
     try:
         from import_MNIST_raw import load_mnist as raw_loader_local
-        return raw_loader_local()
-    except Exception:
-        pass
-
-    try:
-        from torchvision import datasets
-        from torchvision import transforms
-
-        ds = datasets.MNIST(
-            root="./data",
-            train=True,
-            download=True,
-            transform=transforms.ToTensor(),
-        )
-        images = np.stack([np.array(ds[i][0]).squeeze() for i in range(len(ds))])
-        labels = np.array([ds[i][1] for i in range(len(ds))], dtype=np.int64)
-        return images, labels
-    except Exception:
-        pass
-
-    try:
-        from tensorflow.keras.datasets import mnist
-
-        (x_train, y_train), _ = mnist.load_data()
-        return x_train, y_train
+        images, labels = raw_loader_local()
+        return np.asarray(images), np.asarray(labels, dtype=np.int64)
     except Exception as exc:
         raise RuntimeError(
-            "MNIST loading failed. Install torchvision or tensorflow, "
-            "or provide your own MNIST loader."
+            "MNIST loading failed via import_MNIST_raw.py::load_mnist(). "
+            "Ensure snn_cuda/import_MNIST_raw.py and its dependencies are available."
         ) from exc
 
 
@@ -1720,60 +1700,122 @@ def fpga_phase4_build_assignments_from_raw1(
     print("Training-side aggregation/assignment build completed. Next step is FPGA-side test prediction label return.")
 
 
-def fpga_train_phase4_and_mine_replay_selfcheck(
+def fpga_train_infer_e2e_compare(
     ser: serial.Serial,
     args: argparse.Namespace,
 ) -> None:
-    """One-command next-step verification: phase4 coarse flow + mine replay weight-kernel selfcheck."""
+    """Train+infer style compact E2E comparison against use_fpga_calc.py reference model.
+
+    Flow:
+    - Run phase4 training for N samples on FPGA (with streamed image load),
+    - Compare per-sample inj/blank totals to Python coarse phase4 reference,
+    - Accumulate label stats on FPGA and in Python reference,
+    - Compare final assignment vectors.
+    """
+    if str(args.image_source) != "fpga":
+        raise ValueError("--train-infer-e2e-compare currently requires --image-source fpga")
+    if tqdm is None:
+        raise RuntimeError("tqdm is required for --train-infer-e2e-compare (pip install tqdm)")
+
+    caps = fpga_train_query_caps(ser)
+    if (caps & (1 << 14)) == 0:
+        raise RuntimeError(f"train/infer e2e compare requires phase4-capable training build, caps=0x{caps:08X}")
+
+    n_samples = max(1, int(args.train_e2e_samples))
+    inj_steps = max(1, int(args.chunk_nsteps))
+    tile_rows = max(1, int(args.train_tile_rows))
+    start_lba = int(args.start_lba)
+    timeout_sec = float(args.timeout)
+    seed = int(args.seed)
+    max_fr_start = max(1, int(args.train_retry_max_fr_start))
+    max_fr_step = max(1, int(args.train_retry_max_fr_step))
+    max_fr_limit = max(1, int(args.train_retry_max_fr_limit))
+    min_inj_spikes = max(0, int(args.train_retry_min_inj_spikes))
+    strict = bool(getattr(args, "train_e2e_strict", False))
+
+    _, labels_all = load_mnist()
+    if n_samples > int(len(labels_all)):
+        raise ValueError(f"train_e2e_samples={n_samples} exceeds dataset size={int(len(labels_all))}")
+
     print(
-        "Running mine one-sample replay weight selfcheck first "
-        "(kernel-level trace/STDP verification), then phase4 coarse verify..."
+        "E2E compare start: "
+        f"samples={n_samples}, inj_steps={inj_steps}, tile_rows={tile_rows}, "
+        f"retry=({max_fr_start},{max_fr_step},{max_fr_limit}), min_inj={min_inj_spikes}"
     )
-    # Replay selfcheck needs heavy DDR read/write traffic. Running it after phase4 has been
-    # observed to hang on some builds/boards (first DDR_ZERO32 after phase4). Run replay first
-    # so this integrated command remains usable while we keep investigating phase4 post-return
-    # DDR-path recovery in HDL.
-    replay_args = argparse.Namespace(**vars(args))
-    replay_args.image_source = "mnist"
-    if int(getattr(replay_args, "train_verify_nrows", 0)) <= 0:
-        replay_args.train_verify_row0 = 0
-        replay_args.train_verify_nrows = 4
-        print(
-            "Replay selfcheck scope reduced for runtime: "
-            "defaulting to rows 0..3 (override with --train-verify-row0/--train-verify-nrows)."
+
+    fpga_train_label_stats_reset(ser)
+    py_label_spike_sums = np.zeros((10, N_NEURONS), dtype=np.int64)
+    py_label_counts = np.zeros((10,), dtype=np.int64)
+
+    mismatch_inj_blank = 0
+    pbar = tqdm(total=n_samples, desc="e2e train+compare", unit="img", miniters=1, leave=True)
+    for sample_idx in range(n_samples):
+        label = int(labels_all[sample_idx])
+        image_u8, _ = read_mnist_image_u8(sample_idx)
+
+        py_accepted_max_fr, _, py_inj, py_blank = run_mine_style_python_phase4_retry_stats_with_image(
+            image_u8,
+            inj_steps=inj_steps,
+            blank_steps=150,
+            seed=seed,
+            max_fr_start=max_fr_start,
+            max_fr_step=max_fr_step,
+            max_fr_limit=max_fr_limit,
+            min_inj_spikes=min_inj_spikes,
         )
-    fpga_train_mine_one_sample_replay_selfcheck(
-        ser,
-        replay_args,
-        seed=int(args.train_mine_seed),
-        tile_rows=max(1, int(args.train_tile_rows)),
-        verify_row0=max(0, int(replay_args.train_verify_row0)),
-        verify_nrows=(None if int(replay_args.train_verify_nrows) <= 0 else int(replay_args.train_verify_nrows)),
-        verify_mode=str(args.train_verify_mode),
-        verify_sample_cols=max(1, int(args.train_verify_sample_cols)),
-    )
-    print("Mine replay selfcheck passed. Running phase4 coarse verify next...")
-    fpga_train_run_sample_phase4_verify_stats(
-        ser,
-        sample_idx=int(args.sample_idx),
-        inj_steps=max(1, int(args.chunk_nsteps)),
-        tile_rows=max(1, int(args.train_tile_rows)),
-        start_lba=int(args.start_lba),
-        timeout_sec=float(args.timeout),
-        image_source=str(args.image_source),
-        raw_bin=args.raw_bin,
-        seed=int(args.seed),
-        max_fr_start=max(1, int(args.train_retry_max_fr_start)),
-        max_fr_step=max(1, int(args.train_retry_max_fr_step)),
-        max_fr_limit=max(1, int(args.train_retry_max_fr_limit)),
-        min_inj_spikes=max(0, int(args.train_retry_min_inj_spikes)),
-    )
-    # Optional light probe after phase4 to make post-phase4 UART recovery issues explicit.
-    try:
-        send_request(ser, OP_ADD_I32, [0, 0], response_timeout=1.0, transient_retry_max=0)
-        print("Post-phase4 UART probe: ADD request responded.")
-    except Exception as exc:
-        print(f"Post-phase4 UART probe warning: no response after phase4 ({exc})")
+        py_thresh = build_poisson_thresholds_u11_with_max_fr(image_u8, py_accepted_max_fr)
+        py_counts = run_mine_style_python_poisson_with_thresholds(
+            thresholds=py_thresh,
+            n_steps=inj_steps,
+            seed=seed,
+        )
+        py_label_spike_sums[label, :] += np.asarray(py_counts, dtype=np.int64)
+        py_label_counts[label] += 1
+
+        prepare_fpga_sample_image_via_streamed_load(
+            ser,
+            sample_idx=sample_idx,
+            start_lba=start_lba,
+            timeout_sec=timeout_sec,
+            verbose=False,
+        )
+        ret = fpga_train_run_sample_phase4(
+            ser,
+            inj_steps=inj_steps,
+            tile_rows=tile_rows,
+        )
+        fpga_inj = int(ret) & 0xFFFF
+        fpga_blank = (int(ret) >> 16) & 0xFFFF
+        fpga_train_label_stats_accum(ser, label)
+
+        if (fpga_inj != int(py_inj)) or (fpga_blank != int(py_blank)):
+            mismatch_inj_blank += 1
+            print(
+                f"[sample {sample_idx}] phase4 mismatch: "
+                f"inj py={int(py_inj)} fpga={fpga_inj}, "
+                f"blank py={int(py_blank)} fpga={fpga_blank}"
+            )
+        pbar.update(1)
+    pbar.close()
+
+    fpga_sums, fpga_counts = fpga_read_train_label_stats_all(ser)
+    fpga_assign, _ = assign_labels_from_aggregated_stats(fpga_sums, fpga_counts, rates_prev=None, alpha=1.0)
+    py_assign, _ = assign_labels_from_aggregated_stats(py_label_spike_sums, py_label_counts, rates_prev=None, alpha=1.0)
+    assignment_mismatch = int(np.sum(fpga_assign.astype(np.int64) != py_assign.astype(np.int64)))
+    max_sum_abs_diff = int(np.max(np.abs(fpga_sums.astype(np.int64) - py_label_spike_sums.astype(np.int64))))
+    max_count_abs_diff = int(np.max(np.abs(fpga_counts.astype(np.int64) - py_label_counts.astype(np.int64))))
+
+    print("E2E compare summary:")
+    print(f"  phase4 inj/blank mismatched samples = {mismatch_inj_blank}/{n_samples}")
+    print(f"  max|label_spike_sum_fpga - label_spike_sum_py| = {max_sum_abs_diff}")
+    print(f"  max|label_count_fpga - label_count_py| = {max_count_abs_diff}")
+    print(f"  assignment mismatch count = {assignment_mismatch}/{N_NEURONS}")
+
+    if strict and (mismatch_inj_blank != 0 or assignment_mismatch != 0):
+        raise RuntimeError(
+            "train/infer e2e compare strict failed: "
+            f"inj_blank_mismatch={mismatch_inj_blank}, assignment_mismatch={assignment_mismatch}"
+        )
 
 
 def fpga_train_run_sample_phase3_retry_coarse(
@@ -3124,94 +3166,9 @@ def parse_args() -> argparse.Namespace:
         help="Python reference model for spike-count comparison (default: mine)",
     )
     parser.add_argument(
-        "--print-train-ddr-map",
-        action="store_true",
-        help="print proposed training DDR logical memory map (Step1) and continue",
-    )
-    parser.add_argument(
-        "--train-kernel-selfcheck",
-        action="store_true",
-        help="run Python self-check for trace/STDP tile kernels (Step2/Step3) and exit",
-    )
-    parser.add_argument(
-        "--train-trace-fpga-selfcheck",
-        action="store_true",
-        help="run FPGA TRACE_UPDATE kernel self-check using DDR preload/readback and exit",
-    )
-    parser.add_argument(
-        "--train-stdp-fpga-selfcheck",
-        action="store_true",
-        help="run FPGA STDP_UPDATE_TILE kernel self-check (phase1, no row normalization) and exit",
-    )
-    parser.add_argument(
-        "--train-fpga-selfcheck-all",
-        action="store_true",
-        help="run FPGA trace+STDP kernel self-checks and exit",
-    )
-    parser.add_argument(
-        "--train-one-sample-e2e-selfcheck",
-        action="store_true",
-        help="run a small end-to-end training kernel-chain selfcheck (trace loop + STDP tile) and exit",
-    )
-    parser.add_argument(
-        "--train-mine-one-sample-replay-selfcheck",
-        action="store_true",
-        help="run a real mine.py one-sample replay selfcheck (aggregated A/B_T -> FPGA STDP tiles) and exit",
-    )
-    parser.add_argument(
-        "--train-run-chunk-phase0",
-        action="store_true",
-        help="run phase0 coarse-grained FPGA train chunk (repeats STDP all-rows on current DDR-resident buffers) and exit",
-    )
-    parser.add_argument(
-        "--train-run-chunk-phase1",
-        action="store_true",
-        help="run phase1 coarse-grained FPGA train chunk (internal synthetic trace loop + one STDP batch) and exit",
-    )
-    parser.add_argument(
-        "--train-run-chunk-phase2",
-        action="store_true",
-        help="run phase2 coarse-grained FPGA train chunk (infer + synthetic trace loop + one STDP batch) and exit",
-    )
-    parser.add_argument(
-        "--train-run-chunk-phase2-verify",
-        action="store_true",
-        help="compare standalone inference vs TRAIN_RUN_CHUNK phase2 using final infer statistics only",
-    )
-    parser.add_argument(
-        "--train-run-sample-phase3",
-        action="store_true",
-        help="run phase3 coarse-grained FPGA sample flow (infer inj + synthetic trace/STDP + infer blank) and exit",
-    )
-    parser.add_argument(
-        "--train-run-sample-phase3-verify",
-        action="store_true",
-        help="compare phase3 inj/blank spike totals against a Python mine-style simple reference",
-    )
-    parser.add_argument(
         "--train-run-sample-phase4",
         action="store_true",
         help="run phase4 coarse-grained FPGA sample flow (in-FPGA max_fr retry + synthetic trace/STDP + blank) and exit",
-    )
-    parser.add_argument(
-        "--train-run-sample-phase4-inj-snapshot-verify",
-        action="store_true",
-        help="run phase4 and verify inj-side per-neuron spike-count snapshot sum matches returned inj_total",
-    )
-    parser.add_argument(
-        "--train-label-stats-one-sample-verify",
-        action="store_true",
-        help="reset FPGA label stats, run one phase4 sample, accumulate by MNIST label, and verify aggregated row/count",
-    )
-    parser.add_argument(
-        "--train-run-sample-phase4-verify",
-        action="store_true",
-        help="compare phase4 inj/blank spike totals against a Python mine-style coarse-retry reference",
-    )
-    parser.add_argument(
-        "--train-phase4-replay-selfcheck",
-        action="store_true",
-        help="run phase4 coarse verify, then run mine one-sample replay weight selfcheck (kernel-level) in one command",
     )
     parser.add_argument(
         "--train-phase4-build-assignments",
@@ -3219,90 +3176,43 @@ def parse_args() -> argparse.Namespace:
         help="run FPGA phase4 over train split, aggregate label stats on FPGA, and build mine-style assignments in Python",
     )
     parser.add_argument(
-        "--train-run-sample-phase3-retry",
+        "--train-infer-e2e-compare",
         action="store_true",
-        help="mine-like coarse retry: infer-only probes with increasing max_fr, then run one phase3 sample",
+        help="run compact train+infer E2E compare for N samples (phase4 sample stats + assignment compare)",
     )
-    parser.add_argument("--chunk-nsamples", type=int, default=1, help="sample count for --train-run-chunk-phase0")
-    parser.add_argument("--chunk-nsteps", type=int, default=16, help="step count for --train-run-chunk-phase1/phase2")
+    parser.add_argument(
+        "--train-e2e-samples",
+        type=int,
+        default=20,
+        help="sample count for --train-infer-e2e-compare (default 20)",
+    )
+    parser.add_argument(
+        "--train-e2e-strict",
+        action="store_true",
+        help="fail --train-infer-e2e-compare on any sample-level phase4 mismatch or assignment mismatch",
+    )
+    parser.add_argument("--chunk-nsteps", type=int, default=16, help="step count for phase4 injection window")
     parser.add_argument("--train-epochs", type=int, default=30, help="epoch count for train phase4 assignment build (mine.py default=30)")
     parser.add_argument("--train-split-train", type=int, default=9000, help="number of train samples (default 9000)")
     parser.add_argument("--train-split-test", type=int, default=1000, help="number of test samples (default 1000)")
-    parser.add_argument("--infer-max-fr", type=int, default=32, help="runtime max_fr for Poisson threshold scaling (OP_SET_POISSON_MAX_FR)")
     parser.add_argument("--train-retry-max-fr-start", type=int, default=32, help="starting max_fr for coarse phase3 retry")
     parser.add_argument("--train-retry-max-fr-step", type=int, default=16, help="max_fr increment for coarse phase3 retry")
     parser.add_argument("--train-retry-max-fr-limit", type=int, default=256, help="max_fr upper limit for coarse phase3 retry")
     parser.add_argument("--train-retry-min-inj-spikes", type=int, default=5, help="acceptance threshold on inj_total_spikes for coarse phase3 retry")
-    parser.add_argument(
-        "--train-mine-seed",
-        type=int,
-        default=123,
-        help="seed for mine.py one-sample replay selfcheck (weight init + Poisson encoding)",
-    )
     parser.add_argument(
         "--train-tile-rows",
         type=int,
         default=10,
         help="row tile size for FPGA STDP_UPDATE_TILE loops in training selfchecks",
     )
-    parser.add_argument(
-        "--train-verify-row0",
-        type=int,
-        default=0,
-        help="start row for lightweight mine replay verification (default 0)",
-    )
-    parser.add_argument(
-        "--train-verify-nrows",
-        type=int,
-        default=0,
-        help="number of rows for lightweight mine replay verification (0 means all rows)",
-    )
-    parser.add_argument(
-        "--train-verify-mode",
-        choices=["exact", "sampled", "none"],
-        default="exact",
-        help="mine replay verification readback mode: exact rows, sampled columns, or none",
-    )
-    parser.add_argument(
-        "--train-verify-sample-cols",
-        type=int,
-        default=32,
-        help="number of sampled columns when --train-verify-mode sampled",
-    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    if args.train_kernel_selfcheck:
-        layout = build_train_ddr_layout()
-        print("Training DDR logical map (word addr):")
-        print(
-            f"  W={layout.base_w_q16}, A={layout.base_a_q16}, B_T={layout.base_bt_q16}, "
-            f"theta={layout.base_exc_theta}, v={layout.base_v_state}, "
-            f"delay={layout.base_delay_lines}, g_in={layout.base_g_in_state}, total={layout.total_words}"
-        )
-        selfcheck_training_kernels()
-        raise SystemExit(0)
-
-    if args.print_train_ddr_map:
-        layout = build_train_ddr_layout()
-        print("Training DDR logical map (word addr):")
-        print(f"  base_w_q16      = {layout.base_w_q16}")
-        print(f"  base_a_q16      = {layout.base_a_q16}")
-        print(f"  base_bt_q16     = {layout.base_bt_q16}")
-        print(f"  base_exc_theta  = {layout.base_exc_theta}")
-        print(f"  base_v_state    = {layout.base_v_state}")
-        print(f"  base_delay      = {layout.base_delay_lines}")
-        print(f"  base_g_in_state = {layout.base_g_in_state}")
-        print(f"  base_x_in_work  = {layout.base_x_in_work}")
-        print(f"  base_x_exc_work = {layout.base_x_exc_work}")
-        print(f"  base_prelist    = {layout.base_prelist_work}")
-        print(f"  total_words     = {layout.total_words}")
     if serial is None:
         raise RuntimeError(
-            "pyserial is not installed. Install it to use FPGA communication paths "
-            "(self-check mode works without pyserial)."
+            "pyserial is not installed. Install it to use FPGA communication paths."
         )
     print(f"Opening serial port {args.port}")
 
@@ -3342,25 +3252,9 @@ if __name__ == "__main__":
                 print(f"Train kernel caps retry failed: {exc2}")
 
         needs_reliable_link = any([
-            args.ddr_smoke,
-            args.train_trace_fpga_selfcheck,
-            args.train_stdp_fpga_selfcheck,
-            args.train_fpga_selfcheck_all,
-            args.train_one_sample_e2e_selfcheck,
-            args.train_run_chunk_phase0,
-            args.train_run_chunk_phase1,
-            args.train_run_chunk_phase2,
-            args.train_run_chunk_phase2_verify,
-            args.train_run_sample_phase3,
-            args.train_run_sample_phase3_verify,
             args.train_run_sample_phase4,
-            args.train_run_sample_phase4_inj_snapshot_verify,
-            args.train_label_stats_one_sample_verify,
-            args.train_run_sample_phase4_verify,
-            args.train_phase4_replay_selfcheck,
             args.train_phase4_build_assignments,
-            args.train_run_sample_phase3_retry,
-            args.train_mine_one_sample_replay_selfcheck,
+            args.train_infer_e2e_compare,
         ])
         if needs_reliable_link and not caps_ok:
             raise RuntimeError(
@@ -3368,101 +3262,6 @@ if __name__ == "__main__":
                 "This often happens if a prior run left the FPGA busy/stuck. "
                 "Reset/power-cycle the FPGA board and retry."
             )
-
-        if args.train_trace_fpga_selfcheck:
-            fpga_trace_update_kernel_selfcheck(ser)
-            raise SystemExit(0)
-        if args.train_stdp_fpga_selfcheck:
-            fpga_stdp_update_tile_selfcheck(ser)
-            raise SystemExit(0)
-        if args.train_fpga_selfcheck_all:
-            fpga_train_kernels_selfcheck_all(ser)
-            raise SystemExit(0)
-        if args.train_one_sample_e2e_selfcheck:
-            fpga_train_one_sample_e2e_selfcheck(ser)
-            raise SystemExit(0)
-        if args.train_run_chunk_phase0:
-            ret = fpga_train_run_chunk(
-                ser,
-                nsamples=max(1, int(args.chunk_nsamples)),
-                tile_rows=max(1, int(args.train_tile_rows)),
-            )
-            print(
-                "TRAIN_RUN_CHUNK phase0 completed: "
-                f"result=0x{(int(ret) & 0xFFFFFFFF):08X}, nsamples={max(1,int(args.chunk_nsamples))}, "
-                f"tile_rows={max(1,int(args.train_tile_rows))}"
-            )
-            raise SystemExit(0)
-        if args.train_run_chunk_phase1:
-            ret = fpga_train_run_chunk_phase1_trace_stdp(
-                ser,
-                nsteps=max(1, int(args.chunk_nsteps)),
-                tile_rows=max(1, int(args.train_tile_rows)),
-            )
-            print(
-                "TRAIN_RUN_CHUNK phase1 completed: "
-                f"result=0x{(int(ret) & 0xFFFFFFFF):08X}, nsteps={max(1,int(args.chunk_nsteps))}, "
-                f"tile_rows={max(1,int(args.train_tile_rows))}"
-            )
-            raise SystemExit(0)
-        if args.train_run_chunk_phase2:
-            if args.image_source != "fpga":
-                raise ValueError(
-                    "--train-run-chunk-phase2 currently requires --image-source fpga "
-                    "(it expects raw_image0_u8 to be loaded on FPGA from SD/DDR)"
-                )
-            prepare_fpga_sample_image_via_streamed_load(
-                ser,
-                sample_idx=int(args.sample_idx),
-                start_lba=int(args.start_lba),
-                timeout_sec=float(args.timeout),
-            )
-            ret = fpga_train_run_chunk_phase2_infer_trace_stdp(
-                ser,
-                nsteps=max(1, int(args.chunk_nsteps)),
-                tile_rows=max(1, int(args.train_tile_rows)),
-            )
-            print(
-                "TRAIN_RUN_CHUNK phase2 completed: "
-                f"result=0x{(int(ret) & 0xFFFFFFFF):08X}, nsteps={max(1,int(args.chunk_nsteps))}, "
-                f"tile_rows={max(1,int(args.train_tile_rows))}, infer_total_spikes={int(ret) & 0xFFFFFFFF}"
-            )
-            raise SystemExit(0)
-        if args.train_run_chunk_phase2_verify:
-            if args.image_source != "fpga":
-                raise ValueError("--train-run-chunk-phase2-verify currently requires --image-source fpga")
-            fpga_train_run_chunk_phase2_verify_infer_stats(
-                ser,
-                sample_idx=int(args.sample_idx),
-                nsteps=max(1, int(args.chunk_nsteps)),
-                tile_rows=max(1, int(args.train_tile_rows)),
-                start_lba=int(args.start_lba),
-                timeout_sec=float(args.timeout),
-            )
-            raise SystemExit(0)
-        if args.train_run_sample_phase3:
-            if args.image_source != "fpga":
-                raise ValueError("--train-run-sample-phase3 currently requires --image-source fpga")
-            prepare_fpga_sample_image_via_streamed_load(
-                ser,
-                sample_idx=int(args.sample_idx),
-                start_lba=int(args.start_lba),
-                timeout_sec=float(args.timeout),
-            )
-            ret = fpga_train_run_sample_phase3(
-                ser,
-                inj_steps=max(1, int(args.chunk_nsteps)),
-                tile_rows=max(1, int(args.train_tile_rows)),
-            )
-            inj_spikes = int(ret) & 0xFFFF
-            blank_spikes = (int(ret) >> 16) & 0xFFFF
-            print(
-                "TRAIN_RUN_SAMPLE_PHASE3 completed: "
-                f"result=0x{(int(ret) & 0xFFFFFFFF):08X}, inj_steps={max(1,int(args.chunk_nsteps))}, "
-                f"tile_rows={max(1,int(args.train_tile_rows))}, inj_total_spikes={inj_spikes}, "
-                f"blank_total_spikes={blank_spikes}"
-            )
-            raise SystemExit(0)
         if args.train_run_sample_phase4:
             if args.image_source != "fpga":
                 raise ValueError("--train-run-sample-phase4 currently requires --image-source fpga")
@@ -3492,306 +3291,13 @@ if __name__ == "__main__":
                 f"blank_total_spikes={blank_spikes}, accepted_max_fr={accepted_max_fr}"
             )
             raise SystemExit(0)
-        if args.train_run_sample_phase4_inj_snapshot_verify:
-            fpga_train_run_sample_phase4_inj_snapshot_verify(
-                ser,
-                sample_idx=int(args.sample_idx),
-                inj_steps=max(1, int(args.chunk_nsteps)),
-                tile_rows=max(1, int(args.train_tile_rows)),
-                start_lba=int(args.start_lba),
-                timeout_sec=float(args.timeout),
-                image_source=str(args.image_source),
-            )
-            raise SystemExit(0)
-        if args.train_label_stats_one_sample_verify:
-            fpga_train_label_stats_one_sample_verify(
-                ser,
-                sample_idx=int(args.sample_idx),
-                inj_steps=max(1, int(args.chunk_nsteps)),
-                tile_rows=max(1, int(args.train_tile_rows)),
-                start_lba=int(args.start_lba),
-                timeout_sec=float(args.timeout),
-                image_source=str(args.image_source),
-            )
-            raise SystemExit(0)
-        if args.train_run_sample_phase3_retry:
-            if args.image_source != "fpga":
-                raise ValueError("--train-run-sample-phase3-retry currently requires --image-source fpga")
-            accepted_max_fr, probe_inj, phase3_inj, phase3_blank = fpga_train_run_sample_phase3_retry_coarse(
-                ser,
-                sample_idx=int(args.sample_idx),
-                inj_steps=max(1, int(args.chunk_nsteps)),
-                tile_rows=max(1, int(args.train_tile_rows)),
-                start_lba=int(args.start_lba),
-                timeout_sec=float(args.timeout),
-                image_source=str(args.image_source),
-                seed=int(args.seed),
-                max_fr_start=max(1, int(args.train_retry_max_fr_start)),
-                max_fr_step=max(1, int(args.train_retry_max_fr_step)),
-                max_fr_limit=max(1, int(args.train_retry_max_fr_limit)),
-                min_inj_spikes=max(0, int(args.train_retry_min_inj_spikes)),
-            )
-            print(
-                "TRAIN_RUN_SAMPLE_PHASE3 retry coarse summary: "
-                f"accepted_max_fr={accepted_max_fr}, probe_inj_total={probe_inj}, "
-                f"phase3_inj_total={phase3_inj}, phase3_blank_total={phase3_blank}"
-            )
-            raise SystemExit(0)
-        if args.train_run_sample_phase3_verify:
-            fpga_train_run_sample_phase3_verify_stats(
-                ser,
-                sample_idx=int(args.sample_idx),
-                inj_steps=max(1, int(args.chunk_nsteps)),
-                tile_rows=max(1, int(args.train_tile_rows)),
-                start_lba=int(args.start_lba),
-                timeout_sec=float(args.timeout),
-                image_source=str(args.image_source),
-                raw_bin=args.raw_bin,
-            )
-            raise SystemExit(0)
         if args.train_phase4_build_assignments:
             fpga_phase4_build_assignments_from_raw1(ser, args)
             raise SystemExit(0)
-        if args.train_run_sample_phase4_verify:
-            fpga_train_run_sample_phase4_verify_stats(
-                ser,
-                sample_idx=int(args.sample_idx),
-                inj_steps=max(1, int(args.chunk_nsteps)),
-                tile_rows=max(1, int(args.train_tile_rows)),
-                start_lba=int(args.start_lba),
-                timeout_sec=float(args.timeout),
-                image_source=str(args.image_source),
-                raw_bin=args.raw_bin,
-                seed=int(args.seed),
-                max_fr_start=max(1, int(args.train_retry_max_fr_start)),
-                max_fr_step=max(1, int(args.train_retry_max_fr_step)),
-                max_fr_limit=max(1, int(args.train_retry_max_fr_limit)),
-                min_inj_spikes=max(0, int(args.train_retry_min_inj_spikes)),
-            )
+        if args.train_infer_e2e_compare:
+            fpga_train_infer_e2e_compare(ser, args)
             raise SystemExit(0)
-        if args.train_phase4_replay_selfcheck:
-            if args.image_source != "fpga":
-                raise ValueError("--train-phase4-replay-selfcheck currently requires --image-source fpga")
-            fpga_train_phase4_and_mine_replay_selfcheck(ser, args)
-            raise SystemExit(0)
-        if args.train_mine_one_sample_replay_selfcheck:
-            fpga_train_mine_one_sample_replay_selfcheck(
-                ser,
-                args,
-                seed=int(args.train_mine_seed),
-                tile_rows=max(1, int(args.train_tile_rows)),
-                verify_row0=max(0, int(args.train_verify_row0)),
-                verify_nrows=(None if int(args.train_verify_nrows) <= 0 else int(args.train_verify_nrows)),
-                verify_mode=str(args.train_verify_mode),
-                verify_sample_cols=max(1, int(args.train_verify_sample_cols)),
-            )
-            raise SystemExit(0)
-
-        if args.ddr_smoke:
-            fpga_ddr_smoke_test(ser, base_addr_word=args.ddr_smoke_addr)
-
-        if args.weights_npy:
-            fpga_weights_q16 = load_weight_matrix_q16_from_file(args.weights_npy)
-            print(f"Loaded weights from file: {args.weights_npy}")
-        else:
-            fpga_weights_q16 = build_fixed_weight_matrix_q16()
-            print("Using built-in fixed wiring weights (matches FPGA default initialization)")
-        if args.upload_weights:
-            fpga_write_infer_weights(ser, fpga_weights_q16)
-        else:
-            print("Skipping UART weight upload; using FPGA-side weight initialization")
-        py_w_in = fpga_weights_q16.astype(np.float64) / float(1 << FXP_SHIFT)
-
-        if args.image_source == "fpga" and args.num_sectors == 0 and not args.full_sd_copy:
-            img_idx = int(args.sample_idx)
-            if img_idx < 0:
-                raise ValueError(f"--sample-idx must be >=0 for --image-source fpga, got {img_idx}")
-            img_byte_off = RAW1_HEADER_BYTES + RAW1_NUM_IMAGES_DEFAULT + (img_idx * N_IN)
-            img_sector_off = img_byte_off // 512
-            img_byte_in_sector = img_byte_off % 512
-            sectors_needed = (img_byte_in_sector + N_IN + 511) // 512
-            ddr_image_base_byte = img_byte_in_sector
-            print(
-                "Using streamed FPGA image load path: "
-                f"sample_idx={img_idx}, sector_off={img_sector_off}, sectors={sectors_needed}, "
-                f"byte_in_sector={img_byte_in_sector}, ddr_image_base_byte={ddr_image_base_byte}"
-            )
-            fpga_sd_sectors_to_ddr(
-                ser=ser,
-                start_lba=args.start_lba + img_sector_off,
-                num_sectors=sectors_needed,
-                timeout_sec=args.timeout,
-            )
-            fpga_load_image_from_ddr(
-                ser=ser,
-                base_addr_byte=ddr_image_base_byte,
-                n_bytes=N_IN,
-                timeout_sec=args.timeout,
-            )
-        else:
-            if args.num_sectors > 0:
-                fpga_sd_sectors_to_ddr(
-                    ser=ser,
-                    start_lba=args.start_lba,
-                    num_sectors=args.num_sectors,
-                    timeout_sec=args.timeout,
-                )
-            elif args.full_sd_copy:
-                print(
-                    "Using full sector DMA copy (RAW1 parser on FPGA disabled): "
-                    f"sectors={RAW1_TOTAL_SECTORS_DEFAULT}"
-                )
-                fpga_sd_sectors_to_ddr(
-                    ser=ser,
-                    start_lba=args.start_lba,
-                    num_sectors=RAW1_TOTAL_SECTORS_DEFAULT,
-                    timeout_sec=args.timeout,
-                )
-            else:
-                print(
-                    "Using host-side RAW1 size assumption for full sector DMA copy "
-                    f"(sectors={RAW1_TOTAL_SECTORS_DEFAULT})"
-                )
-                fpga_sd_sectors_to_ddr(
-                    ser=ser,
-                    start_lba=args.start_lba,
-                    num_sectors=RAW1_TOTAL_SECTORS_DEFAULT,
-                    timeout_sec=args.timeout,
-                )
-
-        if args.image_source == "fpga":
-            image0_u8 = fpga_read_raw_image_u8(ser)
-            label0 = -1
-            if args.raw_bin:
-                raw_bin_path = resolve_raw_bin_path(args.raw_bin)
-                ref_u8, ref_label = read_raw1_image_u8(str(raw_bin_path), sample_idx=args.sample_idx)
-                img_mismatch = sum(1 for a, b in zip(image0_u8, ref_u8) if int(a) != int(b))
-                label0 = ref_label
-                print(
-                    "Loaded comparison image from FPGA raw_image0_u8 "
-                    f"(sample_idx={args.sample_idx}, label={label0}, mismatched_vs_raw={img_mismatch})"
-                )
-            else:
-                print(
-                    "Loaded comparison image from FPGA raw_image0_u8 "
-                    f"(sample_idx={args.sample_idx}, label=unknown)"
-                )
-        elif args.image_source == "mnist":
-            image0_u8, label0 = read_mnist_image_u8(args.sample_idx)
-            print(f"Loaded comparison image from MNIST: sample_idx={args.sample_idx} (label={label0})")
-        else:
-            raw_bin_path = resolve_raw_bin_path(args.raw_bin)
-            image0_u8, label0 = read_raw1_image_u8(str(raw_bin_path), sample_idx=args.sample_idx)
-            print(f"Loaded comparison image from RAW1: {raw_bin_path} (sample_idx={args.sample_idx}, label={label0})")
-
-        sum_u8 = int(sum(image0_u8))
-        nz = sum(1 for v in image0_u8 if v != 0)
-        mod4_sum = [0, 0, 0, 0]
-        for i, v in enumerate(image0_u8):
-            mod4_sum[i & 3] += int(v)
-        print(f"Image stats: sum_u8={sum_u8}, nonzero_pixels={nz}, sum_mod4={mod4_sum}")
-
-        py_thresh = build_poisson_thresholds_u11(image0_u8)
-        py_thresh_sum = int(sum(py_thresh))
-        py_thresh_max = max(py_thresh) if py_thresh else 0
-        print(f"Python threshold stats: sum={py_thresh_sum}, max={py_thresh_max}")
-        print(
-            "WTA/inhibition params (S16.16): "
-            f"FXP_WEXC={FXP_WEXC}, FXP_INH_COEFF={FXP_INH_COEFF}, FXP_INH_THRESH={FXP_INH_THRESH}"
+        raise RuntimeError(
+            "No mode selected. Use one of: --train-run-sample-phase4, "
+            "--train-phase4-build-assignments, --train-infer-e2e-compare"
         )
-
-        fpga_run_sample_infer(
-            ser=ser,
-            seed=args.seed,
-            n_steps=args.n_steps,
-            timeout_sec=args.timeout
-        )
-        fpga_counts = fpga_read_spike_counts(ser)
-
-        fpga_thresh = fpga_read_poisson_thresh(ser)
-        fpga_thresh_sum = int(sum(fpga_thresh))
-        fpga_thresh_max = max(fpga_thresh) if fpga_thresh else 0
-        thresh_mismatch = sum(1 for a, b in zip(fpga_thresh, py_thresh) if a != b)
-        print(
-            "FPGA threshold stats: "
-            f"sum={fpga_thresh_sum}, max={fpga_thresh_max}, "
-            f"mismatched_vs_python={thresh_mismatch}"
-        )
-
-        infer_dbg = fpga_read_infer_debug(ser)
-        print("Infer debug counters:")
-        print(
-            "  "
-            f"total_input_spikes_generated={infer_dbg['total_input_spikes_generated']}, "
-            f"total_syn_hits_applied={infer_dbg['total_syn_hits_applied']}, "
-            f"last_step_input_spikes={infer_dbg['last_step_input_spikes']}, "
-            f"first_step_input_spikes={infer_dbg['first_step_input_spikes']}"
-        )
-        print(
-            "  "
-            f"first_step_hits_n0={infer_dbg['first_step_hits_n0']}, "
-            f"first_step_hits_n3={infer_dbg['first_step_hits_n3']}, "
-            f"first_step_hits_n7={infer_dbg['first_step_hits_n7']}"
-        )
-        print(
-            "  "
-            f"infer_total_spikes={infer_dbg['infer_total_spikes']}, "
-            f"infer_steps_target={infer_dbg['infer_steps_target']}, "
-            f"infer_step_idx={infer_dbg['infer_step_idx']}, "
-            f"infer_state={infer_dbg['infer_state']}, "
-            f"raw_image0_sum_u8={infer_dbg['raw_image0_sum_u8']}"
-        )
-
-        py_poisson_dbg = simulate_poisson_debug_counts(
-            thresholds=py_thresh,
-            n_steps=args.n_steps,
-            seed=args.seed
-        )
-        print("Poisson-only check (FPGA vs Python):")
-        poisson_dbg_keys = ["total_input_spikes_generated", "first_step_input_spikes", "last_step_input_spikes"]
-        infer_dbg_poisson_disabled = all(int(infer_dbg.get(k, 0)) == 0 for k in poisson_dbg_keys)
-        if infer_dbg_poisson_disabled:
-            print("  skipped: FPGA build disables Poisson/infer debug counters (values forced to 0).")
-        else:
-            for k in poisson_dbg_keys:
-                fv = infer_dbg[k]
-                pv = py_poisson_dbg[k]
-                print(f"  {k}: fpga={fv}, python={pv}, diff={int(fv)-int(pv)}")
-
-        if args.poisson_only:
-            result = fpga_add(ser, args.a, args.b)
-            print(f"FPGA result: {args.a} + {args.b} = {result}")
-            raise SystemExit(0)
-
-        if args.python_model == "mine":
-            print("Python compare model: mine-style inference (no STDP, fixed FPGA wiring weights)")
-            py_counts = run_mine_style_python_poisson_with_thresholds(
-                thresholds=py_thresh,
-                n_steps=args.n_steps,
-                seed=args.seed,
-                w_in=py_w_in,
-            )
-            py_counts_from_fpga_thresh = run_mine_style_python_poisson_with_thresholds(
-                thresholds=fpga_thresh,
-                n_steps=args.n_steps,
-                seed=args.seed,
-                w_in=py_w_in,
-            )
-        else:
-            print("Python compare model: simple fixed-point debug model")
-            py_counts = run_fixed_point_python_poisson(
-                image_u8=image0_u8,
-                n_steps=args.n_steps,
-                seed=args.seed
-            )
-            py_counts_from_fpga_thresh = run_fixed_point_python_poisson_with_thresholds(
-                thresholds=fpga_thresh,
-                n_steps=args.n_steps,
-                seed=args.seed
-            )
-        compare_counts(fpga_counts, py_counts)
-        print("Compare using FPGA-read thresholds:")
-        compare_counts(fpga_counts, py_counts_from_fpga_thresh)
-
-        result = fpga_add(ser, args.a, args.b)
-        print(f"FPGA result: {args.a} + {args.b} = {result}")

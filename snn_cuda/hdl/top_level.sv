@@ -113,9 +113,6 @@ module top_level(
     // Build switch: keep training kernels enabled for mine.py-aligned learning builds.
     // Set to 1'b0 only for inference-only fast-build iteration.
     localparam logic TRAIN_ENABLE = 1'b1;
-    // Additional training-build switch: disable train debug opcode/mux to reduce build time.
-    // Keep 1'b0 for faster training builds; set 1'b1 only while debugging training hangs.
-    localparam logic TRAIN_DEBUG_ENABLE = 1'b0;
     // Release-oriented switch: disable development/self-check UART opcodes that are not needed
     // for the final mine.py-like train/test flow (phase3/phase4 + aggregate stats).
     localparam logic DEV_UART_OPS_ENABLE = 1'b0;
@@ -558,8 +555,6 @@ module top_level(
     logic        memrd_wait;
     memrd_kind_t memrd_kind;
     logic [15:0] memrd_idx;
-    logic [2:0]  dbg_rgb1_state;
-    integer rr;
 
     wire [7:0] r_in = {sw[15:11], 3'b000};
     wire [7:0] g_in = {sw[10:5],  2'b00};
@@ -572,52 +567,19 @@ module top_level(
     assign rgb0[1] = ddr_write_count[0]; // green LED: DDR write activity bit
     assign rgb0[0] = (resp_status == STATUS_OK); // red LED: OK result
 
-    if (DEV_UART_OPS_ENABLE) begin : gen_debug_leds
-        // rgb1 shows coarse progress for bring-up/debug:
-        // 000=idle, 001=sd copy, 010=response pending, 011=infer init clear,
-        // 100=infer prep threshold, 101=gen input spikes, 110=accum excit,
-        // 111=inhib/update passes (APPLY_WTA or WTA_PASS2)
-        always_comb begin
-            dbg_rgb1_state = 3'b000;
-            if (sd_copy_active) begin
-                dbg_rgb1_state = 3'b001;
-            end else if (response_ready) begin
-                dbg_rgb1_state = 3'b010;
-            end else if (infer_active) begin
-                case (infer_state)
-                    INFER_INIT_CLEAR:      dbg_rgb1_state = 3'b011;
-                    INFER_PREP_DIV_START,
-                    INFER_PREP_DIV_WAIT:   dbg_rgb1_state = 3'b100;
-                    INFER_GEN_INPUT_SPIKES:dbg_rgb1_state = 3'b101;
-                    INFER_ACCUM_NEURON:    dbg_rgb1_state = 3'b110;
-                    INFER_APPLY_WTA,
-                    INFER_WTA_PASS2:       dbg_rgb1_state = 3'b111;
-                    default:               dbg_rgb1_state = 3'b000;
-                endcase
-            end
-        end
-        assign rgb1 = 3'b000;
-        assign led[2:0] = dbg_rgb1_state;
-        assign led[3] = infer_active;
-        assign led[4] = sd_copy_active;
-        assign led[5] = response_ready;
-        assign led[6] = tx_active;
-        assign led[7] = (resp_status == STATUS_OK);
-    end else begin : gen_release_leds
-        assign rgb1 = 3'b000;
-        // Minimal always-on debug for lightweight builds:
-        // led[7]=train_chunk_active, [6]=train_label_stats_active, [5]=train_stdp_active,
-        // [4]=train_trace_active, [3]=ddr_req_pending_core, [2]=imgload_active,
-        // [1]=sd_copy_active, [0]=response_ready
-        assign led[7] = train_chunk_active;
-        assign led[6] = train_label_stats_active;
-        assign led[5] = train_stdp_active;
-        assign led[4] = train_trace_active;
-        assign led[3] = ddr_req_pending_core;
-        assign led[2] = imgload_active;
-        assign led[1] = sd_copy_active;
-        assign led[0] = response_ready;
-    end
+    assign rgb1 = 3'b000;
+    // Minimal always-on debug for lightweight builds:
+    // led[7]=train_chunk_active, [6]=train_label_stats_active, [5]=train_stdp_active,
+    // [4]=train_trace_active, [3]=ddr_req_pending_core, [2]=imgload_active,
+    // [1]=sd_copy_active, [0]=response_ready
+    assign led[7] = train_chunk_active;
+    assign led[6] = train_label_stats_active;
+    assign led[5] = train_stdp_active;
+    assign led[4] = train_trace_active;
+    assign led[3] = ddr_req_pending_core;
+    assign led[2] = imgload_active;
+    assign led[1] = sd_copy_active;
+    assign led[0] = response_ready;
     assign led[14] = ddr_clk_wiz_locked;         // DDR clock wizard lock
     assign led[15] = ddr_calib_complete;         // DDR3 calibration done
     // State code (6 bits):
@@ -1821,6 +1783,13 @@ module top_level(
                         logic signed [31:0] dep_term_tmp;
                         logic signed [31:0] dW_q16_tmp;
                         logic [31:0] dW_abs_tmp;
+                        // Event-shortcut: if both traces are zero, dW is exactly zero.
+                        // Skip the divider path and directly commit normalized weight.
+                        if ((train_stdp_a_val == 32'sd0) && (train_stdp_bt_val == 32'sd0)) begin
+                            train_stdp_dW_q16 <= 32'sd0;
+                            train_stdp_w_new <= train_stdp_w_norm_q16;
+                            train_stdp_state <= TSK_WRITE_W_REQ;
+                        end else begin
                         pot_term_tmp = fxp_mul_s16_16(
                             fxp_mul_s16_16(TRAIN_LR_P_Q16, (TRAIN_WMAX_Q16 - train_stdp_w_norm_q16)),
                             train_stdp_a_val
@@ -1830,6 +1799,11 @@ module top_level(
                             train_stdp_bt_val
                         );
                         dW_q16_tmp = pot_term_tmp - dep_term_tmp;
+                        if (dW_q16_tmp == 32'sd0) begin
+                            train_stdp_dW_q16 <= 32'sd0;
+                            train_stdp_w_new <= train_stdp_w_norm_q16;
+                            train_stdp_state <= TSK_WRITE_W_REQ;
+                        end else begin
                         if (dW_q16_tmp < 0)
                             dW_abs_tmp = $unsigned(-dW_q16_tmp);
                         else
@@ -1840,6 +1814,8 @@ module top_level(
                             train_stdp_divisor  <= TRAIN_UPDATE_NT;
                             train_stdp_div_valid <= 1'b1;
                             train_stdp_state <= TSK_DIV_DW_WAIT;
+                        end
+                        end
                         end
                     end
                     TSK_DIV_DW_WAIT: begin
@@ -2454,8 +2430,7 @@ module top_level(
                             resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
                             response_ready <= 1'b1;
                         end else if (TRAIN_ENABLE &&
-                                     (train_trace_active || train_stdp_active || train_gen_active || train_label_stats_active || train_stdp_batch_active || train_chunk_active) &&
-                                     !(req_opcode == OP_READ_TRAIN_DEBUG)) begin
+                                     (train_trace_active || train_stdp_active || train_gen_active || train_label_stats_active || train_stdp_batch_active || train_chunk_active)) begin
                             resp_status    <= STATUS_BAD_PACKET;
                             resp_result    <= {8'h31, req_opcode, 16'h0000}; // TRAIN_BUSY debug tag
                             resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {8'h31, req_opcode, 16'h0000});
@@ -2463,12 +2438,6 @@ module top_level(
                         end else if (!TRAIN_ENABLE &&
                                      ((req_opcode == OP_DDR_ZERO32) ||
                                       ((req_opcode >= OP_TRACE_UPDATE) && (req_opcode <= OP_READ_TRAIN_LABEL_STAT_COUNT)))) begin
-                            resp_status    <= STATUS_UNSUPPORTED_OP;
-                            resp_result    <= 32'sd0;
-                            resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
-                            response_ready <= 1'b1;
-                        end else if (TRAIN_ENABLE && !TRAIN_DEBUG_ENABLE && (req_opcode == OP_READ_TRAIN_DEBUG) &&
-                                     !((req_nargs == 8'd2) && (arg0 >= 32'sd48) && (arg0 <= 32'sd55))) begin
                             resp_status    <= STATUS_UNSUPPORTED_OP;
                             resp_result    <= 32'sd0;
                             resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
@@ -3229,71 +3198,10 @@ module top_level(
                                     end
                                 end
                                 OP_READ_TRAIN_DEBUG: begin
-                                    logic [31:0] train_dbg_value;
-                                    train_dbg_value = 32'd0;
-                                    if (!DEV_UART_OPS_ENABLE) begin
-                                        resp_status    <= STATUS_UNSUPPORTED_OP;
-                                        resp_result    <= 32'sd0;
-                                        resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
-                                        response_ready <= 1'b1;
-                                    end else if (req_nargs == 8'd2) begin
-                                        if (!TRAIN_DEBUG_ENABLE) begin
-                                            // Always-on minimal debug set for diagnosing train_gen/DDR hangs
-                                            // in lightweight builds (TRAIN_DEBUG_ENABLE=0).
-                                            case (arg0[7:0])
-                                                8'd48: train_dbg_value = {31'd0, train_gen_active};
-                                                8'd49: train_dbg_value = {30'd0, train_gen_state};
-                                                8'd50: train_dbg_value = {16'd0, train_gen_idx};
-                                                8'd51: train_dbg_value = {16'd0, train_gen_count_total};
-                                                8'd52: train_dbg_value = {31'd0, ddr_req_pending_core};
-                                                8'd53: train_dbg_value = {29'd0, ddr_bridge_state};
-                                                8'd54: train_dbg_value = ddr_req_addr_word_core;
-                                                8'd55: train_dbg_value = {
-                                                    26'd0,
-                                                    ddr_req_from_train_core,
-                                                    ddr_req_we_core,
-                                                    ddr_rsp_toggle_core_seen,
-                                                    ddr_rsp_toggle_core_sync2,
-                                                    ddr_req_toggle_ddr_seen,
-                                                    ddr_req_toggle_ddr_sync2
-                                                };
-                                                default: begin
-                                                    resp_status    <= STATUS_UNSUPPORTED_OP;
-                                                    resp_result    <= 32'sd0;
-                                                    resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
-                                                    response_ready <= 1'b1;
-                                                end
-                                            endcase
-                                            if (!response_ready) begin
-                                                resp_status    <= STATUS_OK;
-                                                resp_result    <= train_dbg_value;
-                                                resp_checksum  <= calc_resp_checksum(STATUS_OK, train_dbg_value);
-                                                response_ready <= 1'b1;
-                                            end
-                                        end else begin
-                                        // Keep the chunk-phase debug IDs used by timeout probes; return 0 for others
-                                        // to avoid a very large debug mux on the critical utilization path.
-                                        case (arg0[7:0])
-                                            8'd35: train_dbg_value = {31'd0, train_chunk_active};
-                                            8'd36: train_dbg_value = {27'd0, train_chunk_state};
-                                            8'd37: train_dbg_value = {29'd0, train_chunk_mode};
-                                            8'd38: train_dbg_value = train_chunk_last_infer_spikes;
-                                            8'd39: train_dbg_value = train_chunk_last_blank_spikes;
-                                            8'd40: train_dbg_value = {16'd0, train_chunk_retry_curr_max_fr};
-                                            8'd41: train_dbg_value = {16'd0, train_chunk_retry_accepted_max_fr};
-                                            default: train_dbg_value = 32'd0;
-                                        endcase
-                                        resp_status    <= STATUS_OK;
-                                        resp_result    <= train_dbg_value;
-                                        resp_checksum  <= calc_resp_checksum(STATUS_OK, train_dbg_value);
-                                        response_ready <= 1'b1;
-                                        end
-                                    end else begin
-                                        resp_status    <= STATUS_BAD_PACKET;
-                                        resp_result    <= 32'sd0;
-                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
-                                        response_ready <= 1'b1;
-                                    end
+                                    resp_status    <= STATUS_UNSUPPORTED_OP;
+                                    resp_result    <= 32'sd0;
+                                    resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
+                                    response_ready <= 1'b1;
                                 end
 
                                 default: begin
