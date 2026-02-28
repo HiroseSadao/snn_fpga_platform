@@ -64,7 +64,7 @@ module top_level(
     localparam logic signed [31:0] FXP_ONE = 32'sd65536; // 1.0 in S16.16
     localparam logic signed [31:0] FXP_HALF = 32'sd32768; // 0.5 in S16.16
     localparam logic signed [31:0] FXP_WEXC = 32'sd147456; // 2.25 in S16.16
-    localparam logic signed [31:0] FXP_INH_COEFF = 32'sd563; // (0.85/99) in S16.16
+    localparam logic signed [31:0] FXP_INH_COEFF = 32'sd579; // (0.875/99) in S16.16, aligned to mine.py winh
     localparam logic signed [31:0] FXP_INH_THRESH = -32'sd2621440; // -40.0 in S16.16
     localparam logic signed [31:0] FXP_SCALE_1000 = 32'sd65536000;   // 1000.0 in S16.16 (1/1ms)
     localparam logic signed [31:0] FXP_SCALE_500  = 32'sd32768000;   // 500.0 in S16.16 (1/2ms)
@@ -444,6 +444,7 @@ module top_level(
     logic [31:0] train_chunk_last_blank_spikes;
     logic [15:0] train_chunk_retry_curr_max_fr;
     logic [15:0] train_chunk_retry_accepted_max_fr;
+    logic        train_chunk_retry_continue_infer;
     logic        train_gen_active;
     train_gen_state_t train_gen_state;
     logic [31:0] train_gen_base_word;
@@ -1206,6 +1207,7 @@ module top_level(
             train_chunk_last_blank_spikes <= 32'd0;
             train_chunk_retry_curr_max_fr <= TRAIN_RETRY_MAX_FR_START;
             train_chunk_retry_accepted_max_fr <= TRAIN_RETRY_MAX_FR_START;
+            train_chunk_retry_continue_infer <= 1'b0;
             train_gen_active     <= 1'b0;
             train_gen_state      <= TGK_IDLE;
             train_gen_base_word  <= 32'd0;
@@ -2079,22 +2081,45 @@ module top_level(
                     TCK_INFER_START: begin
                         if (raw_image0_valid && (raw_bytes_per_image == 32'd784) && (raw_image0_sum_u8 != 32'd0)) begin
                             infer_active       <= 1'b1;
-                            infer_state        <= INFER_INIT_CLEAR;
-                            infer_steps_target <= {16'd0, train_chunk_steps_left};
-                            infer_step_idx     <= 16'd0;
-                            infer_neuron_idx   <= 7'd0;
-                            infer_input_idx    <= 10'd0;
-                            infer_prep_idx     <= 10'd0;
-                            infer_accum        <= 32'sd0;
-                            infer_accum_weight_phase <= 3'd0;
-                            infer_apply_idx    <= 7'd0;
-                            infer_sum_c_inh    <= 32'd0;
-                            infer_total_spikes <= 32'd0;
-                            infer_rng_state    <= 32'h12345678;
-                            infer_pre_active_count <= 10'd0;
-                            raw_image0_rd_addr <= 10'd0;
-                            infer_skip_init_clear <= 1'b0;
-                            infer_force_no_input  <= 1'b0;
+                            if (train_chunk_retry_continue_infer) begin
+                                // mine.py retry keeps neuron/synapse/RNG state and only reruns an inj window.
+                                infer_state        <= INFER_PREP_DIV_START;
+                                infer_steps_target <= {16'd0, infer_step_idx} + {16'd0, train_chunk_steps_left};
+                                infer_neuron_idx   <= 7'd0;
+                                infer_input_idx    <= 10'd0;
+                                infer_prep_idx     <= 10'd0;
+                                infer_accum        <= 32'sd0;
+                                infer_accum_weight_phase <= 3'd0;
+                                infer_apply_idx    <= 7'd0;
+                                infer_sum_c_inh    <= 32'd0;
+                                infer_total_spikes <= 32'd0;
+                                infer_pre_active_count <= 10'd0;
+                                raw_image0_rd_addr <= 10'd0;
+                                infer_poisson_thresh_rd_addr <= 10'd0;
+                                infer_skip_init_clear <= 1'b1;
+                                infer_force_no_input  <= 1'b0;
+                                for (int i = 0; i < N_NEURONS; i++) begin
+                                    infer_spike_count[i] <= 16'd0;
+                                end
+                            end else begin
+                                infer_state        <= INFER_INIT_CLEAR;
+                                infer_steps_target <= {16'd0, train_chunk_steps_left};
+                                infer_step_idx     <= 16'd0;
+                                infer_neuron_idx   <= 7'd0;
+                                infer_input_idx    <= 10'd0;
+                                infer_prep_idx     <= 10'd0;
+                                infer_accum        <= 32'sd0;
+                                infer_accum_weight_phase <= 3'd0;
+                                infer_apply_idx    <= 7'd0;
+                                infer_sum_c_inh    <= 32'd0;
+                                infer_total_spikes <= 32'd0;
+                                infer_rng_state    <= 32'h12345678;
+                                infer_pre_active_count <= 10'd0;
+                                raw_image0_rd_addr <= 10'd0;
+                                infer_skip_init_clear <= 1'b0;
+                                infer_force_no_input  <= 1'b0;
+                            end
+                            train_chunk_retry_continue_infer <= 1'b0;
                             train_chunk_state <= TCK_INFER_WAIT;
                         end else begin
                             resp_status       <= STATUS_BAD_PACKET;
@@ -2122,9 +2147,11 @@ module top_level(
                                     next_max_fr_tmp = train_chunk_retry_curr_max_fr + TRAIN_RETRY_MAX_FR_STEP;
                                     train_chunk_retry_curr_max_fr <= next_max_fr_tmp;
                                     infer_poisson_num_const_cfg <= (POISSON_NUM_CONST * next_max_fr_tmp) >> 5;
+                                    train_chunk_retry_continue_infer <= 1'b1;
                                     train_chunk_state <= TCK_INFER_START;
                                 end else begin
                                     train_chunk_retry_accepted_max_fr <= train_chunk_retry_curr_max_fr;
+                                    train_chunk_retry_continue_infer <= 1'b0;
                                     train_chunk_state <= TCK_PICK_WINNER_INIT;
                                 end
                             end else begin
@@ -2147,7 +2174,8 @@ module top_level(
                         logic [6:0] next_idx_tmp;
                         next_idx_tmp = train_chunk_winner_scan_idx + 7'd1;
                         if (next_idx_tmp < N_NEURONS[6:0]) begin
-                            if (infer_spike_count[next_idx_tmp] >= train_chunk_winner_best_count) begin
+                            // Match numpy.argmax tie-break: keep earliest index on equal counts.
+                            if (infer_spike_count[next_idx_tmp] > train_chunk_winner_best_count) begin
                                 train_chunk_winner_best_count <= infer_spike_count[next_idx_tmp];
                                 train_chunk_winner_best_idx   <= next_idx_tmp;
                             end
@@ -2161,8 +2189,9 @@ module top_level(
                         if (raw_image0_valid && (raw_bytes_per_image == 32'd784) && (raw_image0_sum_u8 != 32'd0)) begin
                             infer_active       <= 1'b1;
                             infer_state        <= INFER_GEN_INPUT_SPIKES; // blank: continue existing state, skip clear/threshold prep
-                            infer_steps_target <= TRAIN_MINE_NT_BLANK[31:0];
-                            infer_step_idx     <= 16'd0;
+                            // Keep infer_step_idx continuous across inj->blank, so blank duration
+                            // target must be relative to current step index.
+                            infer_steps_target <= {16'd0, infer_step_idx} + TRAIN_MINE_NT_BLANK[31:0];
                             infer_neuron_idx   <= 7'd0;
                             infer_input_idx    <= 10'd0;
                             infer_prep_idx     <= 10'd0;
@@ -2171,7 +2200,6 @@ module top_level(
                             infer_apply_idx    <= 7'd0;
                             infer_sum_c_inh    <= 32'd0;
                             infer_total_spikes <= 32'd0;
-                            infer_rng_state    <= 32'h12345678;
                             infer_pre_active_count <= 10'd0;
                             infer_poisson_thresh_rd_addr <= 10'd0;
                             infer_skip_init_clear <= 1'b1;
@@ -2336,6 +2364,7 @@ module top_level(
                             train_chunk_state        <= TCK_IDLE;
                             train_chunk_mode         <= 2'd0;
                             train_chunk_samples_left <= 16'd0;
+                            train_chunk_retry_continue_infer <= 1'b0;
                             if (train_chunk_mode == 3'd4) begin
                                 infer_poisson_num_const_cfg <= POISSON_NUM_CONST;
                             end
@@ -2655,6 +2684,7 @@ module top_level(
                                 end
                                 OP_TRAIN_LABEL_STATS_RESET: begin
                                     if ((req_nargs == 8'd2) &&
+                                        !ddr_req_pending_core &&
                                         !train_trace_active && !train_stdp_active && !train_gen_active &&
                                         !train_label_stats_active && !train_chunk_active && !infer_active) begin
                                         train_label_stats_active <= 1'b1;
@@ -2671,6 +2701,7 @@ module top_level(
                                 end
                                 OP_TRAIN_LABEL_STATS_ACCUM: begin
                                     if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < 32'sd10) &&
+                                        !ddr_req_pending_core &&
                                         !train_trace_active && !train_stdp_active && !train_gen_active &&
                                         !train_label_stats_active && !train_chunk_active && !infer_active) begin
                                         logic [9:0] base_tmp;
@@ -2754,6 +2785,7 @@ module top_level(
                                         train_chunk_last_blank_spikes <= 32'd0;
                                         train_chunk_retry_curr_max_fr <= TRAIN_RETRY_MAX_FR_START;
                                         train_chunk_retry_accepted_max_fr <= TRAIN_RETRY_MAX_FR_START;
+                                        train_chunk_retry_continue_infer <= 1'b0;
                                         infer_poisson_num_const_cfg <= POISSON_NUM_CONST;
                                     end else begin
                                         resp_status    <= STATUS_BAD_PACKET;
@@ -2787,11 +2819,35 @@ module top_level(
                                         train_chunk_last_blank_spikes <= 32'd0;
                                         train_chunk_retry_curr_max_fr <= TRAIN_RETRY_MAX_FR_START;
                                         train_chunk_retry_accepted_max_fr <= TRAIN_RETRY_MAX_FR_START;
+                                        train_chunk_retry_continue_infer <= 1'b0;
                                         infer_poisson_num_const_cfg <= POISSON_NUM_CONST;
                                     end else begin
                                         resp_status    <= STATUS_BAD_PACKET;
-                                        resp_result    <= TRAIN_CAPS_VALUE;
-                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, TRAIN_CAPS_VALUE);
+                                        // [31:24]=0x38 tag, [23]=calib, [22]=ddr_pending, [21]=trace,
+                                        // [20]=stdp, [19]=stdp_batch, [18]=chunk, [17]=label_stats, [16]=infer.
+                                        // [15:8]=req_nargs, [7:0]=arg1(tile_rows) low8.
+                                        resp_result    <= {8'h38,
+                                                           ddr_calib_complete,
+                                                           ddr_req_pending_core,
+                                                           train_trace_active,
+                                                           train_stdp_active,
+                                                           train_stdp_batch_active,
+                                                           train_chunk_active,
+                                                           train_label_stats_active,
+                                                           infer_active,
+                                                           req_nargs,
+                                                           arg1[7:0]};
+                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {8'h38,
+                                                           ddr_calib_complete,
+                                                           ddr_req_pending_core,
+                                                           train_trace_active,
+                                                           train_stdp_active,
+                                                           train_stdp_batch_active,
+                                                           train_chunk_active,
+                                                           train_label_stats_active,
+                                                           infer_active,
+                                                           req_nargs,
+                                                           arg1[7:0]});
                                         response_ready <= 1'b1;
                                     end
                                 end
@@ -2947,12 +3003,12 @@ module top_level(
                                 infer_state <= INFER_PREP_DIV_WAIT;
                             end
                         end else begin
-	                            infer_state <= INFER_GEN_INPUT_SPIKES;
-	                            infer_input_idx <= 10'd0;
-	                            infer_neuron_idx <= 7'd0;
-	                            infer_accum <= 32'sd0;
+                            infer_state <= INFER_GEN_INPUT_SPIKES;
+                            infer_input_idx <= 10'd0;
+                            infer_neuron_idx <= 7'd0;
+                            infer_accum <= 32'sd0;
+                            infer_poisson_thresh_rd_addr <= 10'd0;
                                 infer_accum_weight_phase <= 3'd0;
-                                infer_poisson_thresh_rd_addr <= 10'd0;
                         end
                     end
 
@@ -2968,12 +3024,12 @@ module top_level(
                             infer_poisson_thresh_wr_en <= 1'b1;
                             infer_poisson_thresh_wr_addr <= infer_prep_idx;
                             if (infer_prep_idx == (N_IN - 1)) begin
-	                                infer_state <= INFER_GEN_INPUT_SPIKES;
-	                                infer_input_idx <= 10'd0;
-	                                infer_neuron_idx <= 7'd0;
-	                                infer_accum <= 32'sd0;
-                                infer_accum_weight_phase <= 3'd0;
+                                infer_state <= INFER_GEN_INPUT_SPIKES;
+                                infer_input_idx <= 10'd0;
+                                infer_neuron_idx <= 7'd0;
+                                infer_accum <= 32'sd0;
                                 infer_poisson_thresh_rd_addr <= 10'd0;
+                                infer_accum_weight_phase <= 3'd0;
                             end else begin
                                 infer_prep_idx <= infer_prep_idx + 10'd1;
                                 raw_image0_rd_addr <= infer_prep_idx + 10'd1;
@@ -2997,8 +3053,8 @@ module top_level(
                             spike_in_now = 1'b0;
                         end else begin
                             spike_in_now = (rng_next[31:21] < infer_poisson_thresh_rd_data);
+                            infer_rng_state <= rng_next;
                         end
-                        infer_rng_state <= rng_next;
                         infer_input_spike[infer_input_idx] <= spike_in_now;
                         if (spike_in_now) begin
                             if (infer_input_idx == 10'd0) begin
@@ -3176,6 +3232,9 @@ module top_level(
 
 	                        if (infer_apply_idx == (N_NEURONS - 1)) begin
 	                            if ((infer_step_idx + 16'd1) >= infer_steps_target[15:0]) begin
+                                    // Match mine.py tcount semantics: increment at end of each processed step,
+                                    // including the terminal step.
+                                    infer_step_idx <= infer_step_idx + 16'd1;
 	                                infer_active <= 1'b0;
 	                                infer_state <= INFER_IDLE;
                                     infer_skip_init_clear <= 1'b0;

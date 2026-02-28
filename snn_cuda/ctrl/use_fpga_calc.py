@@ -95,7 +95,7 @@ TRAIN_CLIP_DW_Q16 = int(round(1e-3 * (1 << FXP_SHIFT)))
 # Inference-only reference parameters from LIF_WTA_STDP_MNIST_mine.py
 MINE_DT = 1e-3
 MINE_WEXC = 2.25
-MINE_WINH = 0.85
+MINE_WINH = 0.875
 
 # Poisson/RNG constants (must match top_level.sv)
 POISSON_NUM_CONST = 9175  # floor(32*140*2048*1e-3)
@@ -279,6 +279,24 @@ def decode_bad_packet_result(result: int) -> str:
             f"reason=WRITE_INFER_WEIGHT_ARG(0x15), "
             f"opcode=0x{opcode:02X}, arg0_lo16=0x{arg0_lo16:04X}({arg0_lo16})"
         )
+    if reason == 0x38:
+        calib = (u >> 23) & 0x1
+        ddr_pending = (u >> 22) & 0x1
+        trace_active = (u >> 21) & 0x1
+        stdp_active = (u >> 20) & 0x1
+        stdp_batch = (u >> 19) & 0x1
+        chunk_active = (u >> 18) & 0x1
+        label_stats_active = (u >> 17) & 0x1
+        infer_active = (u >> 16) & 0x1
+        req_nargs_dbg = (u >> 8) & 0xFF
+        tile_rows_lo8 = u & 0xFF
+        return (
+            "reason=TRAIN_RUN_SAMPLE_PHASE4_GATE(0x38), "
+            f"calib={calib}, ddr_pending={ddr_pending}, trace={trace_active}, "
+            f"stdp={stdp_active}, stdp_batch={stdp_batch}, chunk={chunk_active}, "
+            f"label_stats={label_stats_active}, infer={infer_active}, "
+            f"req_nargs={req_nargs_dbg}, tile_rows_lo8={tile_rows_lo8}"
+        )
     if u == 0:
         return "no debug payload (result=0)"
     return f"reason=0x{reason:02X}, opcode=0x{opcode:02X}, arg0_lo16=0x{arg0_lo16:04X}"
@@ -290,6 +308,7 @@ def send_request(
     args: list[int],
     response_timeout: float = TIMEOUT_SEC,
     transient_retry_max: int = TRANSIENT_RETRY_MAX,
+    clear_input_buffer: bool = True,
 ) -> tuple[int, int]:
     req = build_request(opcode, args)
     old_timeout = ser.timeout
@@ -304,7 +323,8 @@ def send_request(
             LAST_IO["result"] = None
             LAST_IO["retry_attempt"] = attempt
 
-            ser.reset_input_buffer()
+            if clear_input_buffer:
+                ser.reset_input_buffer()
             ser.write(req)
             ser.flush()
             try:
@@ -536,14 +556,28 @@ def fpga_train_label_stats_accum(ser: serial.Serial, label: int) -> None:
 def fpga_read_train_label_stat_sum_row(ser: serial.Serial, label: int) -> list[int]:
     out: list[int] = []
     for n in range(N_NEURONS):
-        status, value = send_request(ser, OP_READ_TRAIN_LABEL_STAT_SUM, [int(label), n], response_timeout=1.0)
+        status, value = send_request(
+            ser,
+            OP_READ_TRAIN_LABEL_STAT_SUM,
+            [int(label), n],
+            response_timeout=3.0,
+            transient_retry_max=8,
+            clear_input_buffer=False,
+        )
         require_ok(status, f"READ_TRAIN_LABEL_STAT_SUM[label={int(label)},n={n}]")
         out.append(int(np.int32(value)))
     return out
 
 
 def fpga_read_train_label_stat_count(ser: serial.Serial, label: int) -> int:
-    status, value = send_request(ser, OP_READ_TRAIN_LABEL_STAT_COUNT, [int(label), 0], response_timeout=1.0)
+    status, value = send_request(
+        ser,
+        OP_READ_TRAIN_LABEL_STAT_COUNT,
+        [int(label), 0],
+        response_timeout=3.0,
+        transient_retry_max=8,
+        clear_input_buffer=False,
+    )
     require_ok(status, f"READ_TRAIN_LABEL_STAT_COUNT[label={int(label)}]")
     return int(value) & 0xFFFFFFFF
 
@@ -1333,7 +1367,9 @@ def fpga_train_run_sample_phase4(ser: serial.Serial, *, inj_steps: int, tile_row
             OP_TRAIN_RUN_SAMPLE_PHASE4,
             [int(inj_steps), int(tile_rows)],
             response_timeout=timeout_s,
-            transient_retry_max=0,
+            # Phase4 launch can transiently collide with just-finished background FSM cleanup.
+            # Retry BAD_PACKET(result==0)/timeout briefly before surfacing as hard error.
+            transient_retry_max=32,
         )
     except TimeoutError as exc:
         print(f"TRAIN_RUN_SAMPLE_PHASE4 timeout after {timeout_s:.1f}s; probing train/infer debug...")
@@ -1512,7 +1548,9 @@ def fpga_train_infer_e2e_compare(
         raise RuntimeError(f"train/infer e2e compare requires phase4-capable training build, caps=0x{caps:08X}")
 
     n_samples = max(1, int(args.train_e2e_samples))
-    inj_steps = max(1, int(args.chunk_nsteps))
+    mine_timing_mode = bool(getattr(args, "train_e2e_mine_timing", False))
+    inj_steps = 350 if mine_timing_mode else max(1, int(args.chunk_nsteps))
+    blank_steps = 150
     tile_rows = max(1, int(args.train_tile_rows))
     start_lba = int(args.start_lba)
     timeout_sec = float(args.timeout)
@@ -1532,6 +1570,9 @@ def fpga_train_infer_e2e_compare(
         f"samples={n_samples}, inj_steps={inj_steps}, tile_rows={tile_rows}, "
         f"retry=({max_fr_start},{max_fr_step},{max_fr_limit}), min_inj={min_inj_spikes}"
     )
+    if mine_timing_mode:
+        print("E2E compare mode: mine timing override enabled (inj=350, blank=150).")
+    print("Python phase4 reference uses mine.py order: inj(STDP) -> weight update -> blank(no STDP).")
 
     fpga_train_label_stats_reset(ser)
     py_label_spike_sums = np.zeros((10, N_NEURONS), dtype=np.int64)
@@ -1546,7 +1587,7 @@ def fpga_train_infer_e2e_compare(
         py_accepted_max_fr, _, py_inj, py_blank = run_mine_style_python_phase4_retry_stats_with_image(
             image_u8,
             inj_steps=inj_steps,
-            blank_steps=150,
+            blank_steps=blank_steps,
             seed=seed,
             max_fr_start=max_fr_start,
             max_fr_step=max_fr_step,
@@ -1984,6 +2025,7 @@ def run_mine_style_python_inj_blank_stats_with_thresholds(
     blank_steps: int,
     seed: int,
     w_in: np.ndarray | None = None,
+    apply_stdp_after_inj: bool = True,
 ) -> tuple[int, int]:
     """Mine-style inference statistics for injection then blank (no-input), continuous state.
 
@@ -2006,6 +2048,11 @@ def run_mine_style_python_inj_blank_stats_with_thresholds(
     input_scale = 1.0 / input_td
     c_in_state = np.zeros(n_in, dtype=np.float64)
     g_in_state = np.zeros(n, dtype=np.float64)
+    # STDP traces used by mine.py during injection window.
+    x_in_state = np.zeros(n_in, dtype=np.float64)
+    x_exc_state = np.zeros(n, dtype=np.float64)
+    A = np.zeros((n, n_in), dtype=np.float64)
+    B_T = np.zeros((n_in, n), dtype=np.float64)
     exc_syn_r = np.zeros(n, dtype=np.float64)
     inh_syn_r = np.zeros(n, dtype=np.float64)
     delay_input = np.zeros((n, max(1, round(5e-3 / dt))), dtype=np.float64)
@@ -2025,9 +2072,10 @@ def run_mine_style_python_inj_blank_stats_with_thresholds(
 
     thresholds_arr = np.asarray(thresholds, dtype=np.uint16)
 
-    def _run_steps(n_steps: int, *, force_no_input: bool) -> int:
+    def _run_steps(n_steps: int, *, force_no_input: bool, stdp_enable: bool) -> int:
         nonlocal rng_state, c_in_state, g_in_state, exc_syn_r, inh_syn_r, delay_input, delay_exc2inh, g_inh
         nonlocal v_exc, tlast_exc, theta, vthr_exc, exc_tcount, v_inh, tlast_inh, vthr_inh, inh_tcount
+        nonlocal x_in_state, x_exc_state, A, B_T
         total_spikes = 0
         for _ in range(int(n_steps)):
             s_in = np.zeros(n_in, dtype=np.uint8)
@@ -2039,6 +2087,7 @@ def run_mine_style_python_inj_blank_stats_with_thresholds(
             pre_active = np.flatnonzero(s_in)
 
             c_in_state = c_in_state * input_decay + input_scale * s_in.astype(np.float64)
+            x_in_state = _single_exp_step(x_in_state, s_in.astype(np.float64), dt, 2e-2)
             g_in_state *= input_decay
             if pre_active.size > 0:
                 g_in_state += input_scale * np.sum(w_in[:, pre_active], axis=1)
@@ -2057,6 +2106,7 @@ def run_mine_style_python_inj_blank_stats_with_thresholds(
             total_spikes += int(np.sum(s_exc, dtype=np.int64))
 
             exc_syn_r = _single_exp_step(exc_syn_r, s_exc.astype(np.float64), dt, exc_td)
+            x_exc_state = _single_exp_step(x_exc_state, s_exc.astype(np.float64), dt, 2e-2)
             g_exc = MINE_WEXC * exc_syn_r
             delayed_g_exc, delay_exc2inh = _delay_step(delay_exc2inh, g_exc)
 
@@ -2071,10 +2121,30 @@ def run_mine_style_python_inj_blank_stats_with_thresholds(
             inh_syn_r = _single_exp_step(inh_syn_r, s_inh.astype(np.float64), dt, inh_td)
             sum_c_inh = float(np.sum(inh_syn_r))
             g_inh = inh_coeff * (sum_c_inh - inh_syn_r)
+
+            if stdp_enable:
+                p = int(np.argmax(s_exc))
+                if int(s_exc[p]) != 0:
+                    A[p, :] += x_in_state
+                if pre_active.size > 0:
+                    np.add.at(B_T, pre_active, x_exc_state)
         return total_spikes
 
-    inj_total = _run_steps(int(inj_steps), force_no_input=False)
-    blank_total = _run_steps(int(blank_steps), force_no_input=True)
+    inj_total = _run_steps(int(inj_steps), force_no_input=False, stdp_enable=True)
+    if bool(apply_stdp_after_inj) and int(inj_steps) > 0:
+        # mine.py online STDP update at the end of each injection window.
+        W = np.array(w_in, copy=True)
+        W_abs_sum = np.sum(np.abs(W), axis=1, keepdims=True)
+        W_abs_sum[W_abs_sum == 0.0] = 1.0
+        W = W * (0.1 / W_abs_sum)
+        dW = 1e-2 * (5e-2 - W) * A
+        dW -= 1e-4 * W * B_T.T
+        clipped_dW = np.clip(dW / float(int(inj_steps)), -1e-3, 1e-3)
+        W = np.clip(W + clipped_dW, 0.0, 5e-2)
+        w_in = W
+        # mine.py re-bases input conductance state after weight update.
+        g_in_state = np.dot(w_in, c_in_state)
+    blank_total = _run_steps(int(blank_steps), force_no_input=True, stdp_enable=False)
     return int(inj_total), int(blank_total)
 
 
@@ -2174,6 +2244,11 @@ def parse_args() -> argparse.Namespace:
         help="fail --train-infer-e2e-compare on any sample-level phase4 mismatch or assignment mismatch",
     )
     parser.add_argument("--chunk-nsteps", type=int, default=16, help="step count for phase4 injection window")
+    parser.add_argument(
+        "--train-e2e-mine-timing",
+        action="store_true",
+        help="use mine.py timing in E2E compare (inj=350, blank=150) regardless of --chunk-nsteps",
+    )
     parser.add_argument("--train-epochs", type=int, default=30, help="epoch count for train phase4 assignment build (mine.py default=30)")
     parser.add_argument("--train-split-train", type=int, default=9000, help="number of train samples (default 9000)")
     parser.add_argument("--train-split-test", type=int, default=1000, help="number of test samples (default 1000)")
