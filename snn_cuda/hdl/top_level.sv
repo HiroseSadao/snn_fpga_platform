@@ -171,6 +171,18 @@ module top_level(
         DDRBR_ISSUE,
         DDRBR_WAIT_ACK
     } ddr_bridge_state_t;
+    typedef enum logic [3:0] {
+        TMI_IDLE,
+        TMI_W_READ_REQ,
+        TMI_W_READ_WAIT,
+        TMI_W_WRITE_REQ,
+        TMI_W_WRITE_WAIT,
+        TMI_A_WRITE_REQ,
+        TMI_A_WRITE_WAIT,
+        TMI_BT_WRITE_REQ,
+        TMI_BT_WRITE_WAIT,
+        TMI_DONE
+    } train_mem_init_state_t;
     typedef enum logic [4:0] {
         TRK_IDLE,
         TRK_A_READ_X_REQ,
@@ -469,6 +481,10 @@ module top_level(
     logic [31:0] train_gen_curr_word;
     logic        train_gen_lcg_enable;
     logic [1:0]  train_gen_cache_mode; // 0=none,1=x_in,2=x_exc
+    logic        train_mem_init_active;
+    logic        train_mem_init_done;
+    train_mem_init_state_t train_mem_init_state;
+    logic [16:0] train_mem_init_idx;
     logic        train_label_stats_active;
     train_label_stats_state_t train_label_stats_state;
     logic [3:0]  train_label_stats_label;
@@ -1186,6 +1202,10 @@ module top_level(
             train_gen_curr_word  <= 32'd0;
             train_gen_lcg_enable <= 1'b0;
             train_gen_cache_mode <= 2'd0;
+            train_mem_init_active <= 1'b0;
+            train_mem_init_done <= 1'b0;
+            train_mem_init_state <= TMI_IDLE;
+            train_mem_init_idx <= 17'd0;
             train_label_stats_active <= 1'b0;
             train_label_stats_state <= TLS_IDLE;
             train_label_stats_label <= 4'd0;
@@ -1333,10 +1353,49 @@ module top_level(
                         train_chunk_state <= TCK_IDLE;
                         train_gen_active  <= 1'b0;
                         train_gen_state   <= TGK_IDLE;
+                        train_mem_init_active <= 1'b0;
+                        train_mem_init_state <= TMI_IDLE;
                         resp_status    <= STATUS_BAD_PACKET;
                         resp_result    <= 32'sd0;
                         resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
                         response_ready <= 1'b1;
+                    end else if (train_mem_init_active) begin
+                        case (train_mem_init_state)
+                            TMI_W_WRITE_WAIT: begin
+                                if (train_mem_init_idx == (N_WEIGHTS - 1)) begin
+                                    train_mem_init_idx   <= 17'd0;
+                                    train_mem_init_state <= TMI_A_WRITE_REQ;
+                                end else begin
+                                    train_mem_init_idx   <= train_mem_init_idx + 17'd1;
+                                    train_mem_init_state <= TMI_W_READ_REQ;
+                                end
+                            end
+                            TMI_A_WRITE_WAIT: begin
+                                if (train_mem_init_idx == (N_WEIGHTS - 1)) begin
+                                    train_mem_init_idx   <= 17'd0;
+                                    train_mem_init_state <= TMI_BT_WRITE_REQ;
+                                end else begin
+                                    train_mem_init_idx   <= train_mem_init_idx + 17'd1;
+                                    train_mem_init_state <= TMI_A_WRITE_REQ;
+                                end
+                            end
+                            TMI_BT_WRITE_WAIT: begin
+                                if (train_mem_init_idx == (N_WEIGHTS - 1)) begin
+                                    train_mem_init_state <= TMI_DONE;
+                                end else begin
+                                    train_mem_init_idx   <= train_mem_init_idx + 17'd1;
+                                    train_mem_init_state <= TMI_BT_WRITE_REQ;
+                                end
+                            end
+                            default: begin
+                                train_mem_init_active <= 1'b0;
+                                train_mem_init_state <= TMI_IDLE;
+                                resp_status    <= STATUS_BAD_PACKET;
+                                resp_result    <= 32'sd0;
+                                resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                                response_ready <= 1'b1;
+                            end
+                        endcase
                     end else if (train_trace_active) begin
                         case (train_trace_state)
                             TRK_A_READ_X_WAIT: begin
@@ -2116,7 +2175,13 @@ module top_level(
                 !ddr_req_pending_core && !train_gen_active && !train_trace_active && !train_stdp_active) begin
                 case (train_chunk_state)
                     TCK_INFER_START: begin
-                        if (raw_image0_valid && (raw_bytes_per_image == 32'd784) && (raw_image0_sum_u8 != 32'd0)) begin
+                        if (!train_mem_init_done) begin
+                            if (!train_mem_init_active) begin
+                                train_mem_init_active <= 1'b1;
+                                train_mem_init_state  <= TMI_W_READ_REQ;
+                                train_mem_init_idx    <= 17'd0;
+                            end
+                        end else if (raw_image0_valid && (raw_bytes_per_image == 32'd784) && (raw_image0_sum_u8 != 32'd0)) begin
                             infer_active       <= 1'b1;
                             if (train_chunk_retry_continue_infer) begin
                                 // mine.py retry keeps neuron/synapse/RNG state and only reruns an inj window.
@@ -2542,6 +2607,71 @@ module top_level(
                 endcase
             end
 
+            if (TRAIN_ENABLE && train_mem_init_active && !ddr_req_pending_core && !response_ready &&
+                !sd_ddr_flush_active && !imgload_word_valid &&
+                !train_trace_active && !train_stdp_active && !train_gen_active) begin
+                case (train_mem_init_state)
+                    TMI_W_READ_REQ: begin
+                        infer_w_rd_addr <= train_mem_init_idx;
+                        train_mem_init_state <= TMI_W_READ_WAIT;
+                    end
+                    TMI_W_READ_WAIT: begin
+                        train_mem_init_state <= TMI_W_WRITE_REQ;
+                    end
+                    TMI_W_WRITE_REQ: begin
+                        ddr_req_pending_core      <= 1'b1;
+                        ddr_req_we_core           <= 1'b1;
+                        ddr_req_from_sd_core      <= 1'b0;
+                        ddr_req_from_imgload_core <= 1'b0;
+                        ddr_req_from_train_core   <= 1'b1;
+                        ddr_req_addr_word_core    <= TRAIN_BASE_W_Q16_WORDS + {15'd0, train_mem_init_idx};
+                        ddr_req_wdata_core        <= {16'd0, infer_w_rd_data};
+                        ddr_req_wide_core         <= 1'b0;
+                        ddr_req_wdata128_core     <= 128'd0;
+                        ddr_req_sel16_core        <= 16'd0;
+                        ddr_req_word_count_core   <= 3'd1;
+                        ddr_req_toggle_core       <= ~ddr_req_toggle_core;
+                        train_mem_init_state      <= TMI_W_WRITE_WAIT;
+                    end
+                    TMI_A_WRITE_REQ: begin
+                        ddr_req_pending_core      <= 1'b1;
+                        ddr_req_we_core           <= 1'b1;
+                        ddr_req_from_sd_core      <= 1'b0;
+                        ddr_req_from_imgload_core <= 1'b0;
+                        ddr_req_from_train_core   <= 1'b1;
+                        ddr_req_addr_word_core    <= TRAIN_BASE_A_Q16_WORDS + {15'd0, train_mem_init_idx};
+                        ddr_req_wdata_core        <= 32'd0;
+                        ddr_req_wide_core         <= 1'b0;
+                        ddr_req_wdata128_core     <= 128'd0;
+                        ddr_req_sel16_core        <= 16'd0;
+                        ddr_req_word_count_core   <= 3'd1;
+                        ddr_req_toggle_core       <= ~ddr_req_toggle_core;
+                        train_mem_init_state      <= TMI_A_WRITE_WAIT;
+                    end
+                    TMI_BT_WRITE_REQ: begin
+                        ddr_req_pending_core      <= 1'b1;
+                        ddr_req_we_core           <= 1'b1;
+                        ddr_req_from_sd_core      <= 1'b0;
+                        ddr_req_from_imgload_core <= 1'b0;
+                        ddr_req_from_train_core   <= 1'b1;
+                        ddr_req_addr_word_core    <= TRAIN_BASE_BT_Q16_WORDS + {15'd0, train_mem_init_idx};
+                        ddr_req_wdata_core        <= 32'd0;
+                        ddr_req_wide_core         <= 1'b0;
+                        ddr_req_wdata128_core     <= 128'd0;
+                        ddr_req_sel16_core        <= 16'd0;
+                        ddr_req_word_count_core   <= 3'd1;
+                        ddr_req_toggle_core       <= ~ddr_req_toggle_core;
+                        train_mem_init_state      <= TMI_BT_WRITE_WAIT;
+                    end
+                    TMI_DONE: begin
+                        train_mem_init_active <= 1'b0;
+                        train_mem_init_done   <= 1'b1;
+                        train_mem_init_state  <= TMI_IDLE;
+                    end
+                    default: begin end
+                endcase
+            end
+
             if (TRAIN_ENABLE && train_label_stats_active && !response_ready && !sd_ddr_flush_active && !imgload_word_valid &&
                 !ddr_req_pending_core && !train_trace_active && !train_stdp_active && !train_gen_active && !train_chunk_active && !infer_active) begin
                 case (train_label_stats_state)
@@ -2928,7 +3058,8 @@ module top_level(
                                         train_chunk_mode         <= 3'd3;
                                         train_chunk_state        <= TCK_INFER_START;
                                         train_chunk_samples_left <= 16'd1;
-                                        train_chunk_tile_rows    <= arg1;
+                                        // mine.py alignment: STDP update is over all neurons, not tiled.
+                                        train_chunk_tile_rows    <= N_NEURONS[6:0];
                                         train_chunk_steps_left   <= arg0[15:0];
                                         train_chunk_seed_xin     <= 32'h13579BDF;
                                         train_chunk_seed_xexc    <= 32'h2468ACE1;
@@ -2963,7 +3094,8 @@ module top_level(
                                         train_chunk_mode         <= 3'd4;
                                         train_chunk_state        <= TCK_INFER_START;
                                         train_chunk_samples_left <= 16'd1;
-                                        train_chunk_tile_rows    <= arg1;
+                                        // mine.py alignment: STDP update is over all neurons, not tiled.
+                                        train_chunk_tile_rows    <= N_NEURONS[6:0];
                                         train_chunk_steps_left   <= arg0[15:0];
                                         train_chunk_seed_xin     <= 32'h13579BDF;
                                         train_chunk_seed_xexc    <= 32'h2468ACE1;

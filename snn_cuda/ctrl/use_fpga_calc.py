@@ -476,6 +476,23 @@ def build_fixed_weight_matrix_q16() -> np.ndarray:
     return w_q16
 
 
+def load_q16_mem_matrix(path: Path, rows: int, cols: int) -> np.ndarray:
+    vals: list[int] = []
+    with path.open("r", encoding="ascii") as f:
+        for ln in f:
+            s = ln.strip()
+            if not s:
+                continue
+            vals.append(int(s, 16) & 0xFFFF)
+    need = int(rows) * int(cols)
+    if len(vals) < need:
+        raise ValueError(f"{path} has too few entries: {len(vals)} < {need}")
+    if len(vals) > need:
+        vals = vals[:need]
+    arr = np.asarray(vals, dtype=np.uint16).reshape((rows, cols))
+    return arr
+
+
 def load_weight_matrix_q16_from_file(path: str) -> np.ndarray:
     arr = np.load(path)
     if isinstance(arr, np.lib.npyio.NpzFile):
@@ -2204,8 +2221,10 @@ def validate_fixed_point_event_driven_inference_equivalence(
 
 
 def _build_fixed_w_in_for_mine_like() -> np.ndarray:
-    # Reuse the same source used for FPGA UART initialization to avoid drift.
-    return build_fixed_weight_matrix_q16().astype(np.float64) / float(1 << FXP_SHIFT)
+    # Use the same BRAM init source as FPGA infer weight memory to avoid init drift.
+    mem_path = Path(__file__).resolve().parent.parent / "data" / "infer_w_q16.mem"
+    w_q16 = load_q16_mem_matrix(mem_path, N_NEURONS, N_IN)
+    return w_q16.astype(np.float64) / float(1 << FXP_SHIFT)
 
 
 def _single_exp_step(r: np.ndarray, spike: np.ndarray, dt: float, td: float) -> np.ndarray:
