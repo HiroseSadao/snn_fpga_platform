@@ -626,6 +626,20 @@ def assign_labels_from_aggregated_stats(
     return assignments, rates
 
 
+def predict_label_from_counts(counts: np.ndarray, assignments: np.ndarray) -> int:
+    """mine.py::prediction() equivalent for one sample spike-count vector."""
+    c = np.asarray(counts, dtype=np.float64).reshape(-1)
+    a = np.asarray(assignments, dtype=np.int64).reshape(-1)
+    if c.shape[0] != N_NEURONS or a.shape[0] != N_NEURONS:
+        raise ValueError(f"predict_label_from_counts expects length {N_NEURONS}")
+    rates = np.zeros((10,), dtype=np.float64)
+    for lbl in range(10):
+        idx = np.where(a == lbl)[0]
+        if idx.size > 0:
+            rates[lbl] = float(np.sum(c[idx])) / float(idx.size)
+    return int(np.argmax(rates))
+
+
 def fpga_read_raw_image_u8(ser: serial.Serial) -> list[int]:
     pixels = []
     for idx in range(N_IN):
@@ -1820,6 +1834,157 @@ def fpga_train_infer_e2e_compare(
         )
 
 
+def fpga_train_then_infer_compare_500_100(
+    ser: serial.Serial,
+    args: argparse.Namespace,
+) -> None:
+    """Train first N samples with phase4, then infer next M samples and compare to mine-style Python reference."""
+    if str(args.image_source) != "fpga":
+        raise ValueError("--train-then-infer-compare requires --image-source fpga")
+    if tqdm is None:
+        raise RuntimeError("tqdm is required for --train-then-infer-compare (pip install tqdm)")
+
+    caps = fpga_train_query_caps(ser)
+    if (caps & (1 << 14)) == 0:
+        raise RuntimeError(f"train-then-infer compare requires phase4-capable training build, caps=0x{caps:08X}")
+
+    n_train = max(1, int(getattr(args, "train_then_infer_train_samples", 500)))
+    n_infer = max(1, int(getattr(args, "train_then_infer_infer_samples", 100)))
+    mine_timing_mode = bool(getattr(args, "train_e2e_mine_timing", False))
+    inj_steps = 350 if mine_timing_mode else max(1, int(args.chunk_nsteps))
+    blank_steps = 150
+    infer_steps = 350 if mine_timing_mode else max(1, int(args.chunk_nsteps))
+    infer_max_fr = max(1, int(getattr(args, "train_then_infer_max_fr", 32)))
+    tile_rows = max(1, int(args.train_tile_rows))
+    start_lba = int(args.start_lba)
+    timeout_sec = float(args.timeout)
+    seed = int(args.seed)
+    max_fr_start = max(1, int(args.train_retry_max_fr_start))
+    max_fr_step = max(1, int(args.train_retry_max_fr_step))
+    max_fr_limit = max(1, int(args.train_retry_max_fr_limit))
+    min_inj_spikes = max(0, int(args.train_retry_min_inj_spikes))
+    strict = bool(getattr(args, "train_e2e_strict", False))
+
+    _, labels_all = load_mnist()
+    total_need = n_train + n_infer
+    if total_need > int(len(labels_all)):
+        raise ValueError(f"need {total_need} samples but dataset has {int(len(labels_all))}")
+
+    print(
+        "Train->Infer compare start: "
+        f"train={n_train}, infer={n_infer}, inj_steps={inj_steps}, infer_steps={infer_steps}, "
+        f"tile_rows={tile_rows}, infer_max_fr={infer_max_fr}"
+    )
+    if mine_timing_mode:
+        print("Train->Infer mode: mine timing override enabled (train inj=350/blank=150, infer steps=350).")
+
+    # -------- Train phase (first n_train samples) --------
+    fpga_train_label_stats_reset(ser)
+    py_label_spike_sums = np.zeros((10, N_NEURONS), dtype=np.int64)
+    py_label_counts = np.zeros((10,), dtype=np.int64)
+    py_phase4_state: dict = {"w_in": _build_fixed_w_in_for_mine_like()}
+
+    pbar_train = tqdm(total=n_train, desc="train 500", unit="img", miniters=1, leave=True)
+    mismatch_inj_blank = 0
+    for sample_idx in range(n_train):
+        label = int(labels_all[sample_idx])
+        image_u8, _ = read_mnist_image_u8(sample_idx)
+
+        _, _, py_inj, py_blank, py_counts_arr = run_mine_style_python_phase4_retry_stats_with_image(
+            image_u8,
+            inj_steps=inj_steps,
+            blank_steps=blank_steps,
+            seed=seed,
+            max_fr_start=max_fr_start,
+            max_fr_step=max_fr_step,
+            max_fr_limit=max_fr_limit,
+            min_inj_spikes=min_inj_spikes,
+            model_state=py_phase4_state,
+        )
+        py_label_spike_sums[label, :] += np.asarray(py_counts_arr, dtype=np.int64)
+        py_label_counts[label] += 1
+
+        prepare_fpga_sample_image_via_streamed_load(
+            ser,
+            sample_idx=sample_idx,
+            start_lba=start_lba,
+            timeout_sec=timeout_sec,
+            verbose=False,
+        )
+        ret = fpga_train_run_sample_phase4(ser, inj_steps=inj_steps, tile_rows=tile_rows)
+        fpga_inj = int(ret) & 0xFFFF
+        fpga_blank = (int(ret) >> 16) & 0xFFFF
+        fpga_train_label_stats_accum(ser, label)
+        if (fpga_inj != int(py_inj)) or (fpga_blank != int(py_blank)):
+            mismatch_inj_blank += 1
+        pbar_train.update(1)
+    pbar_train.close()
+
+    fpga_sums, fpga_counts = fpga_read_train_label_stats_all(ser)
+    fpga_assign, _ = assign_labels_from_aggregated_stats(fpga_sums, fpga_counts, rates_prev=None, alpha=1.0)
+    py_assign, _ = assign_labels_from_aggregated_stats(py_label_spike_sums, py_label_counts, rates_prev=None, alpha=1.0)
+    assign_mismatch = int(np.sum(fpga_assign.astype(np.int64) != py_assign.astype(np.int64)))
+    print(
+        "Train summary: "
+        f"inj/blank mismatches={mismatch_inj_blank}/{n_train}, "
+        f"assignment mismatch={assign_mismatch}/{N_NEURONS}"
+    )
+
+    # -------- Infer phase (next n_infer samples) --------
+    py_w_in = np.asarray(py_phase4_state["w_in"], dtype=np.float64)
+    infer_pred_mismatch = 0
+    fpga_correct = 0
+    py_correct = 0
+    pbar_infer = tqdm(total=n_infer, desc="infer 100", unit="img", miniters=1, leave=True)
+    for k in range(n_infer):
+        sample_idx = n_train + k
+        label = int(labels_all[sample_idx])
+        image_u8, _ = read_mnist_image_u8(sample_idx)
+
+        prepare_fpga_sample_image_via_streamed_load(
+            ser,
+            sample_idx=sample_idx,
+            start_lba=start_lba,
+            timeout_sec=timeout_sec,
+            verbose=False,
+        )
+        _ = fpga_run_sample_infer(ser, seed=seed, n_steps=infer_steps, timeout_sec=max(30.0, timeout_sec))
+        fpga_counts_vec = np.asarray(fpga_read_spike_counts(ser), dtype=np.int64)
+        fpga_pred = predict_label_from_counts(fpga_counts_vec, fpga_assign)
+
+        py_thresh = build_poisson_thresholds_u11_with_max_fr(image_u8, infer_max_fr)
+        py_counts_vec = np.asarray(
+            run_mine_style_python_poisson_with_thresholds(py_thresh, infer_steps, seed, w_in=py_w_in),
+            dtype=np.int64,
+        )
+        py_pred = predict_label_from_counts(py_counts_vec, py_assign)
+
+        if fpga_pred != py_pred:
+            infer_pred_mismatch += 1
+            print(f"[infer sample {sample_idx}] pred mismatch: label={label} fpga={fpga_pred} py={py_pred}")
+        if fpga_pred == label:
+            fpga_correct += 1
+        if py_pred == label:
+            py_correct += 1
+        pbar_infer.update(1)
+    pbar_infer.close()
+
+    fpga_acc = float(fpga_correct) / float(n_infer)
+    py_acc = float(py_correct) / float(n_infer)
+    print("Train->Infer compare summary:")
+    print(f"  train phase4 inj/blank mismatches = {mismatch_inj_blank}/{n_train}")
+    print(f"  train assignment mismatch count = {assign_mismatch}/{N_NEURONS}")
+    print(f"  infer prediction mismatch count = {infer_pred_mismatch}/{n_infer}")
+    print(f"  infer accuracy fpga = {fpga_acc:.4f}")
+    print(f"  infer accuracy python(mine-style) = {py_acc:.4f}")
+
+    if strict and (assign_mismatch != 0 or infer_pred_mismatch != 0):
+        raise RuntimeError(
+            "train-then-infer compare strict failed: "
+            f"assignment_mismatch={assign_mismatch}, infer_pred_mismatch={infer_pred_mismatch}"
+        )
+
+
 def prepare_fpga_sample_image_via_streamed_load(
     ser: serial.Serial,
     *,
@@ -2404,6 +2569,11 @@ def parse_args() -> argparse.Namespace:
         help="run compact train+infer E2E compare for N samples (phase4 sample stats + assignment compare)",
     )
     parser.add_argument(
+        "--train-then-infer-compare",
+        action="store_true",
+        help="train on first N samples, then infer next M samples, and compare with mine.py-style Python reference",
+    )
+    parser.add_argument(
         "--train-e2e-samples",
         type=int,
         default=20,
@@ -2414,6 +2584,9 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="fail --train-infer-e2e-compare on any sample-level phase4 mismatch or assignment mismatch",
     )
+    parser.add_argument("--train-then-infer-train-samples", type=int, default=500, help="train sample count for --train-then-infer-compare (default 500)")
+    parser.add_argument("--train-then-infer-infer-samples", type=int, default=100, help="infer sample count for --train-then-infer-compare (default 100)")
+    parser.add_argument("--train-then-infer-max-fr", type=int, default=32, help="max_fr for Python inference reference in --train-then-infer-compare")
     parser.add_argument("--chunk-nsteps", type=int, default=16, help="step count for phase4 injection window")
     parser.add_argument(
         "--train-e2e-mine-timing",
@@ -2483,6 +2656,7 @@ if __name__ == "__main__":
             args.train_run_sample_phase4,
             args.train_phase4_build_assignments,
             args.train_infer_e2e_compare,
+            args.train_then_infer_compare,
         ])
         if needs_reliable_link and not caps_ok:
             raise RuntimeError(
@@ -2519,7 +2693,10 @@ if __name__ == "__main__":
         if args.train_infer_e2e_compare:
             fpga_train_infer_e2e_compare(ser, args)
             raise SystemExit(0)
+        if args.train_then_infer_compare:
+            fpga_train_then_infer_compare_500_100(ser, args)
+            raise SystemExit(0)
         raise RuntimeError(
             "No mode selected. Use one of: --train-run-sample-phase4, "
-            "--train-phase4-build-assignments, --train-infer-e2e-compare"
+            "--train-phase4-build-assignments, --train-infer-e2e-compare, --train-then-infer-compare"
         )

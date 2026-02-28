@@ -40,6 +40,8 @@ module top_level(
     localparam logic [7:0] PROTO_VER  = 8'h01;
     localparam logic [7:0] OP_SD_SECTORS_TO_DDR = 8'h13;
     localparam logic [7:0] OP_LOAD_IMAGE_FROM_DDR = 8'h14;
+    localparam logic [7:0] OP_RUN_SAMPLE_INFER = 8'h20;
+    localparam logic [7:0] OP_READ_SPIKE_COUNT = 8'h21;
     localparam logic [7:0] OP_TRAIN_QUERY_CAPS = 8'h30;
     localparam logic [7:0] OP_TRAIN_RUN_SAMPLE_PHASE3 = 8'h37;
     localparam logic [7:0] OP_TRAIN_RUN_SAMPLE_PHASE4 = 8'h38;
@@ -149,6 +151,7 @@ module top_level(
     } tx_state_t;
     typedef enum logic [2:0] {
         MEMRD_NONE,
+        MEMRD_SPIKE_COUNT,
         MEMRD_TRAIN_LABEL_STAT_SUM,
         MEMRD_TRAIN_LABEL_STAT_COUNT
     } memrd_kind_t;
@@ -525,6 +528,8 @@ module top_level(
     (* ram_style = "block" *) logic signed [31:0] infer_g_exc_delay1 [0:N_NEURONS-1];
     logic        infer_s_exc [0:N_NEURONS-1];
     (* ram_style = "block" *) logic [15:0] infer_spike_count [0:N_NEURONS-1];
+    logic [6:0]  infer_spike_rd_addr;
+    logic [15:0] infer_spike_rd_data;
     (* ram_style = "block" *) logic [15:0] train_inj_spike_count_snap [0:N_NEURONS-1];
     (* ram_style = "block" *) logic [15:0] infer_exc_last_spike_step [0:N_NEURONS-1];
     (* ram_style = "block" *) logic [15:0] infer_inh_last_spike_step [0:N_NEURONS-1];
@@ -589,6 +594,8 @@ module top_level(
     // Explicit synchronous read port for infer weight RAM to push Vivado toward BRAM
     // inference (instead of LUTRAM/distributed RAM).
     always_ff @(posedge core_clk) begin
+        infer_spike_rd_data <= infer_spike_count[infer_spike_rd_addr];
+
         if (raw_image0_wr_en) begin
             raw_image0_mem[raw_image0_wr_addr] <= raw_image0_wr_data;
         end
@@ -1224,6 +1231,7 @@ module top_level(
             infer_skip_init_clear <= 1'b0;
             infer_force_no_input  <= 1'b0;
             infer_model_state_valid <= 1'b0;
+            infer_spike_rd_addr <= 7'd0;
             train_label_sum_rd_addr <= 10'd0;
             train_label_count_rd_addr <= 4'd0;
             train_label_sum_wr_en <= 1'b0;
@@ -1524,6 +1532,12 @@ module top_level(
                 end else begin
                     memrd_pending <= 1'b0;
                     case (memrd_kind)
+                        MEMRD_SPIKE_COUNT: begin
+                            resp_status    <= STATUS_OK;
+                            resp_result    <= {16'd0, infer_spike_rd_data};
+                            resp_checksum  <= calc_resp_checksum(STATUS_OK, {16'd0, infer_spike_rd_data});
+                            response_ready <= 1'b1;
+                        end
                         MEMRD_TRAIN_LABEL_STAT_SUM: begin
                             resp_status    <= STATUS_OK;
                             resp_result    <= train_label_sum_rd_data;
@@ -2626,6 +2640,7 @@ module top_level(
                             response_ready  <= 1'b1;
                         end else if (
                             ((req_opcode == OP_SD_SECTORS_TO_DDR) || (req_opcode == OP_LOAD_IMAGE_FROM_DDR) ||
+                             (req_opcode == OP_RUN_SAMPLE_INFER) || (req_opcode == OP_READ_SPIKE_COUNT) ||
                              (req_opcode == OP_TRAIN_QUERY_CAPS) ||
                              (req_opcode == OP_TRAIN_RUN_SAMPLE_PHASE3) || (req_opcode == OP_TRAIN_RUN_SAMPLE_PHASE4) ||
                              (req_opcode == OP_TRAIN_LABEL_STATS_RESET) || (req_opcode == OP_TRAIN_LABEL_STATS_ACCUM) ||
@@ -2765,6 +2780,56 @@ module top_level(
                                         raw_image0_capture_idx <= 10'd0;
                                         raw_image0_sum_u8 <= 32'd0;
                                         raw_bytes_per_image <= arg1;
+                                    end else begin
+                                        resp_status    <= STATUS_BAD_PACKET;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                                        response_ready <= 1'b1;
+                                    end
+                                end
+                                OP_RUN_SAMPLE_INFER: begin
+                                    // arg0 = seed, arg1 = steps (>0); no STDP, no label accumulation.
+                                    if ((req_nargs == 8'd2) &&
+                                        (arg1 > 0) && (arg1 <= 32'sd65535) &&
+                                        raw_image0_valid && (raw_bytes_per_image == 32'd784) && (raw_image0_sum_u8 != 32'd0) &&
+                                        !ddr_req_pending_core &&
+                                        !train_trace_active && !train_stdp_active && !train_gen_active &&
+                                        !train_label_stats_active && !train_chunk_active && !infer_active) begin
+                                        infer_active       <= 1'b1;
+                                        infer_state        <= INFER_INIT_CLEAR;
+                                        infer_steps_target <= {16'd0, arg1[15:0]};
+                                        infer_step_idx     <= 16'd0;
+                                        infer_neuron_idx   <= 7'd0;
+                                        infer_input_idx    <= 10'd0;
+                                        infer_prep_idx     <= 10'd0;
+                                        infer_accum        <= 32'sd0;
+                                        infer_accum_weight_phase <= 3'd0;
+                                        infer_apply_idx    <= 7'd0;
+                                        infer_trace_phase  <= 2'd0;
+                                        infer_total_spikes <= 32'd0;
+                                        infer_rng_state    <= arg0[31:0];
+                                        infer_skip_init_clear <= 1'b0;
+                                        infer_force_no_input  <= 1'b0;
+                                        infer_poisson_num_const_cfg <= POISSON_NUM_CONST;
+                                        infer_pre_active_count <= 10'd0;
+                                        raw_image0_rd_addr <= 10'd0;
+                                        infer_poisson_thresh_rd_addr <= 10'd0;
+                                        infer_model_state_valid <= 1'b0;
+                                    end else begin
+                                        resp_status    <= STATUS_BAD_PACKET;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                                        response_ready <= 1'b1;
+                                    end
+                                end
+                                OP_READ_SPIKE_COUNT: begin
+                                    if ((req_nargs == 8'd2) &&
+                                        (arg0 >= 0) && (arg0 < N_NEURONS) &&
+                                        !infer_active) begin
+                                        infer_spike_rd_addr <= arg0[6:0];
+                                        memrd_kind    <= MEMRD_SPIKE_COUNT;
+                                        memrd_wait    <= 1'b1;
+                                        memrd_pending <= 1'b1;
                                     end else begin
                                         resp_status    <= STATUS_BAD_PACKET;
                                         resp_result    <= 32'sd0;
