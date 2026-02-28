@@ -1411,42 +1411,217 @@ def run_mine_style_python_phase4_retry_stats_with_image(
     max_fr_step: int,
     max_fr_limit: int,
     min_inj_spikes: int,
-) -> tuple[int, int, int, int]:
-    """Python coarse retry reference for FPGA phase4: retry max_fr, then run inj+blank once."""
-    if int(max_fr_start) <= 0 or int(max_fr_step) <= 0 or int(max_fr_limit) < int(max_fr_start):
+    model_state: dict | None = None,
+) -> tuple[int, int, int, int, np.ndarray]:
+    """Mine.py retry reference: each trial runs inj(STDP)->blank with state continuity."""
+    if int(max_fr_start) <= 0 or int(max_fr_step) <= 0:
         raise ValueError("invalid max_fr retry parameters")
-    accepted_max_fr: int | None = None
-    probe_inj_total: int | None = None
-    for max_fr in range(int(max_fr_start), int(max_fr_limit) + 1, int(max_fr_step)):
-        thresholds = build_poisson_thresholds_u11_with_max_fr(image_u8, max_fr)
-        probe_inj, _ = run_mine_style_python_inj_blank_stats_with_thresholds(
-            thresholds,
-            inj_steps=int(inj_steps),
-            blank_steps=0,
-            seed=int(seed),
-        )
-        if int(probe_inj) >= int(min_inj_spikes):
-            accepted_max_fr = int(max_fr)
-            probe_inj_total = int(probe_inj)
-            break
-    if accepted_max_fr is None:
-        accepted_max_fr = int(max_fr_limit)
-        thresholds = build_poisson_thresholds_u11_with_max_fr(image_u8, accepted_max_fr)
-        probe_inj_total, _ = run_mine_style_python_inj_blank_stats_with_thresholds(
-            thresholds,
-            inj_steps=int(inj_steps),
-            blank_steps=0,
-            seed=int(seed),
-        )
+    dt = 1e-3
+    n_in = N_IN
+    n = N_NEURONS
+    input_decay = 0.0
+    input_scale = 1000.0
+    exc_td = 1e-3
+    inh_td = 2e-3
+    inh_coeff = 0.85 / float(n - 1)
 
-    final_thresholds = build_poisson_thresholds_u11_with_max_fr(image_u8, accepted_max_fr)
-    py_inj, py_blank = run_mine_style_python_inj_blank_stats_with_thresholds(
-        final_thresholds,
-        inj_steps=int(inj_steps),
-        blank_steps=int(blank_steps),
-        seed=int(seed),
-    )
-    return int(accepted_max_fr), int(probe_inj_total), int(py_inj), int(py_blank)
+    if model_state is not None and ("w_in" in model_state):
+        w_in = np.asarray(model_state["w_in"], dtype=np.float64)
+    else:
+        w_in = _build_fixed_w_in_for_mine_like()
+
+    if model_state is not None and ("rng_state" in model_state):
+        rng_state = int(model_state["rng_state"]) & 0xFFFFFFFF
+    else:
+        rng_state = int(seed) & 0xFFFFFFFF
+
+    if model_state is not None and ("c_in_state" in model_state):
+        c_in_state = np.asarray(model_state["c_in_state"], dtype=np.float64)
+        g_in_state = np.asarray(model_state["g_in_state"], dtype=np.float64)
+        x_in_state = np.asarray(model_state["x_in_state"], dtype=np.float64)
+        x_exc_state = np.asarray(model_state["x_exc_state"], dtype=np.float64)
+        A = np.asarray(model_state["A"], dtype=np.float64)
+        B_T = np.asarray(model_state["B_T"], dtype=np.float64)
+        exc_syn_r = np.asarray(model_state["exc_syn_r"], dtype=np.float64)
+        inh_syn_r = np.asarray(model_state["inh_syn_r"], dtype=np.float64)
+        delay_input = np.asarray(model_state["delay_input"], dtype=np.float64)
+        delay_exc2inh = np.asarray(model_state["delay_exc2inh"], dtype=np.float64)
+        g_inh = np.asarray(model_state["g_inh"], dtype=np.float64)
+        v_exc = np.asarray(model_state["v_exc"], dtype=np.float64)
+        tlast_exc = np.asarray(model_state["tlast_exc"], dtype=np.float64)
+        theta = np.asarray(model_state["theta"], dtype=np.float64)
+        vthr_exc = np.asarray(model_state["vthr_exc"], dtype=np.float64)
+        exc_tcount = int(model_state["exc_tcount"])
+        v_inh = np.asarray(model_state["v_inh"], dtype=np.float64)
+        tlast_inh = np.asarray(model_state["tlast_inh"], dtype=np.float64)
+        vthr_inh = np.asarray(model_state["vthr_inh"], dtype=np.float64)
+        inh_tcount = int(model_state["inh_tcount"])
+    else:
+        c_in_state = np.zeros(n_in, dtype=np.float64)
+        g_in_state = np.zeros(n, dtype=np.float64)
+        x_in_state = np.zeros(n_in, dtype=np.float64)
+        x_exc_state = np.zeros(n, dtype=np.float64)
+        A = np.zeros((n, n_in), dtype=np.float64)
+        B_T = np.zeros((n_in, n), dtype=np.float64)
+        exc_syn_r = np.zeros(n, dtype=np.float64)
+        inh_syn_r = np.zeros(n, dtype=np.float64)
+        delay_input = np.zeros((n, max(1, round(5e-3 / dt))), dtype=np.float64)
+        delay_exc2inh = np.zeros((n, max(1, round(2e-3 / dt))), dtype=np.float64)
+        g_inh = np.zeros(n, dtype=np.float64)
+        v_exc = np.full(n, -65.0, dtype=np.float64)
+        tlast_exc = np.zeros(n, dtype=np.float64)
+        theta = np.zeros(n, dtype=np.float64)
+        vthr_exc = np.full(n, -52.0, dtype=np.float64)
+        exc_tcount = 0
+        v_inh = np.full(n, -45.0, dtype=np.float64)
+        tlast_inh = np.zeros(n, dtype=np.float64)
+        vthr_inh = np.full(n, -40.0, dtype=np.float64)
+        inh_tcount = 0
+
+    def _run_steps(
+        thresholds_arr: np.ndarray,
+        n_steps: int,
+        *,
+        force_no_input: bool,
+        stdp_enable: bool,
+        track_exc_counts: bool = False,
+    ) -> tuple[int, np.ndarray]:
+        nonlocal rng_state, c_in_state, g_in_state, exc_syn_r, inh_syn_r, delay_input, delay_exc2inh, g_inh
+        nonlocal v_exc, tlast_exc, theta, vthr_exc, exc_tcount, v_inh, tlast_inh, vthr_inh, inh_tcount
+        nonlocal x_in_state, x_exc_state, A, B_T
+        total_spikes = 0
+        exc_counts = np.zeros(n, dtype=np.int64)
+        for _ in range(int(n_steps)):
+            s_in = np.zeros(n_in, dtype=np.uint8)
+            if not force_no_input:
+                for i in range(n_in):
+                    rng_state = lcg_next_u32(rng_state)
+                    rand11 = (rng_state >> 21) & 0x7FF
+                    s_in[i] = 1 if rand11 < int(thresholds_arr[i]) else 0
+            pre_active = np.flatnonzero(s_in)
+
+            c_in_state = c_in_state * input_decay + input_scale * s_in.astype(np.float64)
+            x_in_state = _single_exp_step(x_in_state, s_in.astype(np.float64), dt, 2e-2)
+            g_in_state *= input_decay
+            if pre_active.size > 0:
+                g_in_state += input_scale * np.sum(w_in[:, pre_active], axis=1)
+            delayed_g_in, delay_input = _delay_step(delay_input, g_in_state)
+
+            v_exc, tlast_exc, s_exc = _conductance_lif_step(
+                v_exc, tlast_exc, exc_tcount, delayed_g_in, g_inh,
+                dt=dt, tref=5e-3, tc_m=1e-1,
+                vrest=-65.0, vreset=-65.0, vthr=vthr_exc, vpeak=20.0,
+                e_exc=0.0, e_inh=-100.0,
+            )
+            theta = (1.0 - dt / 1e4) * theta + 0.05 * s_exc.astype(np.float64)
+            theta = np.clip(theta, 0.0, 35.0)
+            vthr_exc = theta + (-52.0)
+            exc_tcount += 1
+            step_exc_sum = int(np.sum(s_exc, dtype=np.int64))
+            total_spikes += step_exc_sum
+            if track_exc_counts and step_exc_sum > 0:
+                exc_counts += s_exc.astype(np.int64)
+
+            exc_syn_r = _single_exp_step(exc_syn_r, s_exc.astype(np.float64), dt, exc_td)
+            x_exc_state = _single_exp_step(x_exc_state, s_exc.astype(np.float64), dt, 2e-2)
+            g_exc = MINE_WEXC * exc_syn_r
+            delayed_g_exc, delay_exc2inh = _delay_step(delay_exc2inh, g_exc)
+
+            v_inh, tlast_inh, s_inh = _conductance_lif_step(
+                v_inh, tlast_inh, inh_tcount, delayed_g_exc, np.zeros(n, dtype=np.float64),
+                dt=dt, tref=2e-3, tc_m=1e-2,
+                vrest=-60.0, vreset=-45.0, vthr=vthr_inh, vpeak=20.0,
+                e_exc=0.0, e_inh=-85.0,
+            )
+            inh_tcount += 1
+
+            inh_syn_r = _single_exp_step(inh_syn_r, s_inh.astype(np.float64), dt, inh_td)
+            sum_c_inh = float(np.sum(inh_syn_r))
+            g_inh = inh_coeff * (sum_c_inh - inh_syn_r)
+
+            if stdp_enable:
+                p = int(np.argmax(s_exc))
+                if int(s_exc[p]) != 0:
+                    A[p, :] += x_in_state
+                if pre_active.size > 0:
+                    np.add.at(B_T, pre_active, x_exc_state)
+        return int(total_spikes), exc_counts
+
+    def _apply_stdp_once(update_nt: int) -> None:
+        nonlocal w_in, g_in_state, A, B_T
+        if int(update_nt) <= 0:
+            return
+        W = np.array(w_in, copy=True)
+        W_abs_sum = np.sum(np.abs(W), axis=1, keepdims=True)
+        W_abs_sum[W_abs_sum == 0.0] = 1.0
+        W = W * (0.1 / W_abs_sum)
+        dW = 1e-2 * (5e-2 - W) * A
+        dW -= 1e-4 * W * B_T.T
+        clipped_dW = np.clip(dW / float(int(update_nt)), -1e-3, 1e-3)
+        W = np.clip(W + clipped_dW, 0.0, 5e-2)
+        w_in = W
+        g_in_state = np.dot(w_in, c_in_state)
+        A.fill(0.0)
+        B_T.fill(0.0)
+
+    accepted_max_fr = int(max_fr_start)
+    accepted_inj = 0
+    accepted_blank = 0
+    accepted_counts = np.zeros(n, dtype=np.int64)
+    max_fr = int(max_fr_start)
+    retry_guard = 0
+    while True:
+        thresholds_arr = np.asarray(build_poisson_thresholds_u11_with_max_fr(image_u8, int(max_fr)), dtype=np.uint16)
+        inj_total, inj_counts = _run_steps(
+            thresholds_arr,
+            int(inj_steps),
+            force_no_input=False,
+            stdp_enable=True,
+            track_exc_counts=True,
+        )
+        _apply_stdp_once(int(inj_steps))
+        blank_total, _ = _run_steps(
+            thresholds_arr,
+            int(blank_steps),
+            force_no_input=True,
+            stdp_enable=False,
+            track_exc_counts=False,
+        )
+        accepted_max_fr = int(max_fr)
+        accepted_inj = int(inj_total)
+        accepted_blank = int(blank_total)
+        accepted_counts = np.array(inj_counts, copy=True)
+        if int(inj_total) >= int(min_inj_spikes):
+            break
+        max_fr += int(max_fr_step)
+        retry_guard += 1
+        if retry_guard > 100000:
+            raise RuntimeError("mine-style phase4 retry did not converge")
+
+    if model_state is not None:
+        model_state["w_in"] = np.array(w_in, copy=True)
+        model_state["rng_state"] = int(rng_state)
+        model_state["c_in_state"] = np.array(c_in_state, copy=True)
+        model_state["g_in_state"] = np.array(g_in_state, copy=True)
+        model_state["x_in_state"] = np.array(x_in_state, copy=True)
+        model_state["x_exc_state"] = np.array(x_exc_state, copy=True)
+        model_state["A"] = np.array(A, copy=True)
+        model_state["B_T"] = np.array(B_T, copy=True)
+        model_state["exc_syn_r"] = np.array(exc_syn_r, copy=True)
+        model_state["inh_syn_r"] = np.array(inh_syn_r, copy=True)
+        model_state["delay_input"] = np.array(delay_input, copy=True)
+        model_state["delay_exc2inh"] = np.array(delay_exc2inh, copy=True)
+        model_state["g_inh"] = np.array(g_inh, copy=True)
+        model_state["v_exc"] = np.array(v_exc, copy=True)
+        model_state["tlast_exc"] = np.array(tlast_exc, copy=True)
+        model_state["theta"] = np.array(theta, copy=True)
+        model_state["vthr_exc"] = np.array(vthr_exc, copy=True)
+        model_state["exc_tcount"] = int(exc_tcount)
+        model_state["v_inh"] = np.array(v_inh, copy=True)
+        model_state["tlast_inh"] = np.array(tlast_inh, copy=True)
+        model_state["vthr_inh"] = np.array(vthr_inh, copy=True)
+        model_state["inh_tcount"] = int(inh_tcount)
+    return int(accepted_max_fr), int(accepted_inj), int(accepted_inj), int(accepted_blank), accepted_counts
 
 
 def fpga_phase4_build_assignments_from_raw1(
@@ -1577,6 +1752,7 @@ def fpga_train_infer_e2e_compare(
     fpga_train_label_stats_reset(ser)
     py_label_spike_sums = np.zeros((10, N_NEURONS), dtype=np.int64)
     py_label_counts = np.zeros((10,), dtype=np.int64)
+    py_phase4_state: dict = {"w_in": _build_fixed_w_in_for_mine_like()}
 
     mismatch_inj_blank = 0
     pbar = tqdm(total=n_samples, desc="e2e train+compare", unit="img", miniters=1, leave=True)
@@ -1584,7 +1760,7 @@ def fpga_train_infer_e2e_compare(
         label = int(labels_all[sample_idx])
         image_u8, _ = read_mnist_image_u8(sample_idx)
 
-        py_accepted_max_fr, _, py_inj, py_blank = run_mine_style_python_phase4_retry_stats_with_image(
+        py_accepted_max_fr, _, py_inj, py_blank, py_counts_arr = run_mine_style_python_phase4_retry_stats_with_image(
             image_u8,
             inj_steps=inj_steps,
             blank_steps=blank_steps,
@@ -1593,14 +1769,9 @@ def fpga_train_infer_e2e_compare(
             max_fr_step=max_fr_step,
             max_fr_limit=max_fr_limit,
             min_inj_spikes=min_inj_spikes,
+            model_state=py_phase4_state,
         )
-        py_thresh = build_poisson_thresholds_u11_with_max_fr(image_u8, py_accepted_max_fr)
-        py_counts = run_mine_style_python_poisson_with_thresholds(
-            thresholds=py_thresh,
-            n_steps=inj_steps,
-            seed=seed,
-        )
-        py_label_spike_sums[label, :] += np.asarray(py_counts, dtype=np.int64)
+        py_label_spike_sums[label, :] += np.asarray(py_counts_arr, dtype=np.int64)
         py_label_counts[label] += 1
 
         prepare_fpga_sample_image_via_streamed_load(
