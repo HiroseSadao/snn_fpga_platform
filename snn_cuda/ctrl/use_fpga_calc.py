@@ -455,7 +455,6 @@ def fpga_run_sample_infer(
     seed_i32 = int(seed) & 0xFFFFFFFF
     if seed_i32 >= 0x80000000:
         seed_i32 -= 0x100000000
-    print(f"Requesting FPGA inference: seed=0x{seed & 0xFFFFFFFF:08X}, steps={n_steps}")
     status, total_spikes = send_request(
         ser=ser,
         opcode=OP_RUN_SAMPLE_INFER,
@@ -463,7 +462,6 @@ def fpga_run_sample_infer(
         response_timeout=timeout_sec,
     )
     require_ok(status, "RUN_SAMPLE_INFER")
-    print(f"FPGA inference finished, total_spikes={total_spikes}")
     return total_spikes
 
 
@@ -1945,7 +1943,7 @@ def fpga_train_then_infer_compare_500_100(
     py_label_counts = np.zeros((10,), dtype=np.int64)
     py_phase4_state: dict = {"w_in": _build_fixed_w_in_for_mine_like()}
 
-    pbar_train = tqdm(total=n_train, desc="train 500", unit="img", miniters=1, leave=True)
+    pbar_train = tqdm(total=n_train, desc=f"train {n_train}", unit="img", miniters=1, leave=True)
     mismatch_inj_blank = 0
     for sample_idx in range(n_train):
         label = int(labels_all[sample_idx])
@@ -1996,7 +1994,7 @@ def fpga_train_then_infer_compare_500_100(
     infer_pred_mismatch = 0
     fpga_correct = 0
     py_correct = 0
-    pbar_infer = tqdm(total=n_infer, desc="infer 100", unit="img", miniters=1, leave=True)
+    pbar_infer = tqdm(total=n_infer, desc=f"infer {n_infer}", unit="img", miniters=1, leave=True)
     for k in range(n_infer):
         sample_idx = n_train + k
         label = int(labels_all[sample_idx])
@@ -2022,7 +2020,6 @@ def fpga_train_then_infer_compare_500_100(
 
         if fpga_pred != py_pred:
             infer_pred_mismatch += 1
-            print(f"[infer sample {sample_idx}] pred mismatch: label={label} fpga={fpga_pred} py={py_pred}")
         if fpga_pred == label:
             fpga_correct += 1
         if py_pred == label:
@@ -2647,8 +2644,8 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="fail --train-infer-e2e-compare on any sample-level phase4 mismatch or assignment mismatch",
     )
-    parser.add_argument("--train-then-infer-train-samples", type=int, default=500, help="train sample count for --train-then-infer-compare (default 500)")
-    parser.add_argument("--train-then-infer-infer-samples", type=int, default=100, help="infer sample count for --train-then-infer-compare (default 100)")
+    parser.add_argument("--train-then-infer-train-samples", type=int, default=9000, help="train sample count for --train-then-infer-compare (default 9000)")
+    parser.add_argument("--train-then-infer-infer-samples", type=int, default=1000, help="infer sample count for --train-then-infer-compare (default 1000)")
     parser.add_argument("--train-then-infer-max-fr", type=int, default=32, help="max_fr for Python inference reference in --train-then-infer-compare")
     parser.add_argument("--chunk-nsteps", type=int, default=16, help="step count for phase4 injection window")
     parser.add_argument(
