@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Sat Feb 28 06:56:26 2026
-| Host         : eecs-digital-04 running 64-bit Ubuntu 24.04.3 LTS
+| Date         : Sat Feb 28 21:56:25 2026
+| Host         : eecs-digital-17 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_utilization -file obj/post_synth_util.rpt -hierarchical -hierarchical_depth 4
 | Design       : top_level
 | Device       : xc7s50csga324-1
@@ -22,17 +22,17 @@ Table of Contents
 +--------------------------+-----------------------------------+------------+------------+---------+------+-------+--------+--------+------------+
 |         Instance         |               Module              | Total LUTs | Logic LUTs | LUTRAMs | SRLs |  FFs  | RAMB36 | RAMB18 | DSP Blocks |
 +--------------------------+-----------------------------------+------------+------------+---------+------+-------+--------+--------+------------+
-| top_level                |                             (top) |      25884 |      24662 |    1222 |    0 | 17052 |     50 |      4 |         45 |
-|   (top_level)            |                             (top) |      15757 |      14535 |    1222 |    0 | 14352 |      2 |      3 |         45 |
-|   u_ddr3_top             |                          ddr3_top |       3144 |       3144 |       0 |    0 |  2210 |      0 |      0 |          0 |
-|     (u_ddr3_top)         |                          ddr3_top |        310 |        310 |       0 |    0 |     0 |      0 |      0 |          0 |
+| top_level                |                             (top) |      26945 |      25735 |    1210 |    0 | 17220 |     50 |      4 |         46 |
+|   (top_level)            |                             (top) |      16310 |      15100 |    1210 |    0 | 14508 |      2 |      3 |         46 |
+|   u_ddr3_top             |                          ddr3_top |       3244 |       3244 |       0 |    0 |  2210 |      0 |      0 |          0 |
+|     (u_ddr3_top)         |                          ddr3_top |        410 |        410 |       0 |    0 |     0 |      0 |      0 |          0 |
 |     ddr3_controller_inst |                   ddr3_controller |       2820 |       2820 |       0 |    0 |  2187 |      0 |      0 |          0 |
-|   u_infer_w_rom_bram     | xpm_memory_sdpram__parameterized0 |       1843 |       1843 |       0 |    0 |     2 |     48 |      0 |          0 |
-|     (u_infer_w_rom_bram) | xpm_memory_sdpram__parameterized0 |       1796 |       1796 |       0 |    0 |     0 |      0 |      0 |          0 |
-|   u_poisson_divider      |                         divider2b |        244 |        244 |       0 |    0 |   137 |      0 |      0 |          0 |
-|   u_sd_controller        |                     sd_controller |       2621 |       2621 |       0 |    0 |   148 |      0 |      0 |          0 |
-|   u_stdp_divider         |                       divider2b_0 |       1230 |       1230 |       0 |    0 |   137 |      0 |      0 |          0 |
-|   u_uart_rx              |                           uart_rx |       1009 |       1009 |       0 |    0 |    41 |      0 |      0 |          0 |
+|   u_infer_w_rom_bram     | xpm_memory_sdpram__parameterized0 |       1864 |       1864 |       0 |    0 |     2 |     48 |      0 |          0 |
+|     (u_infer_w_rom_bram) | xpm_memory_sdpram__parameterized0 |       1815 |       1815 |       0 |    0 |     0 |      0 |      0 |          0 |
+|   u_poisson_divider      |                         divider2b |        348 |        348 |       0 |    0 |   137 |      0 |      0 |          0 |
+|   u_sd_controller        |                     sd_controller |       2858 |       2858 |       0 |    0 |   160 |      0 |      0 |          0 |
+|   u_stdp_divider         |                       divider2b_0 |       1138 |       1138 |       0 |    0 |   137 |      0 |      0 |          0 |
+|   u_uart_rx              |                           uart_rx |       1147 |       1147 |       0 |    0 |    41 |      0 |      0 |          0 |
 +--------------------------+-----------------------------------+------------+------------+---------+------+-------+--------+--------+------------+
 
 

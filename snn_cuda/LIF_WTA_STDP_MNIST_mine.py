@@ -427,9 +427,9 @@ class DiehlAndCook2015Network:
         if stdp:
             # dot(s_exc_, x_in_) と dot(x_exc_, s_in_) の数式同値accumulate
             t0 = time.perf_counter()
-            p = int(np.argmax(s_exc))
-            if s_exc[p] != 0:
-                self.A[p, :] += x_in
+            post_active = np.flatnonzero(s_exc)
+            if post_active.size > 0:
+                self.A[post_active, :] += x_in
 
             if pre_active.size > 0:
                 np.add.at(self.B_T, pre_active, x_exc)
@@ -464,19 +464,19 @@ class DiehlAndCook2015Network:
         if self.profile_every > 0 and self.profile_cycle_count >= self.profile_every:
             scale = 1000.0 / self.profile_cycle_count
             pre_active_mean = self.profile_pre_active_count / self.profile_cycle_count
-            print(
-                "[perf avg/{} cycles] synapse={:.4f}ms conn_in_update={:.4f}ms conn_ei={:.4f}ms conn_ie={:.4f}ms neuron={:.4f}ms accumulator={:.4f}ms update={:.4f}ms pre_active/timestep={:.4f}".format(
-                    self.profile_cycle_count,
-                    self.profile_synapse * scale,
-                    self.profile_conn_in_update * scale,
-                    self.profile_conn_ei * scale,
-                    self.profile_conn_ie * scale,
-                    self.profile_neuron * scale,
-                    self.profile_accumulator * scale,
-                    self.profile_update * scale,
-                    pre_active_mean,
-                )
-            )
+            # print(
+            #     "[perf avg/{} cycles] synapse={:.4f}ms conn_in_update={:.4f}ms conn_ei={:.4f}ms conn_ie={:.4f}ms neuron={:.4f}ms accumulator={:.4f}ms update={:.4f}ms pre_active/timestep={:.4f}".format(
+            #         self.profile_cycle_count,
+            #         self.profile_synapse * scale,
+            #         self.profile_conn_in_update * scale,
+            #         self.profile_conn_ei * scale,
+            #         self.profile_conn_ie * scale,
+            #         self.profile_neuron * scale,
+            #         self.profile_accumulator * scale,
+            #         self.profile_update * scale,
+            #         pre_active_mean,
+            #     )
+            # )
             self.profile_cycle_count = 0
             self.profile_synapse = 0.0
             self.profile_conn_in_update = 0.0

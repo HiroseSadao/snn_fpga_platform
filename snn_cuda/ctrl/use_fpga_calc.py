@@ -99,7 +99,8 @@ MINE_WINH = 0.875
 
 # Poisson/RNG constants (must match top_level.sv)
 POISSON_NUM_CONST = 9175  # floor(32*140*2048*1e-3)
-RNG_MAX = 2047
+# Poisson threshold upper bound. 2048 means always-fire against rand11 in [0..2047].
+RNG_MAX = 2048
 LCG_A = 1664525
 LCG_C = 1013904223
 
@@ -679,7 +680,7 @@ def fpga_read_poisson_thresh(ser: serial.Serial) -> list[int]:
     for idx in range(N_IN):
         status, value = send_request(ser, OP_READ_POISSON_THRESH, [idx, 0])
         require_ok(status, f"READ_POISSON_THRESH[{idx}]")
-        vals.append(int(value) & 0x7FF)
+        vals.append(int(value) & 0xFFF)
     return vals
 
 
@@ -990,8 +991,12 @@ def kernel_trace_update_python(
     x_exc: np.ndarray,
     winner_idx: int | None,
     pre_active: np.ndarray,
+    post_active: np.ndarray | None = None,
 ) -> None:
-    if winner_idx is not None and winner_idx >= 0:
+    if post_active is not None:
+        if post_active.size > 0:
+            A[post_active.astype(np.int64), :] += x_in
+    elif winner_idx is not None and winner_idx >= 0:
         A[winner_idx, :] += x_in
     if pre_active.size > 0:
         np.add.at(B_T, pre_active.astype(np.int64), x_exc)
@@ -1124,14 +1129,12 @@ def selfcheck_training_kernels(seed: int = 0) -> None:
         x_in = rng.rand(N_IN)
         x_exc = rng.rand(N_NEURONS)
         pre_active = np.flatnonzero(s_in)
-        p = int(np.argmax(s_exc))
-        winner = p if s_exc[p] else -1
-
-        if winner >= 0:
-            A_ref[winner, :] += x_in
+        post_active = np.flatnonzero(s_exc)
+        if post_active.size > 0:
+            A_ref[post_active, :] += x_in
         if pre_active.size > 0:
             np.add.at(B_T_ref, pre_active, x_exc)
-        kernel_trace_update_python(A_k, B_T_k, x_in, x_exc, winner, pre_active)
+        kernel_trace_update_python(A_k, B_T_k, x_in, x_exc, None, pre_active, post_active)
 
     print(
         "train kernel trace selfcheck: "
@@ -1417,6 +1420,47 @@ def fpga_train_run_sample_phase4(ser: serial.Serial, *, inj_steps: int, tile_row
     return int(result)
 
 
+def fpga_probe_phase4_opcode(ser: serial.Serial) -> None:
+    """Probe whether opcode 0x38 is implemented in the current bitstream.
+
+    Sends an intentionally invalid phase4 payload. Implemented kernels should return BAD_PACKET,
+    while non-implemented kernels return UNSUPPORTED_OP.
+    """
+    status, result = send_request(
+        ser,
+        OP_TRAIN_RUN_SAMPLE_PHASE4,
+        [0, 0],  # invalid by design
+        response_timeout=2.0,
+        transient_retry_max=0,
+    )
+    if status == STATUS_UNSUPPORTED_OP:
+        raise RuntimeError(
+            "FPGA bitstream/protocol mismatch: opcode 0x38 (TRAIN_RUN_SAMPLE_PHASE4) is not implemented "
+            "in the currently programmed FPGA image."
+        )
+    # Implemented bitstreams should reject [0,0] as BAD_PACKET.
+    if status not in (STATUS_BAD_PACKET, STATUS_OK):
+        raise RuntimeError(f"phase4 opcode probe unexpected status=0x{status:02X}, result=0x{int(result)&0xFFFFFFFF:08X}")
+
+
+def fpga_probe_image_load_opcode(ser: serial.Serial) -> None:
+    """Probe whether opcode 0x14 is implemented in the current bitstream."""
+    status, result = send_request(
+        ser,
+        OP_LOAD_IMAGE_FROM_DDR,
+        [0, 0],  # invalid by design (n_bytes must be > 0)
+        response_timeout=2.0,
+        transient_retry_max=0,
+    )
+    if status == STATUS_UNSUPPORTED_OP:
+        raise RuntimeError(
+            "FPGA bitstream/protocol mismatch: opcode 0x14 (LOAD_IMAGE_FROM_DDR) is not implemented "
+            "in the currently programmed FPGA image."
+        )
+    if status not in (STATUS_BAD_PACKET, STATUS_OK):
+        raise RuntimeError(f"image-load opcode probe unexpected status=0x{status:02X}, result=0x{int(result)&0xFFFFFFFF:08X}")
+
+
 def build_poisson_thresholds_u11_with_max_fr(image_u8: list[int], max_fr: int) -> list[int]:
     """Match FPGA runtime Poisson scaling: POISSON_NUM_CONST * max_fr / 32, then per-pixel normalize."""
     sum_u8 = int(sum(image_u8))
@@ -1571,9 +1615,9 @@ def run_mine_style_python_phase4_retry_stats_with_image(
             g_inh = inh_coeff * (sum_c_inh - inh_syn_r)
 
             if stdp_enable:
-                p = int(np.argmax(s_exc))
-                if int(s_exc[p]) != 0:
-                    A[p, :] += x_in_state
+                post_active = np.flatnonzero(s_exc)
+                if post_active.size > 0:
+                    A[post_active, :] += x_in_state
                 if pre_active.size > 0:
                     np.add.at(B_T, pre_active, x_exc_state)
         return int(total_spikes), exc_counts
@@ -2478,9 +2522,9 @@ def run_mine_style_python_inj_blank_stats_with_thresholds(
             g_inh = inh_coeff * (sum_c_inh - inh_syn_r)
 
             if stdp_enable:
-                p = int(np.argmax(s_exc))
-                if int(s_exc[p]) != 0:
-                    A[p, :] += x_in_state
+                post_active = np.flatnonzero(s_exc)
+                if post_active.size > 0:
+                    A[post_active, :] += x_in_state
                 if pre_active.size > 0:
                     np.add.at(B_T, pre_active, x_exc_state)
         return total_spikes
@@ -2677,12 +2721,21 @@ if __name__ == "__main__":
             args.train_infer_e2e_compare,
             args.train_then_infer_compare,
         ])
+        needs_phase4_opcode = any([
+            args.train_run_sample_phase4,
+            args.train_phase4_build_assignments,
+            args.train_infer_e2e_compare,
+            args.train_then_infer_compare,
+        ])
         if needs_reliable_link and not caps_ok:
             raise RuntimeError(
                 "FPGA UART link is not responding (TRAIN_QUERY_CAPS timeout). "
                 "This often happens if a prior run left the FPGA busy/stuck. "
                 "Reset/power-cycle the FPGA board and retry."
             )
+        if needs_phase4_opcode:
+            fpga_probe_image_load_opcode(ser)
+            fpga_probe_phase4_opcode(ser)
         if args.train_run_sample_phase4:
             if args.image_source != "fpga":
                 raise ValueError("--train-run-sample-phase4 currently requires --image-source fpga")

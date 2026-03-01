@@ -92,7 +92,8 @@ module top_level(
     // mine.py input_synapse has dt==td==1ms -> decay term becomes ~0 for c_in/g_in state update.
     localparam logic signed [31:0] FXP_INPUT_G_DECAY = 32'sd0;
     localparam logic [31:0] POISSON_NUM_CONST = 32'd9175; // floor(32*140*2048*1e-3)
-    localparam logic [10:0] RNG_MAX = 11'd2047;
+    // Poisson threshold upper bound. 2048 means always-fire against rand11 in [0..2047].
+    localparam logic [11:0] RNG_MAX = 12'd2048;
     localparam logic [31:0] LCG_A = 32'd1664525;
     localparam logic [31:0] LCG_C = 32'd1013904223;
     // Build switch: keep training kernels enabled for mine.py-aligned learning builds.
@@ -419,6 +420,9 @@ module top_level(
     logic [31:0] train_trace_bt_pre_base;
     logic        train_trace_use_infer_prelist;
     logic        train_trace_skip_a;
+    logic        train_trace_skip_b;
+    logic        train_trace_multi_post_active;
+    logic [6:0]  train_trace_post_scan_idx;
     logic        train_stdp_active;
     train_stdp_state_t train_stdp_state;
     logic [6:0]  train_stdp_row0;
@@ -560,11 +564,11 @@ module top_level(
     logic [31:0] infer_rng_state;
     logic [31:0] infer_poisson_num_const_cfg;
     logic [9:0]  infer_poisson_thresh_rd_addr;
-    logic [10:0] infer_poisson_thresh_rd_data;
+    logic [11:0] infer_poisson_thresh_rd_data;
     logic        infer_poisson_thresh_wr_en;
     logic [9:0]  infer_poisson_thresh_wr_addr;
-    logic [10:0] infer_poisson_thresh_wr_data;
-    (* ram_style = "block" *) logic [10:0] infer_poisson_thresh_mem [0:N_IN-1];
+    logic [11:0] infer_poisson_thresh_wr_data;
+    (* ram_style = "block" *) logic [11:0] infer_poisson_thresh_mem [0:N_IN-1];
     logic        infer_pre_wr_en;
     logic [9:0]  infer_pre_wr_addr;
     logic [9:0]  infer_pre_wr_data;
@@ -1145,6 +1149,9 @@ module top_level(
             train_trace_bt_pre_base <= TRAIN_BASE_BT_Q16_WORDS;
             train_trace_use_infer_prelist <= 1'b0;
             train_trace_skip_a   <= 1'b0;
+            train_trace_skip_b   <= 1'b0;
+            train_trace_multi_post_active <= 1'b0;
+            train_trace_post_scan_idx <= 7'd0;
             train_stdp_active    <= 1'b0;
             train_stdp_state     <= TSK_IDLE;
             train_stdp_row0      <= 7'd0;
@@ -1260,7 +1267,7 @@ module top_level(
             infer_poisson_thresh_rd_addr <= 10'd0;
             infer_poisson_thresh_wr_en <= 1'b0;
             infer_poisson_thresh_wr_addr <= 10'd0;
-            infer_poisson_thresh_wr_data <= 11'd0;
+            infer_poisson_thresh_wr_data <= 12'd0;
             infer_pre_active_count <= 10'd0;
             infer_pre_wr_en <= 1'b0;
             infer_pre_wr_addr <= 10'd0;
@@ -1346,6 +1353,9 @@ module top_level(
                         train_trace_state <= TRK_IDLE;
                         train_trace_use_infer_prelist <= 1'b0;
                         train_trace_skip_a <= 1'b0;
+                        train_trace_skip_b <= 1'b0;
+                        train_trace_multi_post_active <= 1'b0;
+                        train_trace_post_scan_idx <= 7'd0;
                         train_stdp_active <= 1'b0;
                         train_stdp_state  <= TSK_IDLE;
                         train_stdp_batch_active <= 1'b0;
@@ -1408,9 +1418,13 @@ module top_level(
                             end
                             TRK_A_WRITE_A_WAIT: begin
                                 if (train_a_idx == (N_IN - 1)) begin
-                                    train_pre_idx <= 10'd0;
-                                    train_b_col_idx <= 7'd0;
-                                    train_trace_state <= TRK_B_READ_PRE_REQ;
+                                    if (train_trace_skip_b) begin
+                                        train_trace_state <= TRK_DONE;
+                                    end else begin
+                                        train_pre_idx <= 10'd0;
+                                        train_b_col_idx <= 7'd0;
+                                        train_trace_state <= TRK_B_READ_PRE_REQ;
+                                    end
                                 end else begin
                                     train_a_idx <= train_a_idx + 10'd1;
                                     train_trace_state <= TRK_A_READ_X_REQ;
@@ -1448,6 +1462,8 @@ module top_level(
                                 train_trace_state <= TRK_IDLE;
                                 train_trace_use_infer_prelist <= 1'b0;
                                 train_trace_skip_a <= 1'b0;
+                                train_trace_skip_b <= 1'b0;
+                                train_trace_multi_post_active <= 1'b0;
                                 resp_status    <= STATUS_BAD_PACKET;
                                 resp_result    <= 32'sd0;
                                 resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
@@ -1859,6 +1875,7 @@ module top_level(
                         train_trace_state <= TRK_IDLE;
                         train_trace_use_infer_prelist <= 1'b0;
                         train_trace_skip_a <= 1'b0;
+                        train_trace_skip_b <= 1'b0;
                         if (!train_chunk_active) begin
                             resp_status    <= STATUS_OK;
                             resp_result    <= {22'd0, train_pre_count};
@@ -2442,6 +2459,9 @@ module top_level(
                         train_pre_count    <= train_chunk_pre_write_count;
                         train_trace_use_infer_prelist <= 1'b0;
                         train_trace_skip_a <= 1'b0;
+                        train_trace_skip_b <= 1'b0;
+                        train_trace_multi_post_active <= 1'b0;
+                        train_trace_post_scan_idx <= 7'd0;
                         train_a_idx        <= 10'd0;
                         train_pre_idx      <= 10'd0;
                         train_b_col_idx    <= 7'd0;
@@ -2844,8 +2864,9 @@ module top_level(
                                       (req_opcode == OP_READ_TRAIN_LABEL_STAT_SUM) ||
                                       (req_opcode == OP_READ_TRAIN_LABEL_STAT_COUNT))) begin
                             resp_status    <= STATUS_UNSUPPORTED_OP;
-                            resp_result    <= 32'sd0;
-                            resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
+                            // Debug payload: [31:24]=0xF0, [23:16]=req_opcode, [15:8]=req_nargs, [7:0]=rx_state
+                            resp_result    <= {8'hF0, req_opcode, req_nargs, {5'd0, rx_state}};
+                            resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, {8'hF0, req_opcode, req_nargs, {5'd0, rx_state}});
                             response_ready <= 1'b1;
                         end else begin
                             case (req_opcode)
@@ -3140,8 +3161,9 @@ module top_level(
                                 end
                                 default: begin
                                     resp_status    <= STATUS_UNSUPPORTED_OP;
-                                    resp_result    <= 32'sd0;
-                                    resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, 32'sd0);
+                                    // Debug payload: [31:24]=0xF1, [23:16]=req_opcode, [15:8]=req_nargs, [7:0]=rx_state
+                                    resp_result    <= {8'hF1, req_opcode, req_nargs, {5'd0, rx_state}};
+                                    resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, {8'hF1, req_opcode, req_nargs, {5'd0, rx_state}});
                                     response_ready <= 1'b1;
                                 end
                             endcase
@@ -3303,12 +3325,12 @@ module top_level(
 
                     INFER_PREP_DIV_WAIT: begin
                         if (infer_div_out_valid) begin
-                            if (infer_div_q[31:11] != 0) begin
+                            if (infer_div_q[31:12] != 0) begin
                                 infer_poisson_thresh_wr_data <= RNG_MAX;
-                            end else if (infer_div_q[10:0] > RNG_MAX) begin
+                            end else if (infer_div_q[11:0] > RNG_MAX) begin
                                 infer_poisson_thresh_wr_data <= RNG_MAX;
                             end else begin
-                                infer_poisson_thresh_wr_data <= infer_div_q[10:0];
+                                infer_poisson_thresh_wr_data <= infer_div_q[11:0];
                             end
                             infer_poisson_thresh_wr_en <= 1'b1;
                             infer_poisson_thresh_wr_addr <= infer_prep_idx;
@@ -3582,6 +3604,11 @@ module top_level(
                                     train_pre_count    <= infer_pre_active_count;
                                     train_trace_use_infer_prelist <= 1'b1;
                                     train_trace_skip_a <= !infer_step_winner_valid;
+                                    // mine.py alignment: update A for all spiking posts in this step.
+                                    // Run A-only trace per active post, then run B once after the last post.
+                                    train_trace_skip_b <= infer_step_winner_valid;
+                                    train_trace_multi_post_active <= infer_step_winner_valid;
+                                    train_trace_post_scan_idx <= infer_step_winner_idx;
                                     train_a_idx        <= 10'd0;
                                     train_pre_idx      <= 10'd0;
                                     train_b_col_idx    <= 7'd0;
@@ -3593,6 +3620,8 @@ module top_level(
                                     if (infer_step_winner_valid) begin
                                         train_trace_state <= TRK_A_READ_X_REQ;
                                     end else begin
+                                        train_trace_skip_b <= 1'b0;
+                                        train_trace_multi_post_active <= 1'b0;
                                         train_trace_state <= TRK_B_READ_PRE_REQ;
                                     end
                                     infer_trace_wait_last_step <= step_last_now;
@@ -3631,7 +3660,47 @@ module top_level(
 
                     INFER_TRACE_WAIT: begin
                         if (!train_trace_active) begin
-                            if (infer_trace_wait_last_step) begin
+                            logic found_next_post;
+                            logic [6:0] next_post_idx;
+                            found_next_post = 1'b0;
+                            next_post_idx = 7'd0;
+                            if (train_trace_multi_post_active) begin
+                                for (int post_i = 0; post_i < N_NEURONS; post_i = post_i + 1) begin
+                                    if (!found_next_post &&
+                                        (post_i > train_trace_post_scan_idx) &&
+                                        infer_s_exc[post_i]) begin
+                                        found_next_post = 1'b1;
+                                        next_post_idx = post_i[6:0];
+                                    end
+                                end
+                            end
+
+                            if (train_trace_multi_post_active && found_next_post) begin
+                                // Continue A-only trace for the next spiking post neuron.
+                                train_trace_active <= 1'b1;
+                                train_winner_idx   <= next_post_idx;
+                                train_trace_skip_a <= 1'b0;
+                                train_trace_skip_b <= 1'b1;
+                                train_trace_post_scan_idx <= next_post_idx;
+                                train_a_idx        <= 10'd0;
+                                train_pre_idx      <= 10'd0;
+                                train_b_col_idx    <= 7'd0;
+                                train_curr_pre     <= 10'd0;
+                                train_tmp_x_val    <= 32'd0;
+                                train_tmp_mem_val  <= 32'd0;
+                                train_trace_a_row_base <= TRAIN_BASE_A_Q16_WORDS + ({25'd0, next_post_idx} * N_IN);
+                                train_trace_bt_pre_base <= TRAIN_BASE_BT_Q16_WORDS;
+                                train_trace_state  <= TRK_A_READ_X_REQ;
+                            end else if (train_trace_multi_post_active) begin
+                                // All post rows are done; run B update exactly once.
+                                train_trace_multi_post_active <= 1'b0;
+                                train_trace_active <= 1'b1;
+                                train_trace_skip_a <= 1'b1;
+                                train_trace_skip_b <= 1'b0;
+                                train_pre_idx      <= 10'd0;
+                                train_b_col_idx    <= 7'd0;
+                                train_trace_state  <= TRK_A_READ_X_REQ;
+                            end else if (infer_trace_wait_last_step) begin
                                 infer_trace_wait_last_step <= 1'b0;
                                 // Match mine.py tcount semantics: increment at end of each processed step.
                                 infer_step_idx <= infer_step_idx + 16'd1;

@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Sat Feb 28 06:56:27 2026
-| Host         : eecs-digital-04 running 64-bit Ubuntu 24.04.3 LTS
+| Date         : Sat Feb 28 21:56:25 2026
+| Host         : eecs-digital-17 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_timing -file obj/post_synth_timing.rpt
 | Design       : top_level
 | Device       : 7s50-csga324
@@ -43,7 +43,7 @@ Slack (MET) :             0.643ns  (required time - arrival time)
                                                      -5.108    -3.083 r  u_ddr_clk_wiz/mmcm_adv_inst/CLKOUT0
                          net (fo=1, unplaced)         0.800    -2.284    u_ddr_clk_wiz/clk_controller_clk_wiz_0
                          BUFG (Prop_bufg_I_O)         0.096    -2.188 r  u_ddr_clk_wiz/clkout1_buf/O
-                         net (fo=2685, unplaced)      0.800    -1.388    u_ddr3_top/ddr3_controller_inst/i_controller_clk
+                         net (fo=2687, unplaced)      0.800    -1.388    u_ddr3_top/ddr3_controller_inst/i_controller_clk
                          FDRE                                         r  u_ddr3_top/ddr3_controller_inst/bank_active_row_q_reg[7][3]/C
   -------------------------------------------------------------------    -------------------
                          FDRE (Prop_fdre_C_Q)         0.456    -0.932 r  u_ddr3_top/ddr3_controller_inst/bank_active_row_q_reg[7][3]/Q
@@ -97,7 +97,7 @@ Slack (MET) :             0.643ns  (required time - arrival time)
                                                      -5.378     8.431 r  u_ddr_clk_wiz/mmcm_adv_inst/CLKOUT0
                          net (fo=1, unplaced)         0.760     9.191    u_ddr_clk_wiz/clk_controller_clk_wiz_0
                          BUFG (Prop_bufg_I_O)         0.091     9.282 r  u_ddr_clk_wiz/clkout1_buf/O
-                         net (fo=2685, unplaced)      0.655     9.937    u_ddr3_top/ddr3_controller_inst/i_controller_clk
+                         net (fo=2687, unplaced)      0.655     9.937    u_ddr3_top/ddr3_controller_inst/i_controller_clk
                          FDRE                                         r  u_ddr3_top/ddr3_controller_inst/o_wb_stall_calib_reg/C
                          clock pessimism              0.530    10.467    
                          clock uncertainty           -0.076    10.391    
