@@ -494,9 +494,9 @@ module ddr3_controller #(
     reg stage2_pending = 0;
     reg[AUX_WIDTH-1:0] stage2_aux = 0;
     reg stage2_we = 0;
-    reg[wb_sel_bits - 1:0] stage2_dm_unaligned = 0, stage2_dm_unaligned_temp = 0;
+    reg[wb_sel_bits - 1:0] stage2_dm_unaligned = 0, stage2_dm_unaligned_temp = 0, stage2_dm_unaligned_temp2 = 0;
     reg[wb_sel_bits - 1:0] stage2_dm[STAGE2_DATA_DEPTH-1:0];
-    reg[wb_data_bits - 1:0] stage2_data_unaligned = 0, stage2_data_unaligned_temp = 0;
+    reg[wb_data_bits - 1:0] stage2_data_unaligned = 0, stage2_data_unaligned_temp = 0, stage2_data_unaligned_temp2 = 0;
     reg[wb_data_bits - 1:0] stage2_data[STAGE2_DATA_DEPTH-1:0];
     reg [DQ_BITS*8 - 1:0] unaligned_data[LANES-1:0];
     reg [8 - 1:0] unaligned_dm[LANES-1:0];
@@ -933,8 +933,10 @@ module ddr3_controller #(
             cmd_odt_q <= 0;
             stage2_data_unaligned <= 0;
             stage2_data_unaligned_temp <= 0;
+            stage2_data_unaligned_temp2 <= 0;
             stage2_dm_unaligned <= 0;
             stage2_dm_unaligned_temp <= 0;
+            stage2_dm_unaligned_temp2 <= 0;
             if(ECC_ENABLE == 3) begin
                 ecc_col_addr_prev <= 0;
                 ecc_bank_addr_prev <= 0;
@@ -1073,8 +1075,11 @@ module ddr3_controller #(
                 //stage2_data -> shiftreg(CWL) -> OSERDES(DDR) -> ODELAY -> RAM
             end
             if(!ODELAY_SUPPORTED && !DLL_OFF) begin
-                stage2_data_unaligned <= stage2_data_unaligned_temp; //_temp is for added delay of 1 clock cycle (no ODELAY so no added delay)
-                stage2_dm_unaligned <= stage2_dm_unaligned_temp;  //_temp is for added delay of 1 clock cycle (no ODELAY so no added delay)
+                // Add one more internal register stage to ease stage1->stage2_temp timing.
+                stage2_data_unaligned_temp2 <= stage2_data_unaligned_temp;
+                stage2_dm_unaligned_temp2 <= stage2_dm_unaligned_temp;
+                stage2_data_unaligned <= stage2_data_unaligned_temp2;
+                stage2_dm_unaligned <= stage2_dm_unaligned_temp2;
             end
 
             if(stage1_update) begin 
