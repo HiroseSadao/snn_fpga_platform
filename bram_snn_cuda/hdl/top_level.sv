@@ -192,8 +192,17 @@ module top_level(
         INFER_APPLY_WTA_ACCUM,
         INFER_WTA_PASS2_PRE,
         INFER_WTA_PASS2,
-        INFER_TRACE_RELAUNCH,
-        INFER_TRACE_WAIT
+        INFER_EVT_PRE_PRELIST_REQ,
+        INFER_EVT_PRE_PRELIST_WAIT,
+        INFER_EVT_PRE_TRACE_REQ,
+        INFER_EVT_PRE_TRACE_WAIT,
+        INFER_EVT_PRE_W_WAIT,
+        INFER_EVT_PRE_APPLY,
+        INFER_EVT_POST_TRACE_REQ,
+        INFER_EVT_POST_TRACE_WAIT,
+        INFER_EVT_POST_W_WAIT,
+        INFER_EVT_POST_APPLY,
+        INFER_EVT_DONE
     } infer_state_t;
     typedef enum logic [1:0] {
         DDRBR_IDLE,
@@ -283,6 +292,9 @@ module top_level(
         TCK_IDLE,
         TCK_INFER_START,
         TCK_INFER_WAIT,
+        TCK_SNAP_COPY_INIT,
+        TCK_SNAP_COPY_WAIT,
+        TCK_SNAP_COPY_WRITE,
         TCK_PICK_WINNER_INIT,
         TCK_PICK_WINNER_SCAN,
         TCK_BLANK_INFER_START,
@@ -522,6 +534,8 @@ module top_level(
     logic [6:0]  train_chunk_winner_scan_idx;
     logic [6:0]  train_chunk_winner_best_idx;
     logic [15:0] train_chunk_winner_best_count;
+    logic        train_chunk_winner_scan_phase;
+    logic [6:0]  train_chunk_snap_copy_idx;
     logic [31:0] train_chunk_last_infer_spikes;
     logic [31:0] train_chunk_last_blank_spikes;
     logic [31:0] train_chunk_retry_curr_max_fr;
@@ -607,10 +621,18 @@ module top_level(
     (* ram_style = "block" *) logic signed [31:0] infer_g_exc_delay0 [0:N_NEURONS-1];
     (* ram_style = "block" *) logic signed [31:0] infer_g_exc_delay1 [0:N_NEURONS-1];
     logic        infer_s_exc [0:N_NEURONS-1];
-    (* ram_style = "block" *) logic [15:0] infer_spike_count [0:N_NEURONS-1];
+    localparam int SPIKE_CNT_ADDR_W = 7;
+    logic        spike_count_we;
+    logic [SPIKE_CNT_ADDR_W-1:0] spike_count_waddr;
+    logic [15:0] spike_count_wdata;
     logic [6:0]  infer_spike_rd_addr;
     logic [15:0] infer_spike_rd_data;
-    (* ram_style = "block" *) logic [15:0] train_inj_spike_count_snap [0:N_NEURONS-1];
+    logic [15:0] spike_count_rdata;
+    logic        snap_count_we;
+    logic [SPIKE_CNT_ADDR_W-1:0] snap_count_waddr;
+    logic [15:0] snap_count_wdata;
+    logic [SPIKE_CNT_ADDR_W-1:0] snap_count_raddr;
+    logic [15:0] snap_count_rdata;
     (* ram_style = "block" *) logic [15:0] infer_exc_last_spike_step [0:N_NEURONS-1];
     (* ram_style = "block" *) logic [15:0] infer_inh_last_spike_step [0:N_NEURONS-1];
     logic [6:0]  infer_apply_idx;
@@ -647,6 +669,14 @@ module top_level(
     logic        infer_step_winner_valid;
     logic [6:0]  infer_step_winner_idx;
     logic        infer_trace_wait_last_step;
+    logic [9:0]  infer_evt_prelist_idx;
+    logic [9:0]  infer_evt_pre_idx;
+    logic [6:0]  infer_evt_post_idx;
+    logic [9:0]  infer_evt_post_input_idx;
+    logic        infer_evt_has_winner;
+    logic [6:0]  infer_evt_winner_idx;
+    logic signed [31:0] infer_evt_trace_val;
+    logic signed [31:0] infer_evt_w_cur;
     logic [31:0] infer_total_spikes;
     logic [31:0] infer_rng_state;
     (* use_dsp = "yes" *) logic [63:0] infer_rng_mul_prod_q32;
@@ -798,7 +828,6 @@ module top_level(
     // inference (instead of LUTRAM/distributed RAM).
     always_ff @(posedge core_clk) begin
         infer_w_rd_data_q <= infer_w_rd_data;
-        infer_spike_rd_data <= infer_spike_count[infer_spike_rd_addr];
 
         if (raw_image0_wr_en) begin
             raw_image0_mem[raw_image0_wr_addr] <= raw_image0_wr_data;
@@ -836,6 +865,8 @@ module top_level(
 
         train_label_count_rd_data <= train_label_count[train_label_count_rd_addr];
     end
+
+    assign infer_spike_rd_data = spike_count_rdata;
 
     xpm_memory_sdpram #(
         .ADDR_WIDTH_A(10),
@@ -921,6 +952,94 @@ module top_level(
         .regceb         (1'b1),
         .addrb          (infer_w_rd_addr),
         .doutb          (infer_w_rd_data),
+        .sbiterrb       (),
+        .dbiterrb       ()
+    );
+
+    // Spike count storage in explicit BRAM (replaces inferred array RAM).
+    xpm_memory_sdpram #(
+        .ADDR_WIDTH_A(SPIKE_CNT_ADDR_W),
+        .ADDR_WIDTH_B(SPIKE_CNT_ADDR_W),
+        .AUTO_SLEEP_TIME(0),
+        .BYTE_WRITE_WIDTH_A(16),
+        .CLOCKING_MODE("common_clock"),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE("none"),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("block"),
+        .MEMORY_SIZE(N_NEURONS * 16),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_B(16),
+        .READ_LATENCY_B(1),
+        .READ_RESET_VALUE_B("0"),
+        .RST_MODE_A("SYNC"),
+        .RST_MODE_B("SYNC"),
+        .SIM_ASSERT_CHK(0),
+        .USE_EMBEDDED_CONSTRAINT(0),
+        .USE_MEM_INIT(0),
+        .WAKEUP_TIME("disable_sleep"),
+        .WRITE_DATA_WIDTH_A(16),
+        .WRITE_MODE_B("read_first")
+    ) u_spike_count_bram (
+        .sleep          (1'b0),
+        .clka           (core_clk),
+        .ena            (1'b1),
+        .wea            (spike_count_we),
+        .addra          (spike_count_waddr),
+        .dina           (spike_count_wdata),
+        .injectsbiterra (1'b0),
+        .injectdbiterra (1'b0),
+        .clkb           (core_clk),
+        .rstb           (1'b0),
+        .enb            (1'b1),
+        .regceb         (1'b1),
+        .addrb          (infer_spike_rd_addr),
+        .doutb          (spike_count_rdata),
+        .sbiterrb       (),
+        .dbiterrb       ()
+    );
+
+    // Snapshot spike count storage in explicit BRAM (replaces inferred array RAM).
+    xpm_memory_sdpram #(
+        .ADDR_WIDTH_A(SPIKE_CNT_ADDR_W),
+        .ADDR_WIDTH_B(SPIKE_CNT_ADDR_W),
+        .AUTO_SLEEP_TIME(0),
+        .BYTE_WRITE_WIDTH_A(16),
+        .CLOCKING_MODE("common_clock"),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE("none"),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("block"),
+        .MEMORY_SIZE(N_NEURONS * 16),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_B(16),
+        .READ_LATENCY_B(1),
+        .READ_RESET_VALUE_B("0"),
+        .RST_MODE_A("SYNC"),
+        .RST_MODE_B("SYNC"),
+        .SIM_ASSERT_CHK(0),
+        .USE_EMBEDDED_CONSTRAINT(0),
+        .USE_MEM_INIT(0),
+        .WAKEUP_TIME("disable_sleep"),
+        .WRITE_DATA_WIDTH_A(16),
+        .WRITE_MODE_B("read_first")
+    ) u_spike_snap_bram (
+        .sleep          (1'b0),
+        .clka           (core_clk),
+        .ena            (1'b1),
+        .wea            (snap_count_we),
+        .addra          (snap_count_waddr),
+        .dina           (snap_count_wdata),
+        .injectsbiterra (1'b0),
+        .injectdbiterra (1'b0),
+        .clkb           (core_clk),
+        .rstb           (1'b0),
+        .enb            (1'b1),
+        .regceb         (1'b1),
+        .addrb          (snap_count_raddr),
+        .doutb          (snap_count_rdata),
         .sbiterrb       (),
         .dbiterrb       ()
     );
@@ -1369,6 +1488,8 @@ module top_level(
             train_chunk_winner_scan_idx <= 7'd0;
             train_chunk_winner_best_idx <= 7'd0;
             train_chunk_winner_best_count <= 16'd0;
+            train_chunk_winner_scan_phase <= 1'b0;
+            train_chunk_snap_copy_idx <= 7'd0;
             train_chunk_last_infer_spikes <= 32'd0;
             train_chunk_last_blank_spikes <= 32'd0;
             train_chunk_retry_curr_max_fr <= TRAIN_RETRY_MAX_FR_START;
@@ -1388,7 +1509,8 @@ module top_level(
             train_gen_lcg_enable <= 1'b0;
             train_gen_cache_mode <= 2'd0;
             train_mem_init_active <= 1'b0;
-            train_mem_init_done <= 1'b0;
+            // Phase2 no longer uses A/BT matrix initialization.
+            train_mem_init_done <= 1'b1;
             train_mem_init_state <= TMI_IDLE;
             train_mem_init_idx <= 17'd0;
             train_label_stats_active <= 1'b0;
@@ -1420,6 +1542,9 @@ module top_level(
             infer_w_wr_en       <= 1'b0;
             infer_w_wr_addr     <= 17'd0;
             infer_w_wr_data     <= 16'd0;
+            spike_count_we      <= 1'b0;
+            spike_count_waddr   <= '0;
+            spike_count_wdata   <= 16'd0;
             infer_pre_rd_addr   <= 10'd0;
             infer_apply_idx     <= 7'd0;
             infer_trace_phase <= 3'd0;
@@ -1428,6 +1553,14 @@ module top_level(
             infer_step_winner_valid <= 1'b0;
             infer_step_winner_idx <= 7'd0;
             infer_trace_wait_last_step <= 1'b0;
+            infer_evt_prelist_idx <= 10'd0;
+            infer_evt_pre_idx <= 10'd0;
+            infer_evt_post_idx <= 7'd0;
+            infer_evt_post_input_idx <= 10'd0;
+            infer_evt_has_winner <= 1'b0;
+            infer_evt_winner_idx <= 7'd0;
+            infer_evt_trace_val <= 32'sd0;
+            infer_evt_w_cur <= 32'sd0;
             infer_total_spikes  <= 32'd0;
             infer_rng_state     <= 32'd0;
             infer_rng_mul_prod_q32 <= 64'd0;
@@ -1441,6 +1574,10 @@ module top_level(
             infer_force_no_input  <= 1'b0;
             infer_model_state_valid <= 1'b0;
             infer_spike_rd_addr <= 7'd0;
+            snap_count_we <= 1'b0;
+            snap_count_waddr <= '0;
+            snap_count_wdata <= 16'd0;
+            snap_count_raddr <= '0;
             train_label_sum_rd_addr <= 10'd0;
             train_label_count_rd_addr <= 4'd0;
             train_label_sum_wr_en <= 1'b0;
@@ -1454,9 +1591,6 @@ module top_level(
             infer_pre_wr_en <= 1'b0;
             infer_pre_wr_addr <= 10'd0;
             infer_pre_wr_data <= 10'd0;
-            for (int i = 0; i < N_NEURONS; i++) begin
-                train_inj_spike_count_snap[i] <= 16'd0;
-            end
             memrd_pending <= 1'b0;
             memrd_wait    <= 1'b0;
             memrd_kind    <= MEMRD_NONE;
@@ -1473,6 +1607,8 @@ module top_level(
             infer_poisson_thresh_wr_en <= 1'b0;
             infer_pre_wr_en <= 1'b0;
             infer_w_wr_en <= 1'b0;
+            spike_count_we <= 1'b0;
+            snap_count_we <= 1'b0;
             train_xin_wr_en <= 1'b0;
             train_xexc_wr_en <= 1'b0;
             ddr_rsp_toggle_core_sync1 <= ddr_rsp_toggle_ddr;
@@ -2432,12 +2568,25 @@ module top_level(
                             train_xin_cache_valid  <= 1'b1;
                             train_xexc_cache_valid <= 1'b1;
                             train_chunk_last_infer_spikes <= infer_total_spikes;
-                            for (int i = 0; i < N_NEURONS; i++) begin
-                                train_inj_spike_count_snap[i] <= infer_spike_count[i];
-                            end
                             if (response_ready && (resp_status == STATUS_OK)) begin
                                 response_ready <= 1'b0;
                             end
+                            train_chunk_state <= TCK_SNAP_COPY_INIT;
+                        end
+                    end
+                    TCK_SNAP_COPY_INIT: begin
+                        train_chunk_snap_copy_idx <= 7'd0;
+                        infer_spike_rd_addr <= 7'd0;
+                        train_chunk_state <= TCK_SNAP_COPY_WAIT;
+                    end
+                    TCK_SNAP_COPY_WAIT: begin
+                        train_chunk_state <= TCK_SNAP_COPY_WRITE;
+                    end
+                    TCK_SNAP_COPY_WRITE: begin
+                        snap_count_we <= 1'b1;
+                        snap_count_waddr <= train_chunk_snap_copy_idx;
+                        snap_count_wdata <= infer_spike_rd_data;
+                        if (train_chunk_snap_copy_idx == (N_NEURONS - 1)) begin
                             if (train_chunk_mode == 3'd4) begin
                                 if ($unsigned(infer_total_spikes) < TRAIN_RETRY_MIN_INJ_SPIKES) begin
                                     logic [31:0] next_max_fr_tmp;
@@ -2445,44 +2594,55 @@ module top_level(
                                     train_chunk_retry_curr_max_fr <= next_max_fr_tmp;
                                     infer_poisson_num_const_cfg <= (POISSON_NUM_CONST * next_max_fr_tmp) >> 5;
                                     train_chunk_retry_continue_infer <= 1'b1;
-                                    // mine.py retry loop: inj(STDP) -> blank, then retry decision.
-                                    train_chunk_state <= TCK_STDP_START;
+                                    // Phase2 online learning: inj(event-STDP) -> rebase -> blank.
+                                    train_chunk_state <= TCK_REBASE_GIN_INIT;
                                 end else begin
                                     train_chunk_retry_accepted_max_fr <= train_chunk_retry_curr_max_fr;
                                     train_chunk_retry_continue_infer <= 1'b0;
-                                    train_chunk_state <= TCK_STDP_START;
+                                    train_chunk_state <= TCK_REBASE_GIN_INIT;
                                 end
                             end else begin
                                 if (train_chunk_mode == 3'd3) begin
-                                    train_chunk_state <= TCK_STDP_START;
+                                    train_chunk_state <= TCK_REBASE_GIN_INIT;
                                 end else if (train_chunk_mode == 3'd2) begin
                                     train_chunk_state <= TCK_PICK_WINNER_INIT;
                                 end else begin
                                     train_chunk_state <= TCK_GEN_XIN_START;
                                 end
                             end
+                        end else begin
+                            train_chunk_snap_copy_idx <= train_chunk_snap_copy_idx + 7'd1;
+                            infer_spike_rd_addr <= train_chunk_snap_copy_idx + 7'd1;
+                            train_chunk_state <= TCK_SNAP_COPY_WAIT;
                         end
                     end
                     TCK_PICK_WINNER_INIT: begin
                         train_chunk_winner_scan_idx  <= 7'd0;
                         train_chunk_winner_best_idx  <= 7'd0;
-                        train_chunk_winner_best_count<= infer_spike_count[0];
+                        train_chunk_winner_best_count<= 16'd0;
+                        train_chunk_winner_scan_phase <= 1'b0;
+                        snap_count_raddr <= 7'd0;
                         train_chunk_pre_from_infer   <= 10'd0;
                         train_chunk_state <= TCK_PICK_WINNER_SCAN;
                     end
                     TCK_PICK_WINNER_SCAN: begin
-                        logic [6:0] next_idx_tmp;
-                        next_idx_tmp = train_chunk_winner_scan_idx + 7'd1;
-                        if (next_idx_tmp < N_NEURONS[6:0]) begin
-                            // Match numpy.argmax tie-break: keep earliest index on equal counts.
-                            if (infer_spike_count[next_idx_tmp] > train_chunk_winner_best_count) begin
-                                train_chunk_winner_best_count <= infer_spike_count[next_idx_tmp];
-                                train_chunk_winner_best_idx   <= next_idx_tmp;
-                            end
-                            train_chunk_winner_scan_idx <= next_idx_tmp;
+                        if (!train_chunk_winner_scan_phase) begin
+                            train_chunk_winner_scan_phase <= 1'b1;
                         end else begin
-                            train_chunk_winner <= train_chunk_winner_best_idx;
-                            train_chunk_state  <= TCK_PRELIST_BUILD_INIT;
+                            // Match numpy.argmax tie-break: keep earliest index on equal counts.
+                            if (snap_count_rdata > train_chunk_winner_best_count) begin
+                                train_chunk_winner_best_count <= snap_count_rdata;
+                                train_chunk_winner_best_idx   <= train_chunk_winner_scan_idx;
+                            end
+                            if (train_chunk_winner_scan_idx == (N_NEURONS - 1)) begin
+                                train_chunk_winner <= train_chunk_winner_best_idx;
+                                train_chunk_state  <= TCK_PRELIST_BUILD_INIT;
+                                train_chunk_winner_scan_phase <= 1'b0;
+                            end else begin
+                                train_chunk_winner_scan_idx <= train_chunk_winner_scan_idx + 7'd1;
+                                snap_count_raddr <= train_chunk_winner_scan_idx + 7'd1;
+                                train_chunk_winner_scan_phase <= 1'b0;
+                            end
                         end
                     end
                     TCK_BLANK_INFER_START: begin
@@ -2707,7 +2867,11 @@ module top_level(
                         end else begin
                             infer_g_in_state[train_rebase_neuron_idx] <= fxp_mul_s16_16(train_rebase_accum, FXP_SCALE_1000);
                             if (train_rebase_neuron_idx == (N_NEURONS - 1)) begin
-                                train_chunk_state <= TCK_DONE;
+                                if ((train_chunk_mode == 3'd3) || (train_chunk_mode == 3'd4)) begin
+                                    train_chunk_state <= TCK_BLANK_INFER_START;
+                                end else begin
+                                    train_chunk_state <= TCK_DONE;
+                                end
                             end else begin
                                 train_rebase_neuron_idx <= train_rebase_neuron_idx + 7'd1;
                                 train_rebase_input_idx <= 10'd0;
@@ -2862,13 +3026,14 @@ module top_level(
                     end
                     TLS_ACCUM_READ: begin
                         train_label_sum_rd_addr <= train_label_stats_base_idx + train_label_stats_idx;
+                        snap_count_raddr <= train_label_stats_idx[6:0];
                         train_label_stats_state <= TLS_ACCUM_WAIT;
                     end
                     TLS_ACCUM_WAIT: begin
                         train_label_stats_state <= TLS_ACCUM_SAMPLE;
                     end
                     TLS_ACCUM_SAMPLE: begin
-                        train_label_stats_spike_q <= train_inj_spike_count_snap[train_label_stats_idx[6:0]];
+                        train_label_stats_spike_q <= snap_count_rdata;
                         train_label_stats_state <= TLS_ACCUM_WRITE;
                     end
                     TLS_ACCUM_WRITE: begin
@@ -3453,7 +3618,9 @@ module top_level(
                     end
 
                     INFER_CLEAR_SPIKE_COUNT: begin
-                        infer_spike_count[infer_apply_idx] <= 16'd0;
+                        spike_count_we <= 1'b1;
+                        spike_count_waddr <= infer_apply_idx;
+                        spike_count_wdata <= 16'd0;
                         if (infer_apply_idx == (N_NEURONS - 1)) begin
                             infer_apply_idx <= 7'd0;
                             infer_prep_idx <= 10'd0;
@@ -3752,6 +3919,7 @@ module top_level(
                         if (theta_next > FXP_THETA_MAX) begin
                             theta_next = FXP_THETA_MAX;
                         end
+                        infer_spike_rd_addr <= infer_commit_idx;
                         infer_commit_theta_next <= theta_next;
                         infer_state <= INFER_NEURON_WRITE;
                     end
@@ -3761,7 +3929,9 @@ module top_level(
                         if (infer_commit_spike_now) begin
                             // mine.py sets the membrane to vreset after spike (no residual carry).
                             infer_v_state[infer_commit_idx] <= FXP_EXC_VRESET;
-                            infer_spike_count[infer_commit_idx] <= infer_spike_count[infer_commit_idx] + 16'd1;
+                            spike_count_we <= 1'b1;
+                            spike_count_waddr <= infer_commit_idx;
+                            spike_count_wdata <= infer_spike_rd_data + 16'd1;
                             infer_total_spikes <= infer_total_spikes + 32'd1;
                             infer_exc_last_spike_step[infer_commit_idx] <= infer_step_idx;
                             infer_s_exc[infer_commit_idx] <= 1'b1;
@@ -3944,33 +4114,22 @@ module top_level(
 
 	                        if (infer_apply_idx == (N_NEURONS - 1)) begin
                                 if (run_online_trace_now) begin
-                                    train_trace_active <= 1'b1;
-                                    train_winner_idx   <= infer_step_winner_idx;
-                                    train_pre_count    <= infer_pre_active_count;
-                                    train_trace_use_infer_prelist <= 1'b1;
-                                    train_trace_skip_a <= !infer_step_winner_valid;
-                                    // mine.py alignment: update A for all spiking posts in this step.
-                                    // Run A-only trace per active post, then run B once after the last post.
-                                    train_trace_skip_b <= infer_step_winner_valid;
-                                    train_trace_multi_post_active <= infer_step_winner_valid;
-                                    train_trace_post_scan_idx <= infer_step_winner_idx;
-                                    train_a_idx        <= 10'd0;
-                                    train_pre_idx      <= 10'd0;
-                                    train_b_col_idx    <= 7'd0;
-                                    train_curr_pre     <= 10'd0;
-                                    train_tmp_x_val    <= 32'd0;
-                                    train_tmp_mem_val  <= 32'd0;
-                                    train_trace_a_row_base <= TRAIN_BASE_A_Q16_WORDS + ({25'd0, infer_step_winner_idx} * N_IN);
-                                    train_trace_bt_pre_base <= TRAIN_BASE_BT_Q16_WORDS;
-                                    if (infer_step_winner_valid) begin
-                                        train_trace_state <= TRK_A_READ_X_REQ;
-                                    end else begin
-                                        train_trace_skip_b <= 1'b0;
-                                        train_trace_multi_post_active <= 1'b0;
-                                        train_trace_state <= TRK_B_READ_PRE_REQ;
-                                    end
+                                    infer_evt_has_winner <= infer_step_winner_valid;
+                                    infer_evt_winner_idx <= infer_step_winner_idx;
+                                    infer_evt_prelist_idx <= 10'd0;
+                                    infer_evt_pre_idx <= 10'd0;
+                                    infer_evt_post_idx <= 7'd0;
+                                    infer_evt_post_input_idx <= 10'd0;
+                                    infer_evt_trace_val <= 32'sd0;
+                                    infer_evt_w_cur <= 32'sd0;
                                     infer_trace_wait_last_step <= step_last_now;
-                                    infer_state <= INFER_TRACE_WAIT;
+                                    if (infer_pre_active_count != 10'd0) begin
+                                        infer_state <= INFER_EVT_PRE_PRELIST_REQ;
+                                    end else if (infer_step_winner_valid) begin
+                                        infer_state <= INFER_EVT_POST_TRACE_REQ;
+                                    end else begin
+                                        infer_state <= INFER_EVT_DONE;
+                                    end
                                 end else if (step_last_now) begin
                                     // Match mine.py tcount semantics: increment at end of each processed step,
                                     // including the terminal step.
@@ -4004,76 +4163,134 @@ module top_level(
 	                        end
 	                    end
 
-                    INFER_TRACE_RELAUNCH: begin
-                        if (train_trace_multi_post_active && infer_trace_next_post_found) begin
-                            // Continue A-only trace for the next spiking post neuron.
-                            train_trace_active <= 1'b1;
-                            train_winner_idx   <= infer_trace_next_post_idx;
-                            train_trace_skip_a <= 1'b0;
-                            train_trace_skip_b <= 1'b1;
-                            train_trace_post_scan_idx <= infer_trace_next_post_idx;
-                            train_a_idx        <= 10'd0;
-                            train_pre_idx      <= 10'd0;
-                            train_b_col_idx    <= 7'd0;
-                            train_curr_pre     <= 10'd0;
-                            train_tmp_x_val    <= 32'd0;
-                            train_tmp_mem_val  <= 32'd0;
-                            train_trace_a_row_base <= TRAIN_BASE_A_Q16_WORDS + ({25'd0, infer_trace_next_post_idx} * N_IN);
-                            train_trace_bt_pre_base <= TRAIN_BASE_BT_Q16_WORDS;
-                            train_trace_state  <= TRK_A_READ_X_REQ;
-                        end else begin
-                            // All post rows are done; run B update exactly once.
-                            train_trace_multi_post_active <= 1'b0;
-                            train_trace_active <= 1'b1;
-                            train_trace_skip_a <= 1'b1;
-                            train_trace_skip_b <= 1'b0;
-                            train_pre_idx      <= 10'd0;
-                            train_b_col_idx    <= 7'd0;
-                            train_trace_state  <= TRK_A_READ_X_REQ;
-                        end
-                        infer_state <= INFER_TRACE_WAIT;
+                    INFER_EVT_PRE_PRELIST_REQ: begin
+                        infer_pre_rd_addr <= infer_evt_prelist_idx;
+                        infer_state <= INFER_EVT_PRE_PRELIST_WAIT;
                     end
 
-                    INFER_TRACE_WAIT: begin
-                        if (!train_trace_active) begin
-                            logic found_next_post;
-                            logic [6:0] next_post_idx;
-                            found_next_post = 1'b0;
-                            next_post_idx = 7'd0;
-                            if (train_trace_multi_post_active) begin
-                                for (int post_i = 0; post_i < N_NEURONS; post_i = post_i + 1) begin
-                                    if (!found_next_post &&
-                                        (post_i > train_trace_post_scan_idx) &&
-                                        infer_s_exc[post_i]) begin
-                                        found_next_post = 1'b1;
-                                        next_post_idx = post_i[6:0];
-                                    end
-                                end
-                                infer_trace_next_post_found <= found_next_post;
-                                infer_trace_next_post_idx <= next_post_idx;
-                                infer_state <= INFER_TRACE_RELAUNCH;
-                            end else if (infer_trace_wait_last_step) begin
-                                infer_trace_wait_last_step <= 1'b0;
-                                // Match mine.py tcount semantics: increment at end of each processed step.
-                                infer_step_idx <= infer_step_idx + 16'd1;
-                                infer_active <= 1'b0;
-                                infer_state <= INFER_IDLE;
-                                infer_skip_init_clear <= 1'b0;
-                                infer_force_no_input  <= 1'b0;
-                                if (TRAIN_ENABLE && train_chunk_active &&
-                                    ((train_chunk_state == TCK_INFER_WAIT) || (train_chunk_state == TCK_BLANK_INFER_WAIT))) begin
-                                    // Sub-step completion for TRAIN_RUN_CHUNK phase flows.
+                    INFER_EVT_PRE_PRELIST_WAIT: begin
+                        infer_evt_pre_idx <= infer_pre_rd_data;
+                        infer_evt_post_idx <= 7'd0;
+                        infer_state <= INFER_EVT_PRE_TRACE_REQ;
+                    end
+
+                    INFER_EVT_PRE_TRACE_REQ: begin
+                        train_xexc_rd_addr <= infer_evt_post_idx;
+                        infer_state <= INFER_EVT_PRE_TRACE_WAIT;
+                    end
+
+                    INFER_EVT_PRE_TRACE_WAIT: begin
+                        logic [16:0] w_idx_pre;
+                        infer_evt_trace_val <= $signed(train_xexc_rd_data);
+                        w_idx_pre = (infer_evt_post_idx * N_IN) + infer_evt_pre_idx;
+                        infer_w_rd_addr <= w_idx_pre;
+                        infer_state <= INFER_EVT_PRE_W_WAIT;
+                    end
+
+                    INFER_EVT_PRE_W_WAIT: begin
+                        infer_evt_w_cur <= $signed({16'd0, infer_w_rd_data});
+                        infer_state <= INFER_EVT_PRE_APPLY;
+                    end
+
+                    INFER_EVT_PRE_APPLY: begin
+                        logic signed [31:0] dW_q16;
+                        logic signed [31:0] w_next_q16;
+                        logic [16:0] w_idx_pre;
+                        // Lightweight phase2 update: constant depression step gated by post trace activity.
+                        dW_q16 = (infer_evt_trace_val != 32'sd0) ? (-TRAIN_CLIP_DW_Q16) : 32'sd0;
+                        w_next_q16 = infer_evt_w_cur + dW_q16;
+                        if (w_next_q16 > TRAIN_WMAX_Q16)
+                            w_next_q16 = TRAIN_WMAX_Q16;
+                        else if (w_next_q16 < TRAIN_WMIN_Q16)
+                            w_next_q16 = TRAIN_WMIN_Q16;
+                        if (w_next_q16[15:0] != infer_evt_w_cur[15:0]) begin
+                            w_idx_pre = (infer_evt_post_idx * N_IN) + infer_evt_pre_idx;
+                            infer_w_wr_en   <= 1'b1;
+                            infer_w_wr_addr <= w_idx_pre;
+                            infer_w_wr_data <= w_next_q16[15:0];
+                        end
+                        if (infer_evt_post_idx == (N_NEURONS - 1)) begin
+                            if ((infer_evt_prelist_idx + 10'd1) >= infer_pre_active_count) begin
+                                if (infer_evt_has_winner) begin
+                                    infer_evt_post_input_idx <= 10'd0;
+                                    infer_state <= INFER_EVT_POST_TRACE_REQ;
                                 end else begin
-                                    resp_status <= STATUS_OK;
-                                    resp_result <= infer_total_spikes;
-                                    resp_checksum <= calc_resp_checksum(STATUS_OK, infer_total_spikes);
-                                    response_ready <= 1'b1;
+                                    infer_state <= INFER_EVT_DONE;
                                 end
                             end else begin
-                                infer_step_idx <= infer_step_idx + 16'd1;
-                                infer_state <= INFER_GEN_INPUT_SPIKES;
-                                infer_trace_phase <= 3'd0;
+                                infer_evt_prelist_idx <= infer_evt_prelist_idx + 10'd1;
+                                infer_state <= INFER_EVT_PRE_PRELIST_REQ;
                             end
+                        end else begin
+                            infer_evt_post_idx <= infer_evt_post_idx + 7'd1;
+                            infer_state <= INFER_EVT_PRE_TRACE_REQ;
+                        end
+                    end
+
+                    INFER_EVT_POST_TRACE_REQ: begin
+                        train_xin_rd_addr <= infer_evt_post_input_idx;
+                        infer_state <= INFER_EVT_POST_TRACE_WAIT;
+                    end
+
+                    INFER_EVT_POST_TRACE_WAIT: begin
+                        logic [16:0] w_idx_post;
+                        infer_evt_trace_val <= $signed(train_xin_rd_data);
+                        w_idx_post = (infer_evt_winner_idx * N_IN) + infer_evt_post_input_idx;
+                        infer_w_rd_addr <= w_idx_post;
+                        infer_state <= INFER_EVT_POST_W_WAIT;
+                    end
+
+                    INFER_EVT_POST_W_WAIT: begin
+                        infer_evt_w_cur <= $signed({16'd0, infer_w_rd_data});
+                        infer_state <= INFER_EVT_POST_APPLY;
+                    end
+
+                    INFER_EVT_POST_APPLY: begin
+                        logic signed [31:0] dW_q16;
+                        logic signed [31:0] w_next_q16;
+                        logic [16:0] w_idx_post;
+                        // Lightweight phase2 update: constant potentiation step gated by pre trace activity.
+                        dW_q16 = (infer_evt_trace_val != 32'sd0) ? TRAIN_CLIP_DW_Q16 : 32'sd0;
+                        w_next_q16 = infer_evt_w_cur + dW_q16;
+                        if (w_next_q16 > TRAIN_WMAX_Q16)
+                            w_next_q16 = TRAIN_WMAX_Q16;
+                        else if (w_next_q16 < TRAIN_WMIN_Q16)
+                            w_next_q16 = TRAIN_WMIN_Q16;
+                        if (w_next_q16[15:0] != infer_evt_w_cur[15:0]) begin
+                            w_idx_post = (infer_evt_winner_idx * N_IN) + infer_evt_post_input_idx;
+                            infer_w_wr_en   <= 1'b1;
+                            infer_w_wr_addr <= w_idx_post;
+                            infer_w_wr_data <= w_next_q16[15:0];
+                        end
+                        if (infer_evt_post_input_idx == (N_IN - 1)) begin
+                            infer_state <= INFER_EVT_DONE;
+                        end else begin
+                            infer_evt_post_input_idx <= infer_evt_post_input_idx + 10'd1;
+                            infer_state <= INFER_EVT_POST_TRACE_REQ;
+                        end
+                    end
+
+                    INFER_EVT_DONE: begin
+                        if (infer_trace_wait_last_step) begin
+                            infer_trace_wait_last_step <= 1'b0;
+                            infer_step_idx <= infer_step_idx + 16'd1;
+                            infer_active <= 1'b0;
+                            infer_state <= INFER_IDLE;
+                            infer_skip_init_clear <= 1'b0;
+                            infer_force_no_input  <= 1'b0;
+                            if (TRAIN_ENABLE && train_chunk_active &&
+                                ((train_chunk_state == TCK_INFER_WAIT) || (train_chunk_state == TCK_BLANK_INFER_WAIT))) begin
+                                // Sub-step completion for TRAIN_RUN_CHUNK phase flows.
+                            end else begin
+                                resp_status <= STATUS_OK;
+                                resp_result <= infer_total_spikes;
+                                resp_checksum <= calc_resp_checksum(STATUS_OK, infer_total_spikes);
+                                response_ready <= 1'b1;
+                            end
+                        end else begin
+                            infer_step_idx <= infer_step_idx + 16'd1;
+                            infer_state <= INFER_GEN_INPUT_SPIKES;
+                            infer_trace_phase <= 3'd0;
                         end
                     end
 

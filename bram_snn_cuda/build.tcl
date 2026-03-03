@@ -80,6 +80,7 @@ if {[llength $worst_path] > 0} {
 report_utilization -file $outputDir/post_place_util.rpt
 report_timing_summary -file $outputDir/post_place_timing_summary.rpt
 report_timing -file $outputDir/post_place_timing.rpt
+
 #Route design and generate bitstream
 route_design -directive Explore
 #write_checkpoint -force $outputDir/post_route.dcp

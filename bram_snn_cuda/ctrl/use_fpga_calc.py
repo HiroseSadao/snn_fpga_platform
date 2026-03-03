@@ -2672,6 +2672,58 @@ def fpga_phase1_verify_one_shot(ser: serial.Serial, args: argparse.Namespace) ->
     print("Phase1 one-shot verify: PASS")
 
 
+def fpga_phase2_verify_one_shot(ser: serial.Serial, args: argparse.Namespace) -> None:
+    """One-shot verification for phase2 event-driven learning path."""
+    if int(N_NEURONS) != 50:
+        raise RuntimeError(f"Phase2 verify expects N_NEURONS=50, got {N_NEURONS}")
+
+    sample_idx = int(args.sample_idx)
+    inj_steps = max(1, int(args.chunk_nsteps))
+    tile_rows = max(1, int(args.train_tile_rows))
+    print(
+        "Phase2 one-shot verify start: "
+        f"sample_idx={sample_idx}, inj_steps={inj_steps}, tile_rows={tile_rows}, "
+        "mode=phase4 x2 (event-driven online update)"
+    )
+
+    run_results: list[tuple[int, int, int, int]] = []
+    for run_i in range(2):
+        prepare_fpga_sample_image_via_streamed_load(
+            ser,
+            sample_idx=sample_idx,
+            start_lba=int(args.start_lba),
+            timeout_sec=float(args.timeout),
+        )
+        ret = fpga_train_run_sample_phase4(
+            ser,
+            inj_steps=inj_steps,
+            tile_rows=tile_rows,
+        )
+        inj_total = int(ret) & 0xFFFF
+        blank_total = (int(ret) >> 16) & 0xFFFF
+        infer_counts = fpga_read_spike_counts(ser)
+        if len(infer_counts) != N_NEURONS:
+            raise RuntimeError(
+                f"READ_SPIKE_COUNT length mismatch: got {len(infer_counts)}, expected {N_NEURONS}"
+            )
+        infer_sum = int(sum(infer_counts))
+        run_results.append((int(ret) & 0xFFFFFFFF, inj_total, blank_total, infer_sum))
+        print(
+            f"  run{run_i + 1}: "
+            f"phase4_ret=0x{(int(ret) & 0xFFFFFFFF):08X}, "
+            f"inj_total={inj_total}, blank_total={blank_total}, infer_count_sum={infer_sum}"
+        )
+
+    r1 = run_results[0]
+    r2 = run_results[1]
+    print(
+        "Phase2 one-shot verify summary: "
+        f"run1_ret=0x{r1[0]:08X}, run2_ret=0x{r2[0]:08X}, "
+        f"run1_sum={r1[3]}, run2_sum={r2[3]}"
+    )
+    print("Phase2 one-shot verify: PASS")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -2699,6 +2751,11 @@ def parse_args() -> argparse.Namespace:
         "--phase1-verify",
         action="store_true",
         help="one-shot verification for phase1 changes (N=50 + train STDP W via BRAM)",
+    )
+    parser.add_argument(
+        "--phase2-verify",
+        action="store_true",
+        help="one-shot verification for phase2 changes (event-driven online update path)",
     )
     parser.add_argument(
         "--train-phase4-build-assignments",
@@ -2796,6 +2853,7 @@ if __name__ == "__main__":
 
         needs_reliable_link = any([
             args.phase1_verify,
+            args.phase2_verify,
             args.train_run_sample_phase4,
             args.train_phase4_build_assignments,
             args.train_infer_e2e_compare,
@@ -2803,6 +2861,7 @@ if __name__ == "__main__":
         ])
         needs_phase4_opcode = any([
             args.phase1_verify,
+            args.phase2_verify,
             args.train_run_sample_phase4,
             args.train_phase4_build_assignments,
             args.train_infer_e2e_compare,
@@ -2821,6 +2880,11 @@ if __name__ == "__main__":
             if args.image_source != "fpga":
                 raise ValueError("--phase1-verify currently requires --image-source fpga")
             fpga_phase1_verify_one_shot(ser, args)
+            raise SystemExit(0)
+        if args.phase2_verify:
+            if args.image_source != "fpga":
+                raise ValueError("--phase2-verify currently requires --image-source fpga")
+            fpga_phase2_verify_one_shot(ser, args)
             raise SystemExit(0)
         if args.train_run_sample_phase4:
             if args.image_source != "fpga":
@@ -2855,6 +2919,6 @@ if __name__ == "__main__":
             fpga_train_then_infer_compare_500_100(ser, args)
             raise SystemExit(0)
         raise RuntimeError(
-            "No mode selected. Use one of: --phase1-verify, --train-run-sample-phase4, "
+            "No mode selected. Use one of: --phase1-verify, --phase2-verify, --train-run-sample-phase4, "
             "--train-phase4-build-assignments, --train-infer-e2e-compare, --train-then-infer-compare"
         )
