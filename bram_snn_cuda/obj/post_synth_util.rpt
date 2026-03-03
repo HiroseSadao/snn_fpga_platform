@@ -1,0 +1,38 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
+---------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
+| Date         : Mon Mar  2 21:20:22 2026
+| Host         : eecs-digital-04 running 64-bit Ubuntu 24.04.3 LTS
+| Command      : report_utilization -file obj/post_synth_util.rpt -hierarchical -hierarchical_depth 4
+| Design       : top_level
+| Device       : xc7s50csga324-1
+| Speed File   : -1
+| Design State : Synthesized
+---------------------------------------------------------------------------------------------------------------------------------------------
+
+Utilization Design Information
+
+Table of Contents
+-----------------
+1. Utilization by Hierarchy
+
+1. Utilization by Hierarchy
+---------------------------
+
++--------------------------+--------------------------------------+------------+------------+---------+------+-------+--------+--------+------------+
+|         Instance         |                Module                | Total LUTs | Logic LUTs | LUTRAMs | SRLs |  FFs  | RAMB36 | RAMB18 | DSP Blocks |
++--------------------------+--------------------------------------+------------+------------+---------+------+-------+--------+--------+------------+
+| top_level                |                                (top) |      17593 |      17011 |     582 |    0 | 17012 |     33 |     10 |         60 |
+|   (top_level)            |                                (top) |       9176 |       8594 |     582 |    0 | 13887 |      1 |      9 |         60 |
+|   u_cdc_req_payload      |                 xpm_cdc_array_single |          0 |          0 |       0 |    0 |   171 |      0 |      0 |          0 |
+|   u_cdc_rsp_payload      | xpm_cdc_array_single__parameterized0 |          0 |          0 |       0 |    0 |    99 |      0 |      0 |          0 |
+|   u_ddr3_top             |                             ddr3_top |       2899 |       2899 |       0 |    0 |  2354 |      0 |      0 |          0 |
+|     (u_ddr3_top)         |                             ddr3_top |         65 |         65 |       0 |    0 |     0 |      0 |      0 |          0 |
+|     ddr3_controller_inst |                      ddr3_controller |       2820 |       2820 |       0 |    0 |  2331 |      0 |      0 |          0 |
+|   u_poisson_divider      |                            divider2b |        240 |        240 |       0 |    0 |   137 |      0 |      0 |          0 |
+|   u_sd_controller        |                        sd_controller |       3027 |       3027 |       0 |    0 |   156 |      0 |      0 |          0 |
+|   u_stdp_divider         |                          divider2b_0 |        662 |        662 |       0 |    0 |   137 |      0 |      0 |          0 |
+|   u_uart_rx              |                              uart_rx |       1515 |       1515 |       0 |    0 |    41 |      0 |      0 |          0 |
++--------------------------+--------------------------------------+------------+------------+---------+------+-------+--------+--------+------------+
+
+

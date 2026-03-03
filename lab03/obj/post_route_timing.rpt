@@ -1,0 +1,724 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
+---------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
+| Date         : Tue Sep 23 21:51:00 2025
+| Host         : eecs-digital-16 running 64-bit Ubuntu 24.04.3 LTS
+| Command      : report_timing -file obj/post_route_timing.rpt
+| Design       : top_level
+| Device       : 7s50-csga324
+| Speed File   : -1  PRODUCTION 1.23 2018-06-13
+| Design State : Routed
+---------------------------------------------------------------------------------------------------------------------------------------------
+
+Timing Report
+
+Slack (VIOLATED) :        -19.126ns  (required time - arrival time)
+  Source:                 uart_transmitter_module/baud_bit_period_counter_reg[1]/C
+                            (rising edge-triggered cell FDRE clocked by gclk  {rise@0.000ns fall@4.000ns period=10.000ns})
+  Destination:            uart_transmitter_module/baud_bit_period_counter_reg[868]/D
+                            (rising edge-triggered cell FDRE clocked by gclk  {rise@0.000ns fall@4.000ns period=10.000ns})
+  Path Group:             gclk
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            10.000ns  (gclk rise@10.000ns - gclk rise@0.000ns)
+  Data Path Delay:        29.198ns  (logic 26.443ns (90.566%)  route 2.755ns (9.435%))
+  Logic Levels:           218  (CARRY4=218)
+  Clock Path Skew:        0.045ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    5.013ns = ( 15.013 - 10.000 ) 
+    Source Clock Delay      (SCD):    5.147ns
+    Clock Pessimism Removal (CPR):    0.179ns
+  Clock Uncertainty:      0.035ns  ((TSJ^2 + TIJ^2)^1/2 + DJ) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Total Input Jitter      (TIJ):    0.000ns
+    Discrete Jitter          (DJ):    0.000ns
+    Phase Error              (PE):    0.000ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock gclk rise edge)       0.000     0.000 r  
+    N15                                               0.000     0.000 r  clk_100mhz (IN)
+                         net (fo=0)                   0.000     0.000    clk_100mhz
+    N15                  IBUF (Prop_ibuf_I_O)         1.440     1.440 r  clk_100mhz_IBUF_inst/O
+                         net (fo=1, routed)           1.972     3.412    clk_100mhz_IBUF
+    BUFGCTRL_X0Y0        BUFG (Prop_bufg_I_O)         0.096     3.508 r  clk_100mhz_IBUF_BUFG_inst/O
+                         net (fo=1115, routed)        1.639     5.147    uart_transmitter_module/CLK
+    SLICE_X3Y0           FDRE                                         r  uart_transmitter_module/baud_bit_period_counter_reg[1]/C
+  -------------------------------------------------------------------    -------------------
+    SLICE_X3Y0           FDRE (Prop_fdre_C_Q)         0.456     5.603 r  uart_transmitter_module/baud_bit_period_counter_reg[1]/Q
+                         net (fo=2, routed)           0.301     5.905    uart_transmitter_module/baud_bit_period_counter_reg[1]
+    SLICE_X0Y0           CARRY4 (Prop_carry4_S[1]_CO[3])
+                                                      0.674     6.579 r  uart_transmitter_module/baud_bit_period_counter_reg[0]_i_2/CO[3]
+                         net (fo=1, routed)           0.000     6.579    uart_transmitter_module/baud_bit_period_counter_reg[0]_i_2_n_0
+    SLICE_X0Y1           CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     6.693 r  uart_transmitter_module/baud_bit_period_counter_reg[4]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     6.693    uart_transmitter_module/baud_bit_period_counter_reg[4]_i_1_n_0
+    SLICE_X0Y2           CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     6.807 r  uart_transmitter_module/baud_bit_period_counter_reg[8]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     6.807    uart_transmitter_module/baud_bit_period_counter_reg[8]_i_1_n_0
+    SLICE_X0Y3           CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     6.921 r  uart_transmitter_module/baud_bit_period_counter_reg[12]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     6.921    uart_transmitter_module/baud_bit_period_counter_reg[12]_i_1_n_0
+    SLICE_X0Y4           CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     7.035 r  uart_transmitter_module/baud_bit_period_counter_reg[16]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     7.035    uart_transmitter_module/baud_bit_period_counter_reg[16]_i_1_n_0
+    SLICE_X0Y5           CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     7.149 r  uart_transmitter_module/baud_bit_period_counter_reg[20]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     7.149    uart_transmitter_module/baud_bit_period_counter_reg[20]_i_1_n_0
+    SLICE_X0Y6           CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     7.263 r  uart_transmitter_module/baud_bit_period_counter_reg[24]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     7.263    uart_transmitter_module/baud_bit_period_counter_reg[24]_i_1_n_0
+    SLICE_X0Y7           CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     7.377 r  uart_transmitter_module/baud_bit_period_counter_reg[28]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     7.377    uart_transmitter_module/baud_bit_period_counter_reg[28]_i_1_n_0
+    SLICE_X0Y8           CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     7.491 r  uart_transmitter_module/baud_bit_period_counter_reg[32]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     7.491    uart_transmitter_module/baud_bit_period_counter_reg[32]_i_1_n_0
+    SLICE_X0Y9           CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     7.605 r  uart_transmitter_module/baud_bit_period_counter_reg[36]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     7.605    uart_transmitter_module/baud_bit_period_counter_reg[36]_i_1_n_0
+    SLICE_X0Y10          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     7.719 r  uart_transmitter_module/baud_bit_period_counter_reg[40]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     7.719    uart_transmitter_module/baud_bit_period_counter_reg[40]_i_1_n_0
+    SLICE_X0Y11          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     7.833 r  uart_transmitter_module/baud_bit_period_counter_reg[44]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     7.833    uart_transmitter_module/baud_bit_period_counter_reg[44]_i_1_n_0
+    SLICE_X0Y12          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     7.947 r  uart_transmitter_module/baud_bit_period_counter_reg[48]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     7.947    uart_transmitter_module/baud_bit_period_counter_reg[48]_i_1_n_0
+    SLICE_X0Y13          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     8.061 r  uart_transmitter_module/baud_bit_period_counter_reg[52]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     8.061    uart_transmitter_module/baud_bit_period_counter_reg[52]_i_1_n_0
+    SLICE_X0Y14          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     8.175 r  uart_transmitter_module/baud_bit_period_counter_reg[56]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     8.175    uart_transmitter_module/baud_bit_period_counter_reg[56]_i_1_n_0
+    SLICE_X0Y15          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     8.289 r  uart_transmitter_module/baud_bit_period_counter_reg[60]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     8.289    uart_transmitter_module/baud_bit_period_counter_reg[60]_i_1_n_0
+    SLICE_X0Y16          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     8.403 r  uart_transmitter_module/baud_bit_period_counter_reg[64]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     8.403    uart_transmitter_module/baud_bit_period_counter_reg[64]_i_1_n_0
+    SLICE_X0Y17          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     8.517 r  uart_transmitter_module/baud_bit_period_counter_reg[68]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     8.517    uart_transmitter_module/baud_bit_period_counter_reg[68]_i_1_n_0
+    SLICE_X0Y18          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     8.631 r  uart_transmitter_module/baud_bit_period_counter_reg[72]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     8.631    uart_transmitter_module/baud_bit_period_counter_reg[72]_i_1_n_0
+    SLICE_X0Y19          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     8.745 r  uart_transmitter_module/baud_bit_period_counter_reg[76]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     8.745    uart_transmitter_module/baud_bit_period_counter_reg[76]_i_1_n_0
+    SLICE_X0Y20          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     8.859 r  uart_transmitter_module/baud_bit_period_counter_reg[80]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     8.859    uart_transmitter_module/baud_bit_period_counter_reg[80]_i_1_n_0
+    SLICE_X0Y21          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     8.973 r  uart_transmitter_module/baud_bit_period_counter_reg[84]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     8.973    uart_transmitter_module/baud_bit_period_counter_reg[84]_i_1_n_0
+    SLICE_X0Y22          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     9.087 r  uart_transmitter_module/baud_bit_period_counter_reg[88]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     9.087    uart_transmitter_module/baud_bit_period_counter_reg[88]_i_1_n_0
+    SLICE_X0Y23          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     9.201 r  uart_transmitter_module/baud_bit_period_counter_reg[92]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     9.201    uart_transmitter_module/baud_bit_period_counter_reg[92]_i_1_n_0
+    SLICE_X0Y24          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     9.315 r  uart_transmitter_module/baud_bit_period_counter_reg[96]_i_1/CO[3]
+                         net (fo=1, routed)           0.009     9.324    uart_transmitter_module/baud_bit_period_counter_reg[96]_i_1_n_0
+    SLICE_X0Y25          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     9.438 r  uart_transmitter_module/baud_bit_period_counter_reg[100]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     9.438    uart_transmitter_module/baud_bit_period_counter_reg[100]_i_1_n_0
+    SLICE_X0Y26          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     9.552 r  uart_transmitter_module/baud_bit_period_counter_reg[104]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     9.552    uart_transmitter_module/baud_bit_period_counter_reg[104]_i_1_n_0
+    SLICE_X0Y27          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     9.666 r  uart_transmitter_module/baud_bit_period_counter_reg[108]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     9.666    uart_transmitter_module/baud_bit_period_counter_reg[108]_i_1_n_0
+    SLICE_X0Y28          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     9.780 r  uart_transmitter_module/baud_bit_period_counter_reg[112]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     9.780    uart_transmitter_module/baud_bit_period_counter_reg[112]_i_1_n_0
+    SLICE_X0Y29          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     9.894 r  uart_transmitter_module/baud_bit_period_counter_reg[116]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     9.894    uart_transmitter_module/baud_bit_period_counter_reg[116]_i_1_n_0
+    SLICE_X0Y30          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    10.008 r  uart_transmitter_module/baud_bit_period_counter_reg[120]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    10.008    uart_transmitter_module/baud_bit_period_counter_reg[120]_i_1_n_0
+    SLICE_X0Y31          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    10.122 r  uart_transmitter_module/baud_bit_period_counter_reg[124]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    10.122    uart_transmitter_module/baud_bit_period_counter_reg[124]_i_1_n_0
+    SLICE_X0Y32          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    10.236 r  uart_transmitter_module/baud_bit_period_counter_reg[128]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    10.236    uart_transmitter_module/baud_bit_period_counter_reg[128]_i_1_n_0
+    SLICE_X0Y33          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    10.350 r  uart_transmitter_module/baud_bit_period_counter_reg[132]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    10.350    uart_transmitter_module/baud_bit_period_counter_reg[132]_i_1_n_0
+    SLICE_X0Y34          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    10.464 r  uart_transmitter_module/baud_bit_period_counter_reg[136]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    10.464    uart_transmitter_module/baud_bit_period_counter_reg[136]_i_1_n_0
+    SLICE_X0Y35          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    10.578 r  uart_transmitter_module/baud_bit_period_counter_reg[140]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    10.578    uart_transmitter_module/baud_bit_period_counter_reg[140]_i_1_n_0
+    SLICE_X0Y36          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    10.692 r  uart_transmitter_module/baud_bit_period_counter_reg[144]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    10.692    uart_transmitter_module/baud_bit_period_counter_reg[144]_i_1_n_0
+    SLICE_X0Y37          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    10.806 r  uart_transmitter_module/baud_bit_period_counter_reg[148]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    10.806    uart_transmitter_module/baud_bit_period_counter_reg[148]_i_1_n_0
+    SLICE_X0Y38          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    10.920 r  uart_transmitter_module/baud_bit_period_counter_reg[152]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    10.920    uart_transmitter_module/baud_bit_period_counter_reg[152]_i_1_n_0
+    SLICE_X0Y39          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    11.034 r  uart_transmitter_module/baud_bit_period_counter_reg[156]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    11.034    uart_transmitter_module/baud_bit_period_counter_reg[156]_i_1_n_0
+    SLICE_X0Y40          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    11.148 r  uart_transmitter_module/baud_bit_period_counter_reg[160]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    11.148    uart_transmitter_module/baud_bit_period_counter_reg[160]_i_1_n_0
+    SLICE_X0Y41          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    11.262 r  uart_transmitter_module/baud_bit_period_counter_reg[164]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    11.262    uart_transmitter_module/baud_bit_period_counter_reg[164]_i_1_n_0
+    SLICE_X0Y42          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    11.376 r  uart_transmitter_module/baud_bit_period_counter_reg[168]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    11.376    uart_transmitter_module/baud_bit_period_counter_reg[168]_i_1_n_0
+    SLICE_X0Y43          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    11.490 r  uart_transmitter_module/baud_bit_period_counter_reg[172]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    11.490    uart_transmitter_module/baud_bit_period_counter_reg[172]_i_1_n_0
+    SLICE_X0Y44          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    11.604 r  uart_transmitter_module/baud_bit_period_counter_reg[176]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    11.604    uart_transmitter_module/baud_bit_period_counter_reg[176]_i_1_n_0
+    SLICE_X0Y45          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    11.718 r  uart_transmitter_module/baud_bit_period_counter_reg[180]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    11.718    uart_transmitter_module/baud_bit_period_counter_reg[180]_i_1_n_0
+    SLICE_X0Y46          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    11.832 r  uart_transmitter_module/baud_bit_period_counter_reg[184]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    11.832    uart_transmitter_module/baud_bit_period_counter_reg[184]_i_1_n_0
+    SLICE_X0Y47          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    11.946 r  uart_transmitter_module/baud_bit_period_counter_reg[188]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    11.946    uart_transmitter_module/baud_bit_period_counter_reg[188]_i_1_n_0
+    SLICE_X0Y48          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    12.060 r  uart_transmitter_module/baud_bit_period_counter_reg[192]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    12.060    uart_transmitter_module/baud_bit_period_counter_reg[192]_i_1_n_0
+    SLICE_X0Y49          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    12.174 r  uart_transmitter_module/baud_bit_period_counter_reg[196]_i_1/CO[3]
+                         net (fo=1, routed)           0.001    12.174    uart_transmitter_module/baud_bit_period_counter_reg[196]_i_1_n_0
+    SLICE_X0Y50          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    12.288 r  uart_transmitter_module/baud_bit_period_counter_reg[200]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    12.288    uart_transmitter_module/baud_bit_period_counter_reg[200]_i_1_n_0
+    SLICE_X0Y51          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    12.402 r  uart_transmitter_module/baud_bit_period_counter_reg[204]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    12.402    uart_transmitter_module/baud_bit_period_counter_reg[204]_i_1_n_0
+    SLICE_X0Y52          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    12.516 r  uart_transmitter_module/baud_bit_period_counter_reg[208]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    12.516    uart_transmitter_module/baud_bit_period_counter_reg[208]_i_1_n_0
+    SLICE_X0Y53          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    12.630 r  uart_transmitter_module/baud_bit_period_counter_reg[212]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    12.630    uart_transmitter_module/baud_bit_period_counter_reg[212]_i_1_n_0
+    SLICE_X0Y54          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    12.744 r  uart_transmitter_module/baud_bit_period_counter_reg[216]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    12.744    uart_transmitter_module/baud_bit_period_counter_reg[216]_i_1_n_0
+    SLICE_X0Y55          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    12.858 r  uart_transmitter_module/baud_bit_period_counter_reg[220]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    12.858    uart_transmitter_module/baud_bit_period_counter_reg[220]_i_1_n_0
+    SLICE_X0Y56          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    12.972 r  uart_transmitter_module/baud_bit_period_counter_reg[224]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    12.972    uart_transmitter_module/baud_bit_period_counter_reg[224]_i_1_n_0
+    SLICE_X0Y57          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    13.086 r  uart_transmitter_module/baud_bit_period_counter_reg[228]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    13.086    uart_transmitter_module/baud_bit_period_counter_reg[228]_i_1_n_0
+    SLICE_X0Y58          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    13.200 r  uart_transmitter_module/baud_bit_period_counter_reg[232]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    13.200    uart_transmitter_module/baud_bit_period_counter_reg[232]_i_1_n_0
+    SLICE_X0Y59          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    13.314 r  uart_transmitter_module/baud_bit_period_counter_reg[236]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    13.314    uart_transmitter_module/baud_bit_period_counter_reg[236]_i_1_n_0
+    SLICE_X0Y60          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    13.428 r  uart_transmitter_module/baud_bit_period_counter_reg[240]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    13.428    uart_transmitter_module/baud_bit_period_counter_reg[240]_i_1_n_0
+    SLICE_X0Y61          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    13.542 r  uart_transmitter_module/baud_bit_period_counter_reg[244]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    13.542    uart_transmitter_module/baud_bit_period_counter_reg[244]_i_1_n_0
+    SLICE_X0Y62          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    13.656 r  uart_transmitter_module/baud_bit_period_counter_reg[248]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    13.656    uart_transmitter_module/baud_bit_period_counter_reg[248]_i_1_n_0
+    SLICE_X0Y63          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    13.770 r  uart_transmitter_module/baud_bit_period_counter_reg[252]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    13.770    uart_transmitter_module/baud_bit_period_counter_reg[252]_i_1_n_0
+    SLICE_X0Y64          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    13.884 r  uart_transmitter_module/baud_bit_period_counter_reg[256]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    13.884    uart_transmitter_module/baud_bit_period_counter_reg[256]_i_1_n_0
+    SLICE_X0Y65          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    13.998 r  uart_transmitter_module/baud_bit_period_counter_reg[260]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    13.998    uart_transmitter_module/baud_bit_period_counter_reg[260]_i_1_n_0
+    SLICE_X0Y66          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    14.112 r  uart_transmitter_module/baud_bit_period_counter_reg[264]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    14.112    uart_transmitter_module/baud_bit_period_counter_reg[264]_i_1_n_0
+    SLICE_X0Y67          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    14.226 r  uart_transmitter_module/baud_bit_period_counter_reg[268]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    14.226    uart_transmitter_module/baud_bit_period_counter_reg[268]_i_1_n_0
+    SLICE_X0Y68          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    14.340 r  uart_transmitter_module/baud_bit_period_counter_reg[272]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    14.340    uart_transmitter_module/baud_bit_period_counter_reg[272]_i_1_n_0
+    SLICE_X0Y69          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    14.454 r  uart_transmitter_module/baud_bit_period_counter_reg[276]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    14.454    uart_transmitter_module/baud_bit_period_counter_reg[276]_i_1_n_0
+    SLICE_X0Y70          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    14.568 r  uart_transmitter_module/baud_bit_period_counter_reg[280]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    14.568    uart_transmitter_module/baud_bit_period_counter_reg[280]_i_1_n_0
+    SLICE_X0Y71          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    14.682 r  uart_transmitter_module/baud_bit_period_counter_reg[284]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    14.682    uart_transmitter_module/baud_bit_period_counter_reg[284]_i_1_n_0
+    SLICE_X0Y72          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    14.796 r  uart_transmitter_module/baud_bit_period_counter_reg[288]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    14.796    uart_transmitter_module/baud_bit_period_counter_reg[288]_i_1_n_0
+    SLICE_X0Y73          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    14.910 r  uart_transmitter_module/baud_bit_period_counter_reg[292]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    14.910    uart_transmitter_module/baud_bit_period_counter_reg[292]_i_1_n_0
+    SLICE_X0Y74          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    15.024 r  uart_transmitter_module/baud_bit_period_counter_reg[296]_i_1/CO[3]
+                         net (fo=1, routed)           0.009    15.033    uart_transmitter_module/baud_bit_period_counter_reg[296]_i_1_n_0
+    SLICE_X0Y75          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    15.147 r  uart_transmitter_module/baud_bit_period_counter_reg[300]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    15.147    uart_transmitter_module/baud_bit_period_counter_reg[300]_i_1_n_0
+    SLICE_X0Y76          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    15.261 r  uart_transmitter_module/baud_bit_period_counter_reg[304]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    15.261    uart_transmitter_module/baud_bit_period_counter_reg[304]_i_1_n_0
+    SLICE_X0Y77          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    15.375 r  uart_transmitter_module/baud_bit_period_counter_reg[308]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    15.375    uart_transmitter_module/baud_bit_period_counter_reg[308]_i_1_n_0
+    SLICE_X0Y78          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    15.489 r  uart_transmitter_module/baud_bit_period_counter_reg[312]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    15.489    uart_transmitter_module/baud_bit_period_counter_reg[312]_i_1_n_0
+    SLICE_X0Y79          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    15.603 r  uart_transmitter_module/baud_bit_period_counter_reg[316]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    15.603    uart_transmitter_module/baud_bit_period_counter_reg[316]_i_1_n_0
+    SLICE_X0Y80          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    15.717 r  uart_transmitter_module/baud_bit_period_counter_reg[320]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    15.717    uart_transmitter_module/baud_bit_period_counter_reg[320]_i_1_n_0
+    SLICE_X0Y81          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    15.831 r  uart_transmitter_module/baud_bit_period_counter_reg[324]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    15.831    uart_transmitter_module/baud_bit_period_counter_reg[324]_i_1_n_0
+    SLICE_X0Y82          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    15.945 r  uart_transmitter_module/baud_bit_period_counter_reg[328]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    15.945    uart_transmitter_module/baud_bit_period_counter_reg[328]_i_1_n_0
+    SLICE_X0Y83          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    16.059 r  uart_transmitter_module/baud_bit_period_counter_reg[332]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    16.059    uart_transmitter_module/baud_bit_period_counter_reg[332]_i_1_n_0
+    SLICE_X0Y84          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    16.173 r  uart_transmitter_module/baud_bit_period_counter_reg[336]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    16.173    uart_transmitter_module/baud_bit_period_counter_reg[336]_i_1_n_0
+    SLICE_X0Y85          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    16.287 r  uart_transmitter_module/baud_bit_period_counter_reg[340]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    16.287    uart_transmitter_module/baud_bit_period_counter_reg[340]_i_1_n_0
+    SLICE_X0Y86          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    16.401 r  uart_transmitter_module/baud_bit_period_counter_reg[344]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    16.401    uart_transmitter_module/baud_bit_period_counter_reg[344]_i_1_n_0
+    SLICE_X0Y87          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    16.515 r  uart_transmitter_module/baud_bit_period_counter_reg[348]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    16.515    uart_transmitter_module/baud_bit_period_counter_reg[348]_i_1_n_0
+    SLICE_X0Y88          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    16.629 r  uart_transmitter_module/baud_bit_period_counter_reg[352]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    16.629    uart_transmitter_module/baud_bit_period_counter_reg[352]_i_1_n_0
+    SLICE_X0Y89          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    16.743 r  uart_transmitter_module/baud_bit_period_counter_reg[356]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    16.743    uart_transmitter_module/baud_bit_period_counter_reg[356]_i_1_n_0
+    SLICE_X0Y90          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    16.857 r  uart_transmitter_module/baud_bit_period_counter_reg[360]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    16.857    uart_transmitter_module/baud_bit_period_counter_reg[360]_i_1_n_0
+    SLICE_X0Y91          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    16.971 r  uart_transmitter_module/baud_bit_period_counter_reg[364]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    16.971    uart_transmitter_module/baud_bit_period_counter_reg[364]_i_1_n_0
+    SLICE_X0Y92          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    17.085 r  uart_transmitter_module/baud_bit_period_counter_reg[368]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    17.085    uart_transmitter_module/baud_bit_period_counter_reg[368]_i_1_n_0
+    SLICE_X0Y93          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    17.199 r  uart_transmitter_module/baud_bit_period_counter_reg[372]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    17.199    uart_transmitter_module/baud_bit_period_counter_reg[372]_i_1_n_0
+    SLICE_X0Y94          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    17.313 r  uart_transmitter_module/baud_bit_period_counter_reg[376]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    17.313    uart_transmitter_module/baud_bit_period_counter_reg[376]_i_1_n_0
+    SLICE_X0Y95          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    17.427 r  uart_transmitter_module/baud_bit_period_counter_reg[380]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    17.427    uart_transmitter_module/baud_bit_period_counter_reg[380]_i_1_n_0
+    SLICE_X0Y96          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    17.541 r  uart_transmitter_module/baud_bit_period_counter_reg[384]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    17.541    uart_transmitter_module/baud_bit_period_counter_reg[384]_i_1_n_0
+    SLICE_X0Y97          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    17.655 r  uart_transmitter_module/baud_bit_period_counter_reg[388]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    17.655    uart_transmitter_module/baud_bit_period_counter_reg[388]_i_1_n_0
+    SLICE_X0Y98          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    17.769 r  uart_transmitter_module/baud_bit_period_counter_reg[392]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    17.769    uart_transmitter_module/baud_bit_period_counter_reg[392]_i_1_n_0
+    SLICE_X0Y99          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    17.883 r  uart_transmitter_module/baud_bit_period_counter_reg[396]_i_1/CO[3]
+                         net (fo=1, routed)           0.001    17.884    uart_transmitter_module/baud_bit_period_counter_reg[396]_i_1_n_0
+    SLICE_X0Y100         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    17.998 r  uart_transmitter_module/baud_bit_period_counter_reg[400]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    17.998    uart_transmitter_module/baud_bit_period_counter_reg[400]_i_1_n_0
+    SLICE_X0Y101         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    18.112 r  uart_transmitter_module/baud_bit_period_counter_reg[404]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    18.112    uart_transmitter_module/baud_bit_period_counter_reg[404]_i_1_n_0
+    SLICE_X0Y102         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    18.226 r  uart_transmitter_module/baud_bit_period_counter_reg[408]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    18.226    uart_transmitter_module/baud_bit_period_counter_reg[408]_i_1_n_0
+    SLICE_X0Y103         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    18.340 r  uart_transmitter_module/baud_bit_period_counter_reg[412]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    18.340    uart_transmitter_module/baud_bit_period_counter_reg[412]_i_1_n_0
+    SLICE_X0Y104         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    18.454 r  uart_transmitter_module/baud_bit_period_counter_reg[416]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    18.454    uart_transmitter_module/baud_bit_period_counter_reg[416]_i_1_n_0
+    SLICE_X0Y105         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    18.568 r  uart_transmitter_module/baud_bit_period_counter_reg[420]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    18.568    uart_transmitter_module/baud_bit_period_counter_reg[420]_i_1_n_0
+    SLICE_X0Y106         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    18.682 r  uart_transmitter_module/baud_bit_period_counter_reg[424]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    18.682    uart_transmitter_module/baud_bit_period_counter_reg[424]_i_1_n_0
+    SLICE_X0Y107         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    18.796 r  uart_transmitter_module/baud_bit_period_counter_reg[428]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    18.796    uart_transmitter_module/baud_bit_period_counter_reg[428]_i_1_n_0
+    SLICE_X0Y108         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    18.910 r  uart_transmitter_module/baud_bit_period_counter_reg[432]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    18.910    uart_transmitter_module/baud_bit_period_counter_reg[432]_i_1_n_0
+    SLICE_X0Y109         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    19.024 r  uart_transmitter_module/baud_bit_period_counter_reg[436]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    19.024    uart_transmitter_module/baud_bit_period_counter_reg[436]_i_1_n_0
+    SLICE_X0Y110         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    19.138 r  uart_transmitter_module/baud_bit_period_counter_reg[440]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    19.138    uart_transmitter_module/baud_bit_period_counter_reg[440]_i_1_n_0
+    SLICE_X0Y111         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    19.252 r  uart_transmitter_module/baud_bit_period_counter_reg[444]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    19.252    uart_transmitter_module/baud_bit_period_counter_reg[444]_i_1_n_0
+    SLICE_X0Y112         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    19.366 r  uart_transmitter_module/baud_bit_period_counter_reg[448]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    19.366    uart_transmitter_module/baud_bit_period_counter_reg[448]_i_1_n_0
+    SLICE_X0Y113         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    19.480 r  uart_transmitter_module/baud_bit_period_counter_reg[452]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    19.480    uart_transmitter_module/baud_bit_period_counter_reg[452]_i_1_n_0
+    SLICE_X0Y114         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    19.594 r  uart_transmitter_module/baud_bit_period_counter_reg[456]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    19.594    uart_transmitter_module/baud_bit_period_counter_reg[456]_i_1_n_0
+    SLICE_X0Y115         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    19.708 r  uart_transmitter_module/baud_bit_period_counter_reg[460]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    19.708    uart_transmitter_module/baud_bit_period_counter_reg[460]_i_1_n_0
+    SLICE_X0Y116         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    19.822 r  uart_transmitter_module/baud_bit_period_counter_reg[464]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    19.822    uart_transmitter_module/baud_bit_period_counter_reg[464]_i_1_n_0
+    SLICE_X0Y117         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    19.936 r  uart_transmitter_module/baud_bit_period_counter_reg[468]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    19.936    uart_transmitter_module/baud_bit_period_counter_reg[468]_i_1_n_0
+    SLICE_X0Y118         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    20.050 r  uart_transmitter_module/baud_bit_period_counter_reg[472]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    20.050    uart_transmitter_module/baud_bit_period_counter_reg[472]_i_1_n_0
+    SLICE_X0Y119         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    20.164 r  uart_transmitter_module/baud_bit_period_counter_reg[476]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    20.164    uart_transmitter_module/baud_bit_period_counter_reg[476]_i_1_n_0
+    SLICE_X0Y120         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    20.278 r  uart_transmitter_module/baud_bit_period_counter_reg[480]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    20.278    uart_transmitter_module/baud_bit_period_counter_reg[480]_i_1_n_0
+    SLICE_X0Y121         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    20.392 r  uart_transmitter_module/baud_bit_period_counter_reg[484]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    20.392    uart_transmitter_module/baud_bit_period_counter_reg[484]_i_1_n_0
+    SLICE_X0Y122         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    20.506 r  uart_transmitter_module/baud_bit_period_counter_reg[488]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    20.506    uart_transmitter_module/baud_bit_period_counter_reg[488]_i_1_n_0
+    SLICE_X0Y123         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    20.620 r  uart_transmitter_module/baud_bit_period_counter_reg[492]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    20.620    uart_transmitter_module/baud_bit_period_counter_reg[492]_i_1_n_0
+    SLICE_X0Y124         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    20.734 r  uart_transmitter_module/baud_bit_period_counter_reg[496]_i_1/CO[3]
+                         net (fo=1, routed)           0.009    20.743    uart_transmitter_module/baud_bit_period_counter_reg[496]_i_1_n_0
+    SLICE_X0Y125         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    20.857 r  uart_transmitter_module/baud_bit_period_counter_reg[500]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    20.857    uart_transmitter_module/baud_bit_period_counter_reg[500]_i_1_n_0
+    SLICE_X0Y126         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    20.971 r  uart_transmitter_module/baud_bit_period_counter_reg[504]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    20.971    uart_transmitter_module/baud_bit_period_counter_reg[504]_i_1_n_0
+    SLICE_X0Y127         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    21.085 r  uart_transmitter_module/baud_bit_period_counter_reg[508]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    21.085    uart_transmitter_module/baud_bit_period_counter_reg[508]_i_1_n_0
+    SLICE_X0Y128         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    21.199 r  uart_transmitter_module/baud_bit_period_counter_reg[512]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    21.199    uart_transmitter_module/baud_bit_period_counter_reg[512]_i_1_n_0
+    SLICE_X0Y129         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    21.313 r  uart_transmitter_module/baud_bit_period_counter_reg[516]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    21.313    uart_transmitter_module/baud_bit_period_counter_reg[516]_i_1_n_0
+    SLICE_X0Y130         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    21.427 r  uart_transmitter_module/baud_bit_period_counter_reg[520]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    21.427    uart_transmitter_module/baud_bit_period_counter_reg[520]_i_1_n_0
+    SLICE_X0Y131         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    21.541 r  uart_transmitter_module/baud_bit_period_counter_reg[524]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    21.541    uart_transmitter_module/baud_bit_period_counter_reg[524]_i_1_n_0
+    SLICE_X0Y132         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    21.655 r  uart_transmitter_module/baud_bit_period_counter_reg[528]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    21.655    uart_transmitter_module/baud_bit_period_counter_reg[528]_i_1_n_0
+    SLICE_X0Y133         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    21.769 r  uart_transmitter_module/baud_bit_period_counter_reg[532]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    21.769    uart_transmitter_module/baud_bit_period_counter_reg[532]_i_1_n_0
+    SLICE_X0Y134         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    21.883 r  uart_transmitter_module/baud_bit_period_counter_reg[536]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    21.883    uart_transmitter_module/baud_bit_period_counter_reg[536]_i_1_n_0
+    SLICE_X0Y135         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    21.997 r  uart_transmitter_module/baud_bit_period_counter_reg[540]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    21.997    uart_transmitter_module/baud_bit_period_counter_reg[540]_i_1_n_0
+    SLICE_X0Y136         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    22.111 r  uart_transmitter_module/baud_bit_period_counter_reg[544]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    22.111    uart_transmitter_module/baud_bit_period_counter_reg[544]_i_1_n_0
+    SLICE_X0Y137         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    22.225 r  uart_transmitter_module/baud_bit_period_counter_reg[548]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    22.225    uart_transmitter_module/baud_bit_period_counter_reg[548]_i_1_n_0
+    SLICE_X0Y138         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    22.339 r  uart_transmitter_module/baud_bit_period_counter_reg[552]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    22.339    uart_transmitter_module/baud_bit_period_counter_reg[552]_i_1_n_0
+    SLICE_X0Y139         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    22.453 r  uart_transmitter_module/baud_bit_period_counter_reg[556]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    22.453    uart_transmitter_module/baud_bit_period_counter_reg[556]_i_1_n_0
+    SLICE_X0Y140         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    22.567 r  uart_transmitter_module/baud_bit_period_counter_reg[560]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    22.567    uart_transmitter_module/baud_bit_period_counter_reg[560]_i_1_n_0
+    SLICE_X0Y141         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    22.681 r  uart_transmitter_module/baud_bit_period_counter_reg[564]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    22.681    uart_transmitter_module/baud_bit_period_counter_reg[564]_i_1_n_0
+    SLICE_X0Y142         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    22.795 r  uart_transmitter_module/baud_bit_period_counter_reg[568]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    22.795    uart_transmitter_module/baud_bit_period_counter_reg[568]_i_1_n_0
+    SLICE_X0Y143         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    22.909 r  uart_transmitter_module/baud_bit_period_counter_reg[572]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    22.909    uart_transmitter_module/baud_bit_period_counter_reg[572]_i_1_n_0
+    SLICE_X0Y144         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    23.023 r  uart_transmitter_module/baud_bit_period_counter_reg[576]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    23.023    uart_transmitter_module/baud_bit_period_counter_reg[576]_i_1_n_0
+    SLICE_X0Y145         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    23.137 r  uart_transmitter_module/baud_bit_period_counter_reg[580]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    23.137    uart_transmitter_module/baud_bit_period_counter_reg[580]_i_1_n_0
+    SLICE_X0Y146         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    23.251 r  uart_transmitter_module/baud_bit_period_counter_reg[584]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    23.251    uart_transmitter_module/baud_bit_period_counter_reg[584]_i_1_n_0
+    SLICE_X0Y147         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    23.365 r  uart_transmitter_module/baud_bit_period_counter_reg[588]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    23.365    uart_transmitter_module/baud_bit_period_counter_reg[588]_i_1_n_0
+    SLICE_X0Y148         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    23.479 r  uart_transmitter_module/baud_bit_period_counter_reg[592]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    23.479    uart_transmitter_module/baud_bit_period_counter_reg[592]_i_1_n_0
+    SLICE_X0Y149         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    23.593 r  uart_transmitter_module/baud_bit_period_counter_reg[596]_i_1/CO[3]
+                         net (fo=1, routed)           2.415    26.008    uart_transmitter_module/baud_bit_period_counter_reg[596]_i_1_n_0
+    SLICE_X1Y82          CARRY4 (Prop_carry4_CYINIT_CO[3])
+                                                      0.580    26.588 r  uart_transmitter_module/baud_bit_period_counter_reg[600]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    26.588    uart_transmitter_module/baud_bit_period_counter_reg[600]_i_1_n_0
+    SLICE_X1Y83          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    26.702 r  uart_transmitter_module/baud_bit_period_counter_reg[604]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    26.702    uart_transmitter_module/baud_bit_period_counter_reg[604]_i_1_n_0
+    SLICE_X1Y84          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    26.816 r  uart_transmitter_module/baud_bit_period_counter_reg[608]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    26.816    uart_transmitter_module/baud_bit_period_counter_reg[608]_i_1_n_0
+    SLICE_X1Y85          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    26.930 r  uart_transmitter_module/baud_bit_period_counter_reg[612]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    26.930    uart_transmitter_module/baud_bit_period_counter_reg[612]_i_1_n_0
+    SLICE_X1Y86          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    27.044 r  uart_transmitter_module/baud_bit_period_counter_reg[616]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    27.044    uart_transmitter_module/baud_bit_period_counter_reg[616]_i_1_n_0
+    SLICE_X1Y87          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    27.158 r  uart_transmitter_module/baud_bit_period_counter_reg[620]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    27.158    uart_transmitter_module/baud_bit_period_counter_reg[620]_i_1_n_0
+    SLICE_X1Y88          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    27.272 r  uart_transmitter_module/baud_bit_period_counter_reg[624]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    27.272    uart_transmitter_module/baud_bit_period_counter_reg[624]_i_1_n_0
+    SLICE_X1Y89          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    27.386 r  uart_transmitter_module/baud_bit_period_counter_reg[628]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    27.386    uart_transmitter_module/baud_bit_period_counter_reg[628]_i_1_n_0
+    SLICE_X1Y90          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    27.500 r  uart_transmitter_module/baud_bit_period_counter_reg[632]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    27.500    uart_transmitter_module/baud_bit_period_counter_reg[632]_i_1_n_0
+    SLICE_X1Y91          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    27.614 r  uart_transmitter_module/baud_bit_period_counter_reg[636]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    27.614    uart_transmitter_module/baud_bit_period_counter_reg[636]_i_1_n_0
+    SLICE_X1Y92          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    27.728 r  uart_transmitter_module/baud_bit_period_counter_reg[640]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    27.728    uart_transmitter_module/baud_bit_period_counter_reg[640]_i_1_n_0
+    SLICE_X1Y93          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    27.842 r  uart_transmitter_module/baud_bit_period_counter_reg[644]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    27.842    uart_transmitter_module/baud_bit_period_counter_reg[644]_i_1_n_0
+    SLICE_X1Y94          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    27.956 r  uart_transmitter_module/baud_bit_period_counter_reg[648]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    27.956    uart_transmitter_module/baud_bit_period_counter_reg[648]_i_1_n_0
+    SLICE_X1Y95          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    28.070 r  uart_transmitter_module/baud_bit_period_counter_reg[652]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    28.070    uart_transmitter_module/baud_bit_period_counter_reg[652]_i_1_n_0
+    SLICE_X1Y96          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    28.184 r  uart_transmitter_module/baud_bit_period_counter_reg[656]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    28.184    uart_transmitter_module/baud_bit_period_counter_reg[656]_i_1_n_0
+    SLICE_X1Y97          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    28.298 r  uart_transmitter_module/baud_bit_period_counter_reg[660]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    28.298    uart_transmitter_module/baud_bit_period_counter_reg[660]_i_1_n_0
+    SLICE_X1Y98          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    28.412 r  uart_transmitter_module/baud_bit_period_counter_reg[664]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    28.412    uart_transmitter_module/baud_bit_period_counter_reg[664]_i_1_n_0
+    SLICE_X1Y99          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    28.526 r  uart_transmitter_module/baud_bit_period_counter_reg[668]_i_1/CO[3]
+                         net (fo=1, routed)           0.001    28.527    uart_transmitter_module/baud_bit_period_counter_reg[668]_i_1_n_0
+    SLICE_X1Y100         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    28.641 r  uart_transmitter_module/baud_bit_period_counter_reg[672]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    28.641    uart_transmitter_module/baud_bit_period_counter_reg[672]_i_1_n_0
+    SLICE_X1Y101         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    28.755 r  uart_transmitter_module/baud_bit_period_counter_reg[676]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    28.755    uart_transmitter_module/baud_bit_period_counter_reg[676]_i_1_n_0
+    SLICE_X1Y102         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    28.869 r  uart_transmitter_module/baud_bit_period_counter_reg[680]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    28.869    uart_transmitter_module/baud_bit_period_counter_reg[680]_i_1_n_0
+    SLICE_X1Y103         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    28.983 r  uart_transmitter_module/baud_bit_period_counter_reg[684]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    28.983    uart_transmitter_module/baud_bit_period_counter_reg[684]_i_1_n_0
+    SLICE_X1Y104         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    29.097 r  uart_transmitter_module/baud_bit_period_counter_reg[688]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    29.097    uart_transmitter_module/baud_bit_period_counter_reg[688]_i_1_n_0
+    SLICE_X1Y105         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    29.211 r  uart_transmitter_module/baud_bit_period_counter_reg[692]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    29.211    uart_transmitter_module/baud_bit_period_counter_reg[692]_i_1_n_0
+    SLICE_X1Y106         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    29.325 r  uart_transmitter_module/baud_bit_period_counter_reg[696]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    29.325    uart_transmitter_module/baud_bit_period_counter_reg[696]_i_1_n_0
+    SLICE_X1Y107         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    29.439 r  uart_transmitter_module/baud_bit_period_counter_reg[700]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    29.439    uart_transmitter_module/baud_bit_period_counter_reg[700]_i_1_n_0
+    SLICE_X1Y108         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    29.553 r  uart_transmitter_module/baud_bit_period_counter_reg[704]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    29.553    uart_transmitter_module/baud_bit_period_counter_reg[704]_i_1_n_0
+    SLICE_X1Y109         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    29.667 r  uart_transmitter_module/baud_bit_period_counter_reg[708]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    29.667    uart_transmitter_module/baud_bit_period_counter_reg[708]_i_1_n_0
+    SLICE_X1Y110         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    29.781 r  uart_transmitter_module/baud_bit_period_counter_reg[712]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    29.781    uart_transmitter_module/baud_bit_period_counter_reg[712]_i_1_n_0
+    SLICE_X1Y111         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    29.895 r  uart_transmitter_module/baud_bit_period_counter_reg[716]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    29.895    uart_transmitter_module/baud_bit_period_counter_reg[716]_i_1_n_0
+    SLICE_X1Y112         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    30.009 r  uart_transmitter_module/baud_bit_period_counter_reg[720]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    30.009    uart_transmitter_module/baud_bit_period_counter_reg[720]_i_1_n_0
+    SLICE_X1Y113         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    30.123 r  uart_transmitter_module/baud_bit_period_counter_reg[724]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    30.123    uart_transmitter_module/baud_bit_period_counter_reg[724]_i_1_n_0
+    SLICE_X1Y114         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    30.237 r  uart_transmitter_module/baud_bit_period_counter_reg[728]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    30.237    uart_transmitter_module/baud_bit_period_counter_reg[728]_i_1_n_0
+    SLICE_X1Y115         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    30.351 r  uart_transmitter_module/baud_bit_period_counter_reg[732]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    30.351    uart_transmitter_module/baud_bit_period_counter_reg[732]_i_1_n_0
+    SLICE_X1Y116         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    30.465 r  uart_transmitter_module/baud_bit_period_counter_reg[736]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    30.465    uart_transmitter_module/baud_bit_period_counter_reg[736]_i_1_n_0
+    SLICE_X1Y117         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    30.579 r  uart_transmitter_module/baud_bit_period_counter_reg[740]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    30.579    uart_transmitter_module/baud_bit_period_counter_reg[740]_i_1_n_0
+    SLICE_X1Y118         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    30.693 r  uart_transmitter_module/baud_bit_period_counter_reg[744]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    30.693    uart_transmitter_module/baud_bit_period_counter_reg[744]_i_1_n_0
+    SLICE_X1Y119         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    30.807 r  uart_transmitter_module/baud_bit_period_counter_reg[748]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    30.807    uart_transmitter_module/baud_bit_period_counter_reg[748]_i_1_n_0
+    SLICE_X1Y120         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    30.921 r  uart_transmitter_module/baud_bit_period_counter_reg[752]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    30.921    uart_transmitter_module/baud_bit_period_counter_reg[752]_i_1_n_0
+    SLICE_X1Y121         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    31.035 r  uart_transmitter_module/baud_bit_period_counter_reg[756]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    31.035    uart_transmitter_module/baud_bit_period_counter_reg[756]_i_1_n_0
+    SLICE_X1Y122         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    31.149 r  uart_transmitter_module/baud_bit_period_counter_reg[760]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    31.149    uart_transmitter_module/baud_bit_period_counter_reg[760]_i_1_n_0
+    SLICE_X1Y123         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    31.263 r  uart_transmitter_module/baud_bit_period_counter_reg[764]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    31.263    uart_transmitter_module/baud_bit_period_counter_reg[764]_i_1_n_0
+    SLICE_X1Y124         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    31.377 r  uart_transmitter_module/baud_bit_period_counter_reg[768]_i_1/CO[3]
+                         net (fo=1, routed)           0.009    31.386    uart_transmitter_module/baud_bit_period_counter_reg[768]_i_1_n_0
+    SLICE_X1Y125         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    31.500 r  uart_transmitter_module/baud_bit_period_counter_reg[772]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    31.500    uart_transmitter_module/baud_bit_period_counter_reg[772]_i_1_n_0
+    SLICE_X1Y126         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    31.614 r  uart_transmitter_module/baud_bit_period_counter_reg[776]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    31.614    uart_transmitter_module/baud_bit_period_counter_reg[776]_i_1_n_0
+    SLICE_X1Y127         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    31.728 r  uart_transmitter_module/baud_bit_period_counter_reg[780]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    31.728    uart_transmitter_module/baud_bit_period_counter_reg[780]_i_1_n_0
+    SLICE_X1Y128         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    31.842 r  uart_transmitter_module/baud_bit_period_counter_reg[784]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    31.842    uart_transmitter_module/baud_bit_period_counter_reg[784]_i_1_n_0
+    SLICE_X1Y129         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    31.956 r  uart_transmitter_module/baud_bit_period_counter_reg[788]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    31.956    uart_transmitter_module/baud_bit_period_counter_reg[788]_i_1_n_0
+    SLICE_X1Y130         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    32.070 r  uart_transmitter_module/baud_bit_period_counter_reg[792]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    32.070    uart_transmitter_module/baud_bit_period_counter_reg[792]_i_1_n_0
+    SLICE_X1Y131         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    32.184 r  uart_transmitter_module/baud_bit_period_counter_reg[796]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    32.184    uart_transmitter_module/baud_bit_period_counter_reg[796]_i_1_n_0
+    SLICE_X1Y132         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    32.298 r  uart_transmitter_module/baud_bit_period_counter_reg[800]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    32.298    uart_transmitter_module/baud_bit_period_counter_reg[800]_i_1_n_0
+    SLICE_X1Y133         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    32.412 r  uart_transmitter_module/baud_bit_period_counter_reg[804]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    32.412    uart_transmitter_module/baud_bit_period_counter_reg[804]_i_1_n_0
+    SLICE_X1Y134         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    32.526 r  uart_transmitter_module/baud_bit_period_counter_reg[808]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    32.526    uart_transmitter_module/baud_bit_period_counter_reg[808]_i_1_n_0
+    SLICE_X1Y135         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    32.640 r  uart_transmitter_module/baud_bit_period_counter_reg[812]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    32.640    uart_transmitter_module/baud_bit_period_counter_reg[812]_i_1_n_0
+    SLICE_X1Y136         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    32.754 r  uart_transmitter_module/baud_bit_period_counter_reg[816]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    32.754    uart_transmitter_module/baud_bit_period_counter_reg[816]_i_1_n_0
+    SLICE_X1Y137         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    32.868 r  uart_transmitter_module/baud_bit_period_counter_reg[820]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    32.868    uart_transmitter_module/baud_bit_period_counter_reg[820]_i_1_n_0
+    SLICE_X1Y138         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    32.982 r  uart_transmitter_module/baud_bit_period_counter_reg[824]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    32.982    uart_transmitter_module/baud_bit_period_counter_reg[824]_i_1_n_0
+    SLICE_X1Y139         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    33.096 r  uart_transmitter_module/baud_bit_period_counter_reg[828]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    33.096    uart_transmitter_module/baud_bit_period_counter_reg[828]_i_1_n_0
+    SLICE_X1Y140         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    33.210 r  uart_transmitter_module/baud_bit_period_counter_reg[832]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    33.210    uart_transmitter_module/baud_bit_period_counter_reg[832]_i_1_n_0
+    SLICE_X1Y141         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    33.324 r  uart_transmitter_module/baud_bit_period_counter_reg[836]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    33.324    uart_transmitter_module/baud_bit_period_counter_reg[836]_i_1_n_0
+    SLICE_X1Y142         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    33.438 r  uart_transmitter_module/baud_bit_period_counter_reg[840]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    33.438    uart_transmitter_module/baud_bit_period_counter_reg[840]_i_1_n_0
+    SLICE_X1Y143         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    33.552 r  uart_transmitter_module/baud_bit_period_counter_reg[844]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    33.552    uart_transmitter_module/baud_bit_period_counter_reg[844]_i_1_n_0
+    SLICE_X1Y144         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    33.666 r  uart_transmitter_module/baud_bit_period_counter_reg[848]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    33.666    uart_transmitter_module/baud_bit_period_counter_reg[848]_i_1_n_0
+    SLICE_X1Y145         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    33.780 r  uart_transmitter_module/baud_bit_period_counter_reg[852]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    33.780    uart_transmitter_module/baud_bit_period_counter_reg[852]_i_1_n_0
+    SLICE_X1Y146         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    33.894 r  uart_transmitter_module/baud_bit_period_counter_reg[856]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    33.894    uart_transmitter_module/baud_bit_period_counter_reg[856]_i_1_n_0
+    SLICE_X1Y147         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    34.008 r  uart_transmitter_module/baud_bit_period_counter_reg[860]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    34.008    uart_transmitter_module/baud_bit_period_counter_reg[860]_i_1_n_0
+    SLICE_X1Y148         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114    34.122 r  uart_transmitter_module/baud_bit_period_counter_reg[864]_i_1/CO[3]
+                         net (fo=1, routed)           0.000    34.122    uart_transmitter_module/baud_bit_period_counter_reg[864]_i_1_n_0
+    SLICE_X1Y149         CARRY4 (Prop_carry4_CI_O[0])
+                                                      0.223    34.345 r  uart_transmitter_module/baud_bit_period_counter_reg[868]_i_1/O[0]
+                         net (fo=1, routed)           0.000    34.345    uart_transmitter_module/baud_bit_period_counter_reg[868]_i_1_n_7
+    SLICE_X1Y149         FDRE                                         r  uart_transmitter_module/baud_bit_period_counter_reg[868]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock gclk rise edge)      10.000    10.000 r  
+    N15                                               0.000    10.000 r  clk_100mhz (IN)
+                         net (fo=0)                   0.000    10.000    clk_100mhz
+    N15                  IBUF (Prop_ibuf_I_O)         1.370    11.370 r  clk_100mhz_IBUF_inst/O
+                         net (fo=1, routed)           1.868    13.238    clk_100mhz_IBUF
+    BUFGCTRL_X0Y0        BUFG (Prop_bufg_I_O)         0.091    13.329 r  clk_100mhz_IBUF_BUFG_inst/O
+                         net (fo=1115, routed)        1.684    15.013    uart_transmitter_module/CLK
+    SLICE_X1Y149         FDRE                                         r  uart_transmitter_module/baud_bit_period_counter_reg[868]/C
+                         clock pessimism              0.179    15.192    
+                         clock uncertainty           -0.035    15.157    
+    SLICE_X1Y149         FDRE (Setup_fdre_C_D)        0.062    15.219    uart_transmitter_module/baud_bit_period_counter_reg[868]
+  -------------------------------------------------------------------
+                         required time                         15.219    
+                         arrival time                         -34.345    
+  -------------------------------------------------------------------
+                         slack                                -19.126    
+
+
+
+

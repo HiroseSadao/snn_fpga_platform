@@ -1,0 +1,104 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
+---------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
+| Date         : Mon Mar  2 21:21:09 2026
+| Host         : eecs-digital-04 running 64-bit Ubuntu 24.04.3 LTS
+| Command      : report_timing -file obj/post_place_timing.rpt
+| Design       : top_level
+| Device       : 7s50-csga324
+| Speed File   : -1  PRODUCTION 1.23 2018-06-13
+| Design State : Fully Placed
+---------------------------------------------------------------------------------------------------------------------------------------------
+
+Timing Report
+
+Slack (MET) :             0.033ns  (required time - arrival time)
+  Source:                 infer_eval_eexc_minus_v_reg[0]/C
+                            (rising edge-triggered cell FDRE clocked by clk_passthrough_clk_wiz_0  {rise@0.000ns fall@5.000ns period=10.000ns})
+  Destination:            infer_eval_i_syn_exc_prod_q320_i_17_psdsp/D
+                            (rising edge-triggered cell FDRE clocked by clk_passthrough_clk_wiz_0  {rise@0.000ns fall@5.000ns period=10.000ns})
+  Path Group:             clk_passthrough_clk_wiz_0
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            10.000ns  (clk_passthrough_clk_wiz_0 rise@10.000ns - clk_passthrough_clk_wiz_0 rise@0.000ns)
+  Data Path Delay:        9.680ns  (logic 4.355ns (44.990%)  route 5.325ns (55.010%))
+  Logic Levels:           10  (CARRY4=7 LUT3=2 LUT6=1)
+  Clock Path Skew:        -0.108ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    -1.633ns = ( 8.367 - 10.000 ) 
+    Source Clock Delay      (SCD):    -0.972ns
+    Clock Pessimism Removal (CPR):    0.554ns
+  Clock Uncertainty:      0.074ns  ((TSJ^2 + DJ^2)^1/2) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Discrete Jitter          (DJ):    0.129ns
+    Phase Error              (PE):    0.000ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk_passthrough_clk_wiz_0 rise edge)
+                                                      0.000     0.000 r  
+    N15                                               0.000     0.000 r  clk_100mhz (IN)
+                         net (fo=0)                   0.000     0.000    u_ddr_clk_wiz/clk_100mhz
+    N15                  IBUF (Prop_ibuf_I_O)         1.440     1.440 r  u_ddr_clk_wiz/clkin1_ibufg/O
+                         net (fo=1, estimated)        1.233     2.673    u_ddr_clk_wiz/clk_in1_clk_wiz_0
+    MMCME2_ADV_X0Y0      MMCME2_ADV (Prop_mmcme2_adv_CLKIN1_CLKOUT5)
+                                                     -7.025    -4.352 r  u_ddr_clk_wiz/mmcm_adv_inst/CLKOUT5
+                         net (fo=1, estimated)        1.666    -2.686    u_ddr_clk_wiz/clk_passthrough_clk_wiz_0
+    BUFGCTRL_X0Y4        BUFG (Prop_bufg_I_O)         0.096    -2.590 r  u_ddr_clk_wiz/clkout6_buf/O
+                         net (fo=15131, estimated)    1.618    -0.972    core_clk
+    SLICE_X6Y61          FDRE                                         r  infer_eval_eexc_minus_v_reg[0]/C
+  -------------------------------------------------------------------    -------------------
+    SLICE_X6Y61          FDRE (Prop_fdre_C_Q)         0.518    -0.454 r  infer_eval_eexc_minus_v_reg[0]/Q
+                         net (fo=9, estimated)        0.338    -0.116    infer_eval_eexc_minus_v_reg_n_0_[0]
+    SLICE_X7Y61          CARRY4 (Prop_carry4_S[0]_CO[3])
+                                                      0.656     0.540 r  infer_eval_i_syn_exc_prod_q320_i_203/CO[3]
+                         net (fo=1, estimated)        0.000     0.540    infer_eval_i_syn_exc_prod_q320_i_203_n_0
+    SLICE_X7Y62          CARRY4 (Prop_carry4_CI_O[3])
+                                                      0.313     0.853 r  infer_eval_i_syn_exc_prod_q320_i_204/O[3]
+                         net (fo=2, estimated)        1.024     1.877    infer_eval_i_syn_exc_prod_q320_i_204_n_4
+    SLICE_X9Y66          LUT3 (Prop_lut3_I0_O)        0.331     2.208 r  infer_eval_i_syn_exc_prod_q320_i_163/O
+                         net (fo=2, estimated)        0.962     3.170    infer_eval_i_syn_exc_prod_q320_i_163_n_0
+    SLICE_X9Y67          LUT6 (Prop_lut6_I0_O)        0.332     3.502 r  infer_eval_i_syn_exc_prod_q320_i_167/O
+                         net (fo=1, routed)           0.000     3.502    infer_eval_i_syn_exc_prod_q320_i_167_n_0
+    SLICE_X9Y67          CARRY4 (Prop_carry4_S[0]_CO[3])
+                                                      0.532     4.034 r  infer_eval_i_syn_exc_prod_q320_i_117/CO[3]
+                         net (fo=1, estimated)        0.000     4.034    infer_eval_i_syn_exc_prod_q320_i_117_n_0
+    SLICE_X9Y68          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     4.148 r  infer_eval_i_syn_exc_prod_q320_i_61/CO[3]
+                         net (fo=1, estimated)        0.000     4.148    infer_eval_i_syn_exc_prod_q320_i_61_n_0
+    SLICE_X9Y69          CARRY4 (Prop_carry4_CI_O[1])
+                                                      0.334     4.482 r  infer_eval_i_syn_exc_prod_q320_i_56/O[1]
+                         net (fo=3, estimated)        0.691     5.173    infer_eval_i_syn_exc_prod_q320_i_56_n_6
+    SLICE_X4Y68          CARRY4 (Prop_carry4_S[3]_CO[3])
+                                                      0.704     5.877 r  infer_eval_i_syn_exc_prod_q320_i_32/CO[3]
+                         net (fo=1, estimated)        0.000     5.877    infer_eval_i_syn_exc_prod_q320_i_32_n_0
+    SLICE_X4Y69          CARRY4 (Prop_carry4_CI_O[0])
+                                                      0.222     6.099 r  infer_eval_i_syn_exc_prod_q320_i_30/O[0]
+                         net (fo=1, estimated)        1.301     7.400    infer_eval_i_syn_exc_prod_q320_i_30_n_7
+    SLICE_X13Y65         LUT3 (Prop_lut3_I0_O)        0.299     7.699 r  infer_eval_i_syn_exc_prod_q320_i_17/O
+                         net (fo=2, estimated)        1.009     8.708    infer_eval_i_syn_exc_prod_q320_i_17_n_0
+    SLICE_X13Y65         FDRE                                         r  infer_eval_i_syn_exc_prod_q320_i_17_psdsp/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk_passthrough_clk_wiz_0 rise edge)
+                                                     10.000    10.000 r  
+    N15                                               0.000    10.000 r  clk_100mhz (IN)
+                         net (fo=0)                   0.000    10.000    u_ddr_clk_wiz/clk_100mhz
+    N15                  IBUF (Prop_ibuf_I_O)         1.370    11.370 r  u_ddr_clk_wiz/clkin1_ibufg/O
+                         net (fo=1, estimated)        1.171    12.542    u_ddr_clk_wiz/clk_in1_clk_wiz_0
+    MMCME2_ADV_X0Y0      MMCME2_ADV (Prop_mmcme2_adv_CLKIN1_CLKOUT5)
+                                                     -7.279     5.263 r  u_ddr_clk_wiz/mmcm_adv_inst/CLKOUT5
+                         net (fo=1, estimated)        1.583     6.846    u_ddr_clk_wiz/clk_passthrough_clk_wiz_0
+    BUFGCTRL_X0Y4        BUFG (Prop_bufg_I_O)         0.091     6.937 r  u_ddr_clk_wiz/clkout6_buf/O
+                         net (fo=15131, estimated)    1.430     8.367    core_clk
+    SLICE_X13Y65         FDRE                                         r  infer_eval_i_syn_exc_prod_q320_i_17_psdsp/C
+                         clock pessimism              0.554     8.920    
+                         clock uncertainty           -0.074     8.847    
+    SLICE_X13Y65         FDRE (Setup_fdre_C_D)       -0.105     8.742    infer_eval_i_syn_exc_prod_q320_i_17_psdsp
+  -------------------------------------------------------------------
+                         required time                          8.742    
+                         arrival time                          -8.708    
+  -------------------------------------------------------------------
+                         slack                                  0.033    
+
+
+
+

@@ -1,0 +1,77 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
+---------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
+| Date         : Mon Mar  2 21:22:37 2026
+| Host         : eecs-digital-04 running 64-bit Ubuntu 24.04.3 LTS
+| Command      : report_timing -file obj/post_route_timing.rpt
+| Design       : top_level
+| Device       : 7s50-csga324
+| Speed File   : -1  PRODUCTION 1.23 2018-06-13
+| Design State : Routed
+---------------------------------------------------------------------------------------------------------------------------------------------
+
+Timing Report
+
+Slack (VIOLATED) :        -0.353ns  (required time - arrival time)
+  Source:                 u_cdc_rsp_payload/src_ff_reg[6]/C
+                            (rising edge-triggered cell FDRE clocked by clk_controller_clk_wiz_0  {rise@0.000ns fall@6.000ns period=12.000ns})
+  Destination:            u_cdc_rsp_payload/syncstages_ff_reg[0][6]/D
+                            (rising edge-triggered cell FDRE clocked by clk_passthrough_clk_wiz_0  {rise@0.000ns fall@5.000ns period=10.000ns})
+  Path Group:             clk_passthrough_clk_wiz_0
+  Path Type:              Setup (Max at Slow Process Corner)
+  Requirement:            2.000ns  (clk_passthrough_clk_wiz_0 rise@50.000ns - clk_controller_clk_wiz_0 rise@48.000ns)
+  Data Path Delay:        1.689ns  (logic 0.478ns (28.301%)  route 1.211ns (71.699%))
+  Logic Levels:           0  
+  Clock Path Skew:        -0.203ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    -1.570ns = ( 48.430 - 50.000 ) 
+    Source Clock Delay      (SCD):    -0.969ns = ( 47.031 - 48.000 ) 
+    Clock Pessimism Removal (CPR):    0.398ns
+  Clock Uncertainty:      0.196ns  ((TSJ^2 + DJ^2)^1/2) / 2 + PE
+    Total System Jitter     (TSJ):    0.071ns
+    Discrete Jitter          (DJ):    0.134ns
+    Phase Error              (PE):    0.120ns
+
+    Location             Delay type                Incr(ns)  Path(ns)    Netlist Resource(s)
+  -------------------------------------------------------------------    -------------------
+                         (clock clk_controller_clk_wiz_0 rise edge)
+                                                     48.000    48.000 r  
+    N15                                               0.000    48.000 r  clk_100mhz (IN)
+                         net (fo=0)                   0.000    48.000    u_ddr_clk_wiz/clk_100mhz
+    N15                  IBUF (Prop_ibuf_I_O)         1.440    49.440 r  u_ddr_clk_wiz/clkin1_ibufg/O
+                         net (fo=1, routed)           1.233    50.673    u_ddr_clk_wiz/clk_in1_clk_wiz_0
+    MMCME2_ADV_X0Y0      MMCME2_ADV (Prop_mmcme2_adv_CLKIN1_CLKOUT0)
+                                                     -6.965    43.709 r  u_ddr_clk_wiz/mmcm_adv_inst/CLKOUT0
+                         net (fo=1, routed)           1.666    45.375    u_ddr_clk_wiz/clk_controller_clk_wiz_0
+    BUFGCTRL_X0Y0        BUFG (Prop_bufg_I_O)         0.096    45.471 r  u_ddr_clk_wiz/clkout1_buf/O
+                         net (fo=2866, routed)        1.560    47.031    u_cdc_rsp_payload/src_clk
+    SLICE_X54Y31         FDRE                                         r  u_cdc_rsp_payload/src_ff_reg[6]/C
+  -------------------------------------------------------------------    -------------------
+    SLICE_X54Y31         FDRE (Prop_fdre_C_Q)         0.478    47.509 r  u_cdc_rsp_payload/src_ff_reg[6]/Q
+                         net (fo=1, routed)           1.211    48.720    u_cdc_rsp_payload/async_path_bit[6]
+    SLICE_X53Y30         FDRE                                         r  u_cdc_rsp_payload/syncstages_ff_reg[0][6]/D
+  -------------------------------------------------------------------    -------------------
+
+                         (clock clk_passthrough_clk_wiz_0 rise edge)
+                                                     50.000    50.000 r  
+    N15                                               0.000    50.000 r  clk_100mhz (IN)
+                         net (fo=0)                   0.000    50.000    u_ddr_clk_wiz/clk_100mhz
+    N15                  IBUF (Prop_ibuf_I_O)         1.370    51.370 r  u_ddr_clk_wiz/clkin1_ibufg/O
+                         net (fo=1, routed)           1.162    52.532    u_ddr_clk_wiz/clk_in1_clk_wiz_0
+    MMCME2_ADV_X0Y0      MMCME2_ADV (Prop_mmcme2_adv_CLKIN1_CLKOUT5)
+                                                     -7.221    45.311 r  u_ddr_clk_wiz/mmcm_adv_inst/CLKOUT5
+                         net (fo=1, routed)           1.587    46.898    u_ddr_clk_wiz/clk_passthrough_clk_wiz_0
+    BUFGCTRL_X0Y4        BUFG (Prop_bufg_I_O)         0.091    46.989 r  u_ddr_clk_wiz/clkout6_buf/O
+                         net (fo=15131, routed)       1.441    48.430    u_cdc_rsp_payload/dest_clk
+    SLICE_X53Y30         FDRE                                         r  u_cdc_rsp_payload/syncstages_ff_reg[0][6]/C
+                         clock pessimism              0.398    48.828    
+                         clock uncertainty           -0.196    48.633    
+    SLICE_X53Y30         FDRE (Setup_fdre_C_D)       -0.265    48.368    u_cdc_rsp_payload/syncstages_ff_reg[0][6]
+  -------------------------------------------------------------------
+                         required time                         48.368    
+                         arrival time                         -48.720    
+  -------------------------------------------------------------------
+                         slack                                 -0.353    
+
+
+
+
