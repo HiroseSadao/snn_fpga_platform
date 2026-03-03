@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Mon Mar  2 04:07:30 2026
-| Host         : eecs-digital-13 running 64-bit Ubuntu 24.04.3 LTS
+| Date         : Mon Mar  2 04:21:51 2026
+| Host         : eecs-digital-16 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_utilization -file obj/post_synth_util.rpt -hierarchical -hierarchical_depth 4
 | Design       : top_level
 | Device       : xc7s50csga324-1
@@ -22,17 +22,17 @@ Table of Contents
 +--------------------------+--------------------------------------+------------+------------+---------+------+-------+--------+--------+------------+
 |         Instance         |                Module                | Total LUTs | Logic LUTs | LUTRAMs | SRLs |  FFs  | RAMB36 | RAMB18 | DSP Blocks |
 +--------------------------+--------------------------------------+------------+------------+---------+------+-------+--------+--------+------------+
-| top_level                |                                (top) |      19096 |      18250 |     846 |    0 | 18804 |     50 |      9 |         60 |
-|   (top_level)            |                                (top) |      11192 |      10346 |     846 |    0 | 15662 |      2 |      8 |         60 |
+| top_level                |                                (top) |      20104 |      19258 |     846 |    0 | 18769 |     50 |      9 |         60 |
+|   (top_level)            |                                (top) |      11377 |      10531 |     846 |    0 | 15626 |      2 |      8 |         60 |
 |   u_cdc_req_payload      |                 xpm_cdc_array_single |          0 |          0 |       0 |    0 |   171 |      0 |      0 |          0 |
 |   u_cdc_rsp_payload      | xpm_cdc_array_single__parameterized0 |          0 |          0 |       0 |    0 |    99 |      0 |      0 |          0 |
 |   u_ddr3_top             |                             ddr3_top |       2899 |       2899 |       0 |    0 |  2354 |      0 |      0 |          0 |
 |     (u_ddr3_top)         |                             ddr3_top |         65 |         65 |       0 |    0 |     0 |      0 |      0 |          0 |
 |     ddr3_controller_inst |                      ddr3_controller |       2820 |       2820 |       0 |    0 |  2331 |      0 |      0 |          0 |
-|   u_poisson_divider      |                            divider2b |        264 |        264 |       0 |    0 |   137 |      0 |      0 |          0 |
-|   u_sd_controller        |                        sd_controller |       2323 |       2323 |       0 |    0 |   171 |      0 |      0 |          0 |
-|   u_stdp_divider         |                          divider2b_0 |        573 |        573 |       0 |    0 |   137 |      0 |      0 |          0 |
-|   u_uart_rx              |                              uart_rx |       1759 |       1759 |       0 |    0 |    41 |      0 |      0 |          0 |
+|   u_poisson_divider      |                            divider2b |        245 |        245 |       0 |    0 |   137 |      0 |      0 |          0 |
+|   u_sd_controller        |                        sd_controller |       3086 |       3086 |       0 |    0 |   172 |      0 |      0 |          0 |
+|   u_stdp_divider         |                          divider2b_0 |        720 |        720 |       0 |    0 |   137 |      0 |      0 |          0 |
+|   u_uart_rx              |                              uart_rx |       1690 |       1690 |       0 |    0 |    41 |      0 |      0 |          0 |
 +--------------------------+--------------------------------------+------------+------------+---------+------+-------+--------+--------+------------+
 
 

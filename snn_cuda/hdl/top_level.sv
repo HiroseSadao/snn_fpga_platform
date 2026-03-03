@@ -254,8 +254,6 @@ module top_level(
         TSK_DIV_DW_ABS,
         TSK_DIV_DW_START,
         TSK_DIV_DW_WAIT,
-        TSK_DIV_DW_CLIP,
-        TSK_DIV_DW_APPLY,
         TSK_WRITE_W_REQ,
         TSK_WRITE_W_WAIT,
         TSK_CLR_A_REQ,
@@ -479,7 +477,6 @@ module top_level(
     logic signed [31:0] train_stdp_w_new;
     logic signed [31:0] train_stdp_w_norm_q16;
     logic signed [31:0] train_stdp_dW_q16;
-    logic signed [31:0] train_stdp_dW_step_q16;
     logic [31:0] train_stdp_dW_abs;
     logic signed [31:0] train_stdp_pot_term_q16;
     logic signed [31:0] train_stdp_dep_term_q16;
@@ -2233,6 +2230,8 @@ module top_level(
                     end
                     TSK_DIV_DW_WAIT: begin
                         if (train_stdp_div_out_valid) begin
+                            logic signed [31:0] dW_step_q16_tmp;
+                            logic signed [31:0] w_next_q16_tmp;
                             if (train_stdp_div_err) begin
                                 train_stdp_active <= 1'b0;
                                 train_stdp_state  <= TSK_IDLE;
@@ -2244,30 +2243,22 @@ module top_level(
                                 resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
                                 response_ready <= 1'b1;
                             end else begin
-                                train_stdp_dW_step_q16 <= (train_stdp_dW_q16 < 0) ? -$signed(train_stdp_div_q) : $signed(train_stdp_div_q);
-                                train_stdp_state <= TSK_DIV_DW_CLIP;
+                                dW_step_q16_tmp = $signed(train_stdp_div_q);
+                                if (train_stdp_dW_q16 < 0)
+                                    dW_step_q16_tmp = -dW_step_q16_tmp;
+                                if (dW_step_q16_tmp > TRAIN_CLIP_DW_Q16)
+                                    dW_step_q16_tmp = TRAIN_CLIP_DW_Q16;
+                                else if (dW_step_q16_tmp < -TRAIN_CLIP_DW_Q16)
+                                    dW_step_q16_tmp = -TRAIN_CLIP_DW_Q16;
+                                w_next_q16_tmp = train_stdp_w_norm_q16 + dW_step_q16_tmp;
+                                if (w_next_q16_tmp > TRAIN_WMAX_Q16)
+                                    w_next_q16_tmp = TRAIN_WMAX_Q16;
+                                else if (w_next_q16_tmp < TRAIN_WMIN_Q16)
+                                    w_next_q16_tmp = TRAIN_WMIN_Q16;
+                                train_stdp_w_new <= w_next_q16_tmp;
+                                train_stdp_state <= TSK_WRITE_W_REQ;
                             end
                         end
-                    end
-                    TSK_DIV_DW_CLIP: begin
-                        logic signed [31:0] dW_step_clip_tmp;
-                        dW_step_clip_tmp = train_stdp_dW_step_q16;
-                        if (dW_step_clip_tmp > TRAIN_CLIP_DW_Q16)
-                            dW_step_clip_tmp = TRAIN_CLIP_DW_Q16;
-                        else if (dW_step_clip_tmp < -TRAIN_CLIP_DW_Q16)
-                            dW_step_clip_tmp = -TRAIN_CLIP_DW_Q16;
-                        train_stdp_dW_step_q16 <= dW_step_clip_tmp;
-                        train_stdp_state <= TSK_DIV_DW_APPLY;
-                    end
-                    TSK_DIV_DW_APPLY: begin
-                        logic signed [31:0] w_next_q16_tmp;
-                        w_next_q16_tmp = train_stdp_w_norm_q16 + train_stdp_dW_step_q16;
-                        if (w_next_q16_tmp > TRAIN_WMAX_Q16)
-                            w_next_q16_tmp = TRAIN_WMAX_Q16;
-                        else if (w_next_q16_tmp < TRAIN_WMIN_Q16)
-                            w_next_q16_tmp = TRAIN_WMIN_Q16;
-                        train_stdp_w_new <= w_next_q16_tmp;
-                        train_stdp_state <= TSK_WRITE_W_REQ;
                     end
                     TSK_WRITE_W_REQ: begin
                         ddr_req_pending_core      <= 1'b1;

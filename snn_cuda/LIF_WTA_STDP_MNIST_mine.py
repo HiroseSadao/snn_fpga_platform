@@ -356,6 +356,21 @@ class DiehlAndCook2015Network:
         self.profile_accumulator = 0.0
         self.profile_update = 0.0
         self.profile_pre_active_count = 0.0
+        self.reset_epoch_stats()
+
+    def reset_epoch_stats(self):
+        self.epoch_max_A = 0.0
+        self.epoch_max_B = 0.0
+        self.epoch_max_x_in = 0.0
+        self.epoch_max_x_exc = 0.0
+
+    def get_epoch_stats(self):
+        return {
+            "A_max": self.epoch_max_A,
+            "B_max": self.epoch_max_B,
+            "x_in_max": self.epoch_max_x_in,
+            "x_exc_max": self.epoch_max_x_exc,
+        }
         
     # スパイクトレースのリセット
     def reset_trace(self):
@@ -386,6 +401,7 @@ class DiehlAndCook2015Network:
         t0 = time.perf_counter()
         self.c_in_state = self.c_in_state * self.input_decay + self.input_scale * s_in
         x_in = self.input_synaptictrace(s_in)
+        self.epoch_max_x_in = max(self.epoch_max_x_in, float(np.max(x_in)))
         self.profile_synapse += time.perf_counter() - t0
 
         t0 = time.perf_counter()
@@ -403,6 +419,7 @@ class DiehlAndCook2015Network:
         t0 = time.perf_counter()
         c_exc = self.exc_synapse(s_exc)
         x_exc = self.exc_synaptictrace(s_exc)
+        self.epoch_max_x_exc = max(self.epoch_max_x_exc, float(np.max(x_exc)))
         self.profile_synapse += time.perf_counter() - t0
 
         t0 = time.perf_counter()
@@ -430,9 +447,11 @@ class DiehlAndCook2015Network:
             post_active = np.flatnonzero(s_exc)
             if post_active.size > 0:
                 self.A[post_active, :] += x_in
+                self.epoch_max_A = max(self.epoch_max_A, float(np.max(self.A[post_active, :])))
 
             if pre_active.size > 0:
                 np.add.at(self.B_T, pre_active, x_exc)
+                self.epoch_max_B = max(self.epoch_max_B, float(np.max(self.B_T[pre_active, :])))
             self.profile_accumulator += time.perf_counter() - t0
 
             self.tcount += 1
@@ -529,6 +548,7 @@ if __name__ == '__main__':
     ##　Simulation  ##
     #################
     for epoch in range(n_epoch):
+        network.reset_epoch_stats()
         for i in tqdm(range(n_train)):
             max_fr = init_max_fr
             while(True):
@@ -568,6 +588,24 @@ if __name__ == '__main__':
         print("Ave. spikes:", mean_nspikes)
         print("Min. spikes:", sum_nspikes.min())
         print("Max. spikes:", sum_nspikes.max())
+        epoch_stats = network.get_epoch_stats()
+        print(
+            "Epoch {} stats: A.max={:.6f}, B.max={:.6f}, x_in.max={:.6f}, x_exc.max={:.6f}".format(
+                epoch,
+                epoch_stats["A_max"],
+                epoch_stats["B_max"],
+                epoch_stats["x_in_max"],
+                epoch_stats["x_exc_max"],
+            )
+        )
+        winner_spike_counts = np.max(spikes, axis=1).astype(np.int32)
+        winner_spike_count_hist = np.bincount(winner_spike_counts)
+        nonzero_bins = np.flatnonzero(winner_spike_count_hist)
+        winner_spike_count_dist = {
+            int(k): int(winner_spike_count_hist[k]) for k in nonzero_bins
+        }
+        print("Winner spike-count distribution (count -> samples):",
+              winner_spike_count_dist)
     
         # 入力サンプルのラベルを予測する
         predicted_labels = prediction(spikes, assignments, n_labels)
