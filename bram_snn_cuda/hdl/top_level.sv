@@ -38,17 +38,16 @@ module top_level(
     localparam logic [7:0] REQ_SYNC   = 8'hA5;
     localparam logic [7:0] RESP_SYNC  = 8'h5A;
     localparam logic [7:0] PROTO_VER  = 8'h01;
+    localparam logic [7:0] OP_DDR_READ32 = 8'h12;
     localparam logic [7:0] OP_SD_SECTORS_TO_DDR = 8'h13;
     localparam logic [7:0] OP_LOAD_IMAGE_FROM_DDR = 8'h14;
     localparam logic [7:0] OP_RUN_SAMPLE_INFER = 8'h20;
     localparam logic [7:0] OP_READ_SPIKE_COUNT = 8'h21;
+    localparam logic [7:0] OP_READ_RAW_U8 = 8'h22;
+    localparam logic [7:0] OP_READ_INFER_DEBUG = 8'h24;
     localparam logic [7:0] OP_TRAIN_QUERY_CAPS = 8'h30;
+    localparam logic [7:0] OP_READ_TRAIN_DEBUG = 8'h34;
     localparam logic [7:0] OP_TRAIN_RUN_SAMPLE_PHASE3 = 8'h37;
-    localparam logic [7:0] OP_TRAIN_RUN_SAMPLE_PHASE4 = 8'h38;
-    localparam logic [7:0] OP_TRAIN_LABEL_STATS_RESET = 8'h39;
-    localparam logic [7:0] OP_TRAIN_LABEL_STATS_ACCUM = 8'h3A;
-    localparam logic [7:0] OP_READ_TRAIN_LABEL_STAT_SUM = 8'h3B;
-    localparam logic [7:0] OP_READ_TRAIN_LABEL_STAT_COUNT = 8'h3C;
     localparam logic [31:0] DDR_ADDR_WORD_LIMIT = 32'd16777216; // 64MiB / 4
     localparam logic [7:0] MAX_SUPPORTED_NARGS = 8'd2;
     // Increase RX timeout margin to tolerate host-side inter-byte gaps on UART.
@@ -56,6 +55,14 @@ module top_level(
     localparam int N_IN = 784;
     localparam int N_NEURONS = 50;
     localparam int N_WEIGHTS = N_IN * N_NEURONS;
+    // Phase3 sparse connectivity target: keep only 30% of dense edges.
+    localparam int N_EDGES = (N_WEIGHTS * 3) / 10;
+    localparam int TRAIN_DENSE_ADDR_W = $clog2(N_WEIGHTS);
+    localparam int W_ADDR_W = $clog2(N_EDGES);
+    localparam int CSR_ROW_PTR_W = $clog2(N_EDGES + 1);
+    localparam int EDGE_ADDR_W = $clog2(N_EDGES);
+    localparam int COL_IDX_W = $clog2(N_IN);
+    localparam int ROW_IDX_W = $clog2(N_NEURONS);
     localparam int TRAIN_MINE_NT_BLANK = 150;
     localparam logic signed [31:0] FXP_ALPHA = 32'sd62259; // legacy/simple model coeff (unused in mine-style LIF)
     localparam logic signed [31:0] FXP_ALPHA_INH = 32'sd58982; // legacy/simple model coeff (unused in mine-style LIF)
@@ -153,10 +160,11 @@ module top_level(
     typedef enum logic [2:0] {
         MEMRD_NONE,
         MEMRD_SPIKE_COUNT,
+        MEMRD_RAW_U8,
         MEMRD_TRAIN_LABEL_STAT_SUM,
         MEMRD_TRAIN_LABEL_STAT_COUNT
     } memrd_kind_t;
-    typedef enum logic [5:0] {
+    typedef enum logic [6:0] {
         INFER_IDLE,
         INFER_INIT_CLEAR,
         INFER_CLEAR_SPIKE_COUNT,
@@ -194,14 +202,34 @@ module top_level(
         INFER_WTA_PASS2,
         INFER_EVT_PRE_PRELIST_REQ,
         INFER_EVT_PRE_PRELIST_WAIT,
+        INFER_EVT_PRE_PTR0_REQ,
+        INFER_EVT_PRE_PTR0_WAIT,
+        INFER_EVT_PRE_PTR1_REQ,
+        INFER_EVT_PRE_PTR1_WAIT,
+        INFER_EVT_PRE_EDGE_REQ,
+        INFER_EVT_PRE_EDGE_WAIT,
         INFER_EVT_PRE_TRACE_REQ,
         INFER_EVT_PRE_TRACE_WAIT,
         INFER_EVT_PRE_W_WAIT,
         INFER_EVT_PRE_APPLY,
+        INFER_EVT_PRE_APPLY_MUL1,
+        INFER_EVT_PRE_APPLY_MUL2,
+        INFER_EVT_PRE_APPLY_CLIP,
+        INFER_EVT_PRE_APPLY_WNEXT,
+        INFER_EVT_POST_PTR0_REQ,
+        INFER_EVT_POST_PTR0_WAIT,
+        INFER_EVT_POST_PTR1_REQ,
+        INFER_EVT_POST_PTR1_WAIT,
+        INFER_EVT_POST_EDGE_REQ,
+        INFER_EVT_POST_EDGE_WAIT,
         INFER_EVT_POST_TRACE_REQ,
         INFER_EVT_POST_TRACE_WAIT,
         INFER_EVT_POST_W_WAIT,
         INFER_EVT_POST_APPLY,
+        INFER_EVT_POST_APPLY_MUL1,
+        INFER_EVT_POST_APPLY_MUL2,
+        INFER_EVT_POST_APPLY_CLIP,
+        INFER_EVT_POST_APPLY_WNEXT,
         INFER_EVT_DONE
     } infer_state_t;
     typedef enum logic [1:0] {
@@ -404,6 +432,7 @@ module top_level(
     logic        ddr_req_from_sd_core;
     logic        ddr_req_from_imgload_core;
     logic        ddr_req_from_train_core;
+    logic        ddr_req_from_host_core;
 
     logic        sd_rd;
     logic        sd_wr;
@@ -488,6 +517,7 @@ module top_level(
     logic signed [31:0] train_stdp_bt_val;
     logic signed [31:0] train_stdp_w_new;
     logic signed [31:0] train_stdp_w_norm_q16;
+    logic [31:0] train_stdp_div_q_holdfix;
     logic signed [31:0] train_stdp_dW_q16;
     logic [31:0] train_stdp_dW_abs;
     logic signed [31:0] train_stdp_pot_term_q16;
@@ -520,7 +550,7 @@ module top_level(
     logic [6:0]  train_stdp_batch_next_row0;
     logic        train_chunk_active;
     train_chunk_state_t train_chunk_state;
-    logic [2:0]  train_chunk_mode; // 0=phase0,1=phase1,2=phase2,3=phase3,4=phase4(retry)
+    logic [2:0]  train_chunk_mode; // phase3 runtime mode (fixed to 3 while active)
     logic [15:0] train_chunk_samples_left;
     logic [6:0]  train_chunk_tile_rows;
     logic [15:0] train_chunk_steps_left;
@@ -543,6 +573,8 @@ module top_level(
     logic        train_chunk_retry_continue_infer;
     logic [6:0]  train_rebase_neuron_idx;
     logic [9:0]  train_rebase_input_idx;
+    logic [W_ADDR_W-1:0] train_rebase_edge_idx;
+    logic [W_ADDR_W-1:0] train_rebase_edge_end;
     logic signed [31:0] train_rebase_accum;
     logic [2:0]  train_rebase_phase;
     logic        train_gen_active;
@@ -557,7 +589,7 @@ module top_level(
     logic        train_mem_init_active;
     logic        train_mem_init_done;
     train_mem_init_state_t train_mem_init_state;
-    logic [16:0] train_mem_init_idx;
+    logic [TRAIN_DENSE_ADDR_W-1:0] train_mem_init_idx;
     logic        train_label_stats_active;
     train_label_stats_state_t train_label_stats_state;
     logic [3:0]  train_label_stats_label;
@@ -600,11 +632,11 @@ module top_level(
     logic [9:0]  infer_prep_idx;
     logic signed [31:0] infer_accum;
     logic [2:0]  infer_accum_weight_phase;
-    logic [16:0] infer_w_rd_addr;
+    logic [W_ADDR_W-1:0] infer_w_rd_addr;
     logic [15:0] infer_w_rd_data;
     logic [15:0] infer_w_rd_data_q;
     logic        infer_w_wr_en;
-    logic [16:0] infer_w_wr_addr;
+    logic [W_ADDR_W-1:0] infer_w_wr_addr;
     logic [15:0] infer_w_wr_data;
     (* ram_style = "block" *) logic signed [31:0] infer_g_in_state [0:N_NEURONS-1];
     (* ram_style = "block" *) logic signed [31:0] infer_v_state [0:N_NEURONS-1];
@@ -625,6 +657,7 @@ module top_level(
     logic        spike_count_we;
     logic [SPIKE_CNT_ADDR_W-1:0] spike_count_waddr;
     logic [15:0] spike_count_wdata;
+    logic [15:0] spike_count_wdata_holdfix;
     logic [6:0]  infer_spike_rd_addr;
     logic [15:0] infer_spike_rd_data;
     logic [15:0] spike_count_rdata;
@@ -633,6 +666,16 @@ module top_level(
     logic [15:0] snap_count_wdata;
     logic [SPIKE_CNT_ADDR_W-1:0] snap_count_raddr;
     logic [15:0] snap_count_rdata;
+    logic [ROW_IDX_W:0] csr_row_ptr_rd_addr;
+    logic [CSR_ROW_PTR_W-1:0] csr_row_ptr_rd_data;
+    logic [EDGE_ADDR_W-1:0] csr_col_idx_rd_addr;
+    logic [COL_IDX_W-1:0] csr_col_idx_rd_data;
+    logic [COL_IDX_W:0] csc_col_ptr_rd_addr;
+    logic [CSR_ROW_PTR_W-1:0] csc_col_ptr_rd_data;
+    logic [EDGE_ADDR_W-1:0] csc_row_idx_rd_addr;
+    logic [ROW_IDX_W-1:0] csc_row_idx_rd_data;
+    logic [EDGE_ADDR_W-1:0] csc_edge_idx_rd_addr;
+    logic [EDGE_ADDR_W-1:0] csc_edge_idx_rd_data;
     (* ram_style = "block" *) logic [15:0] infer_exc_last_spike_step [0:N_NEURONS-1];
     (* ram_style = "block" *) logic [15:0] infer_inh_last_spike_step [0:N_NEURONS-1];
     logic [6:0]  infer_apply_idx;
@@ -677,7 +720,18 @@ module top_level(
     logic [6:0]  infer_evt_winner_idx;
     logic signed [31:0] infer_evt_trace_val;
     logic signed [31:0] infer_evt_w_cur;
+    logic signed [31:0] infer_evt_w_gap_q16;
+    logic signed [31:0] infer_evt_mid_q16;
+    (* use_dsp = "yes" *) logic signed [63:0] infer_evt_term_prod_q32;
+    logic signed [31:0] infer_evt_term_q16;
+    logic signed [31:0] infer_evt_dw_q16;
+    logic signed [31:0] infer_evt_w_next_q16;
+    logic [EDGE_ADDR_W-1:0] infer_evt_edge_idx;
+    logic [EDGE_ADDR_W-1:0] infer_evt_edge_end;
+    logic [EDGE_ADDR_W-1:0] infer_evt_edge_ptr;
     logic [31:0] infer_total_spikes;
+    logic [31:0] infer_dbg_total_input_spikes_generated;
+    logic [31:0] infer_dbg_first_step_input_spikes;
     logic [31:0] infer_rng_state;
     (* use_dsp = "yes" *) logic [63:0] infer_rng_mul_prod_q32;
     logic [31:0] infer_poisson_num_const_cfg;
@@ -693,6 +747,11 @@ module top_level(
     logic [9:0]  infer_pre_active_count;
     logic [9:0]  infer_pre_rd_addr;
     logic [9:0]  infer_pre_rd_data;
+    logic        infer_pre_spike_wr_en;
+    logic [9:0]  infer_pre_spike_wr_addr;
+    logic        infer_pre_spike_wr_data;
+    logic [9:0]  infer_pre_spike_rd_addr;
+    logic        infer_pre_spike_rd_data;
     logic [31:0] infer_dividend;
     logic [31:0] infer_divisor;
     (* use_dsp = "yes" *) logic [63:0] infer_prep_div_prod_q32;
@@ -752,8 +811,11 @@ module top_level(
     assign rgb0[0] = (resp_status == STATUS_OK); // red LED: OK result
 
     assign rgb1 = 3'b000;
-    // Keep LED routing minimal to reduce high-fanout debug nets.
-    assign led = {ddr_calib_complete, ddr_clk_wiz_locked, 14'd0};
+    // sw[15]=0: legacy minimal LEDs. sw[15]=1: runtime debug heartbeat/status.
+    assign led = sw[15]
+               ? {ddr_calib_complete_core, ddr_req_pending_core, sd_copy_active, sd_ddr_flush_active,
+                  imgload_active, infer_active, train_chunk_active, response_ready, req_opcode[7:0]}
+               : {ddr_calib_complete, ddr_clk_wiz_locked, 14'd0};
     assign pmoda = {rgb0[0], rgb0[1], rgb0[2]};
 
     always_ff @(posedge clk_100mhz_buf) begin
@@ -911,20 +973,63 @@ module top_level(
         .dbiterrb       ()
     );
 
-    // Inference weight ROM in explicit BRAM.
-    // Read latency is 1 cycle, matching the existing accumulation pipeline stage plan.
+    // Per-step pre spike bitmap for sparse CSR inference.
     xpm_memory_sdpram #(
-        .ADDR_WIDTH_A(17),
-        .ADDR_WIDTH_B(17),
+        .ADDR_WIDTH_A(10),
+        .ADDR_WIDTH_B(10),
+        .AUTO_SLEEP_TIME(0),
+        .BYTE_WRITE_WIDTH_A(1),
+        .CLOCKING_MODE("common_clock"),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE("none"),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("distributed"),
+        .MEMORY_SIZE(N_IN),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_B(1),
+        .READ_LATENCY_B(1),
+        .READ_RESET_VALUE_B("0"),
+        .RST_MODE_A("SYNC"),
+        .RST_MODE_B("SYNC"),
+        .SIM_ASSERT_CHK(0),
+        .USE_EMBEDDED_CONSTRAINT(0),
+        .USE_MEM_INIT(0),
+        .WAKEUP_TIME("disable_sleep"),
+        .WRITE_DATA_WIDTH_A(1),
+        .WRITE_MODE_B("read_first")
+    ) u_infer_pre_spike_map (
+        .sleep          (1'b0),
+        .clka           (core_clk),
+        .ena            (infer_pre_spike_wr_en),
+        .wea            (infer_pre_spike_wr_en),
+        .addra          (infer_pre_spike_wr_addr),
+        .dina           (infer_pre_spike_wr_data),
+        .injectsbiterra (1'b0),
+        .injectdbiterra (1'b0),
+        .clkb           (core_clk),
+        .rstb           (1'b0),
+        .enb            (1'b1),
+        .regceb         (1'b1),
+        .addrb          (infer_pre_spike_rd_addr),
+        .doutb          (infer_pre_spike_rd_data),
+        .sbiterrb       (),
+        .dbiterrb       ()
+    );
+
+    // Sparse inference weight table: csr_weight[N_EDGES].
+    xpm_memory_sdpram #(
+        .ADDR_WIDTH_A(W_ADDR_W),
+        .ADDR_WIDTH_B(W_ADDR_W),
         .AUTO_SLEEP_TIME(0),
         .BYTE_WRITE_WIDTH_A(16),
         .CLOCKING_MODE("common_clock"),
         .ECC_MODE("no_ecc"),
-        .MEMORY_INIT_FILE("data/infer_w_q16.mem"),
+        .MEMORY_INIT_FILE("data/csr_weight_q16.mem"),
         .MEMORY_INIT_PARAM("0"),
         .MEMORY_OPTIMIZATION("true"),
         .MEMORY_PRIMITIVE("block"),
-        .MEMORY_SIZE(N_WEIGHTS * 16),
+        .MEMORY_SIZE(N_EDGES * 16),
         .MESSAGE_CONTROL(0),
         .READ_DATA_WIDTH_B(16),
         .READ_LATENCY_B(1),
@@ -955,6 +1060,21 @@ module top_level(
         .sbiterrb       (),
         .dbiterrb       ()
     );
+
+    // Hold-fix buffer chain for spike_count BRAM write data path.
+    // The explicit LUT1 stage increases minimum data-path delay into RAMB DI pins.
+    genvar spike_hold_i;
+    generate
+        for (spike_hold_i = 0; spike_hold_i < 16; spike_hold_i = spike_hold_i + 1) begin : g_spike_count_holdfix
+            (* keep = "true", dont_touch = "true" *)
+            LUT1 #(
+                .INIT(2'b10)
+            ) u_lut1_holdfix (
+                .I0(spike_count_wdata[spike_hold_i]),
+                .O(spike_count_wdata_holdfix[spike_hold_i])
+            );
+        end
+    endgenerate
 
     // Spike count storage in explicit BRAM (replaces inferred array RAM).
     xpm_memory_sdpram #(
@@ -987,7 +1107,7 @@ module top_level(
         .ena            (1'b1),
         .wea            (spike_count_we),
         .addra          (spike_count_waddr),
-        .dina           (spike_count_wdata),
+        .dina           (spike_count_wdata_holdfix),
         .injectsbiterra (1'b0),
         .injectdbiterra (1'b0),
         .clkb           (core_clk),
@@ -1042,6 +1162,166 @@ module top_level(
         .doutb          (snap_count_rdata),
         .sbiterrb       (),
         .dbiterrb       ()
+    );
+
+    // CSR row pointer: [N_NEURONS+1], entries are edge offsets into csr_w/csr_col_idx.
+    xpm_memory_sprom #(
+        .ADDR_WIDTH_A(ROW_IDX_W + 1),
+        .AUTO_SLEEP_TIME(0),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE("data/csr_row_ptr.mem"),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("block"),
+        .MEMORY_SIZE((N_NEURONS + 1) * CSR_ROW_PTR_W),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_A(CSR_ROW_PTR_W),
+        .READ_LATENCY_A(1),
+        .READ_RESET_VALUE_A("0"),
+        .RST_MODE_A("SYNC"),
+        .SIM_ASSERT_CHK(0),
+        .USE_MEM_INIT(1),
+        .WAKEUP_TIME("disable_sleep")
+    ) u_csr_row_ptr_bram (
+        .sleep          (1'b0),
+        .clka           (core_clk),
+        .rsta           (1'b0),
+        .ena            (1'b1),
+        .regcea         (1'b1),
+        .addra          (csr_row_ptr_rd_addr),
+        .douta          (csr_row_ptr_rd_data),
+        .injectsbiterra (1'b0),
+        .injectdbiterra (1'b0),
+        .sbiterra       (),
+        .dbiterra       ()
+    );
+
+    // CSR col index: [N_EDGES], input index for each edge.
+    xpm_memory_sprom #(
+        .ADDR_WIDTH_A(EDGE_ADDR_W),
+        .AUTO_SLEEP_TIME(0),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE("data/csr_col_idx.mem"),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("block"),
+        .MEMORY_SIZE(N_EDGES * COL_IDX_W),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_A(COL_IDX_W),
+        .READ_LATENCY_A(1),
+        .READ_RESET_VALUE_A("0"),
+        .RST_MODE_A("SYNC"),
+        .SIM_ASSERT_CHK(0),
+        .USE_MEM_INIT(1),
+        .WAKEUP_TIME("disable_sleep")
+    ) u_csr_col_idx_bram (
+        .sleep          (1'b0),
+        .clka           (core_clk),
+        .rsta           (1'b0),
+        .ena            (1'b1),
+        .regcea         (1'b1),
+        .addra          (csr_col_idx_rd_addr),
+        .douta          (csr_col_idx_rd_data),
+        .injectsbiterra (1'b0),
+        .injectdbiterra (1'b0),
+        .sbiterra       (),
+        .dbiterra       ()
+    );
+
+    // CSC col pointer: [N_IN+1], reverse index range for each pre neuron.
+    xpm_memory_sprom #(
+        .ADDR_WIDTH_A(COL_IDX_W + 1),
+        .AUTO_SLEEP_TIME(0),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE("data/csc_col_ptr.mem"),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("block"),
+        .MEMORY_SIZE((N_IN + 1) * CSR_ROW_PTR_W),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_A(CSR_ROW_PTR_W),
+        .READ_LATENCY_A(1),
+        .READ_RESET_VALUE_A("0"),
+        .RST_MODE_A("SYNC"),
+        .SIM_ASSERT_CHK(0),
+        .USE_MEM_INIT(1),
+        .WAKEUP_TIME("disable_sleep")
+    ) u_csc_col_ptr_bram (
+        .sleep          (1'b0),
+        .clka           (core_clk),
+        .rsta           (1'b0),
+        .ena            (1'b1),
+        .regcea         (1'b1),
+        .addra          (csc_col_ptr_rd_addr),
+        .douta          (csc_col_ptr_rd_data),
+        .injectsbiterra (1'b0),
+        .injectdbiterra (1'b0),
+        .sbiterra       (),
+        .dbiterra       ()
+    );
+
+    // CSC row index: [N_EDGES], post neuron index for each reverse entry.
+    xpm_memory_sprom #(
+        .ADDR_WIDTH_A(EDGE_ADDR_W),
+        .AUTO_SLEEP_TIME(0),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE("data/csc_row_idx.mem"),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("block"),
+        .MEMORY_SIZE(N_EDGES * ROW_IDX_W),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_A(ROW_IDX_W),
+        .READ_LATENCY_A(1),
+        .READ_RESET_VALUE_A("0"),
+        .RST_MODE_A("SYNC"),
+        .SIM_ASSERT_CHK(0),
+        .USE_MEM_INIT(1),
+        .WAKEUP_TIME("disable_sleep")
+    ) u_csc_row_idx_bram (
+        .sleep          (1'b0),
+        .clka           (core_clk),
+        .rsta           (1'b0),
+        .ena            (1'b1),
+        .regcea         (1'b1),
+        .addra          (csc_row_idx_rd_addr),
+        .douta          (csc_row_idx_rd_data),
+        .injectsbiterra (1'b0),
+        .injectdbiterra (1'b0),
+        .sbiterra       (),
+        .dbiterra       ()
+    );
+
+    // CSC edge index: [N_EDGES], mapping reverse entry -> edge index in infer_w (CSR w array).
+    xpm_memory_sprom #(
+        .ADDR_WIDTH_A(EDGE_ADDR_W),
+        .AUTO_SLEEP_TIME(0),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE("data/csc_edge_idx.mem"),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("block"),
+        .MEMORY_SIZE(N_EDGES * EDGE_ADDR_W),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_A(EDGE_ADDR_W),
+        .READ_LATENCY_A(1),
+        .READ_RESET_VALUE_A("0"),
+        .RST_MODE_A("SYNC"),
+        .SIM_ASSERT_CHK(0),
+        .USE_MEM_INIT(1),
+        .WAKEUP_TIME("disable_sleep")
+    ) u_csc_edge_idx_bram (
+        .sleep          (1'b0),
+        .clka           (core_clk),
+        .rsta           (1'b0),
+        .ena            (1'b1),
+        .regcea         (1'b1),
+        .addra          (csc_edge_idx_rd_addr),
+        .douta          (csc_edge_idx_rd_data),
+        .injectsbiterra (1'b0),
+        .injectdbiterra (1'b0),
+        .sbiterra       (),
+        .dbiterra       ()
     );
 
     uart_rx #(
@@ -1187,6 +1467,20 @@ module top_level(
         .error_out     (train_stdp_div_err),
         .busy_out      (train_stdp_div_busy)
     );
+
+    // Hold-fix buffer chain for divider->STDP normalized weight register path.
+    genvar stdp_div_hold_i;
+    generate
+        for (stdp_div_hold_i = 0; stdp_div_hold_i < 32; stdp_div_hold_i = stdp_div_hold_i + 1) begin : g_stdp_div_holdfix
+            (* keep = "true", dont_touch = "true" *)
+            LUT1 #(
+                .INIT(2'b10)
+            ) u_lut1_holdfix (
+                .I0(train_stdp_div_q[stdp_div_hold_i]),
+                .O(train_stdp_div_q_holdfix[stdp_div_hold_i])
+            );
+        end
+    endgenerate
     
     function automatic [7:0] calc_resp_checksum(
         input [7:0] status_in,
@@ -1375,6 +1669,7 @@ module top_level(
             ddr_req_from_sd_core <= 1'b0;
             ddr_req_from_imgload_core <= 1'b0;
             ddr_req_from_train_core <= 1'b0;
+            ddr_req_from_host_core <= 1'b0;
             ddr_req_addr_word_core <= 32'd0;
             ddr_req_wdata_core   <= 32'd0;
             ddr_req_wide_core    <= 1'b0;
@@ -1497,6 +1792,8 @@ module top_level(
             train_chunk_retry_continue_infer <= 1'b0;
             train_rebase_neuron_idx <= 7'd0;
             train_rebase_input_idx <= 10'd0;
+            train_rebase_edge_idx <= '0;
+            train_rebase_edge_end <= '0;
             train_rebase_accum <= 32'sd0;
             train_rebase_phase <= 3'd0;
             train_gen_active     <= 1'b0;
@@ -1512,7 +1809,7 @@ module top_level(
             // Phase2 no longer uses A/BT matrix initialization.
             train_mem_init_done <= 1'b1;
             train_mem_init_state <= TMI_IDLE;
-            train_mem_init_idx <= 17'd0;
+            train_mem_init_idx <= '0;
             train_label_stats_active <= 1'b0;
             train_label_stats_state <= TLS_IDLE;
             train_label_stats_label <= 4'd0;
@@ -1538,9 +1835,9 @@ module top_level(
             infer_prep_idx      <= 10'd0;
             infer_accum         <= 32'sd0;
             infer_accum_weight_phase <= 3'd0;
-            infer_w_rd_addr     <= 17'd0;
+            infer_w_rd_addr     <= '0;
             infer_w_wr_en       <= 1'b0;
-            infer_w_wr_addr     <= 17'd0;
+            infer_w_wr_addr     <= '0;
             infer_w_wr_data     <= 16'd0;
             spike_count_we      <= 1'b0;
             spike_count_waddr   <= '0;
@@ -1561,7 +1858,18 @@ module top_level(
             infer_evt_winner_idx <= 7'd0;
             infer_evt_trace_val <= 32'sd0;
             infer_evt_w_cur <= 32'sd0;
+            infer_evt_w_gap_q16 <= 32'sd0;
+            infer_evt_mid_q16 <= 32'sd0;
+            infer_evt_term_prod_q32 <= 64'sd0;
+            infer_evt_term_q16 <= 32'sd0;
+            infer_evt_dw_q16 <= 32'sd0;
+            infer_evt_w_next_q16 <= 32'sd0;
+            infer_evt_edge_idx <= '0;
+            infer_evt_edge_end <= '0;
+            infer_evt_edge_ptr <= '0;
             infer_total_spikes  <= 32'd0;
+            infer_dbg_total_input_spikes_generated <= 32'd0;
+            infer_dbg_first_step_input_spikes <= 32'd0;
             infer_rng_state     <= 32'd0;
             infer_rng_mul_prod_q32 <= 64'd0;
             infer_poisson_num_const_cfg <= POISSON_NUM_CONST;
@@ -1578,6 +1886,11 @@ module top_level(
             snap_count_waddr <= '0;
             snap_count_wdata <= 16'd0;
             snap_count_raddr <= '0;
+            csr_row_ptr_rd_addr <= '0;
+            csr_col_idx_rd_addr <= '0;
+            csc_col_ptr_rd_addr <= '0;
+            csc_row_idx_rd_addr <= '0;
+            csc_edge_idx_rd_addr <= '0;
             train_label_sum_rd_addr <= 10'd0;
             train_label_count_rd_addr <= 4'd0;
             train_label_sum_wr_en <= 1'b0;
@@ -1591,6 +1904,10 @@ module top_level(
             infer_pre_wr_en <= 1'b0;
             infer_pre_wr_addr <= 10'd0;
             infer_pre_wr_data <= 10'd0;
+            infer_pre_spike_wr_en <= 1'b0;
+            infer_pre_spike_wr_addr <= 10'd0;
+            infer_pre_spike_wr_data <= 1'b0;
+            infer_pre_spike_rd_addr <= 10'd0;
             memrd_pending <= 1'b0;
             memrd_wait    <= 1'b0;
             memrd_kind    <= MEMRD_NONE;
@@ -1606,6 +1923,7 @@ module top_level(
             train_label_sum_wr_en <= 1'b0;
             infer_poisson_thresh_wr_en <= 1'b0;
             infer_pre_wr_en <= 1'b0;
+            infer_pre_spike_wr_en <= 1'b0;
             infer_w_wr_en <= 1'b0;
             spike_count_we <= 1'b0;
             snap_count_we <= 1'b0;
@@ -1634,7 +1952,7 @@ module top_level(
                         sd_in_read <= 1'b0;
                         resp_status    <= STATUS_BAD_PACKET;
                         resp_result    <= 32'sd0;
-                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                        resp_checksum  <= 8'h00;
                         response_ready <= 1'b1;
                     end else begin
                         ddr_write_toggle <= ~ddr_write_toggle;
@@ -1648,7 +1966,7 @@ module top_level(
                                 sd_copy_active <= 1'b0;
                                 resp_status    <= STATUS_OK;
                                 resp_result    <= sd_copy_words_written;
-                                resp_checksum  <= calc_resp_checksum(STATUS_OK, sd_copy_words_written);
+                                resp_checksum  <= 8'h00;
                                 response_ready <= 1'b1;
                             end
                         end else begin
@@ -1662,7 +1980,7 @@ module top_level(
                         imgload_word_valid <= 1'b0;
                         resp_status    <= STATUS_BAD_PACKET;
                         resp_result    <= 32'sd0;
-                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                        resp_checksum  <= 8'h00;
                         response_ready <= 1'b1;
                     end else begin
                         imgload_word_valid <= 1'b1;
@@ -1670,6 +1988,19 @@ module top_level(
                         imgload_word_lane  <= imgload_lane;
                         imgload_addr_word <= imgload_addr_word + 32'd1;
                         imgload_lane <= 2'd0;
+                    end
+                end else if (ddr_req_from_host_core) begin
+                    ddr_req_from_host_core <= 1'b0;
+                    if (ddr_resp_status_core != STATUS_OK) begin
+                        resp_status    <= STATUS_BAD_PACKET;
+                        resp_result    <= 32'sd0;
+                        resp_checksum  <= 8'h00;
+                        response_ready <= 1'b1;
+                    end else begin
+                        resp_status    <= STATUS_OK;
+                        resp_result    <= ddr_resp_rdata_core;
+                        resp_checksum  <= 8'h00;
+                        response_ready <= 1'b1;
                     end
                 end else if (TRAIN_ENABLE && ddr_req_from_train_core) begin
                     ddr_req_from_train_core <= 1'b0;
@@ -1692,16 +2023,16 @@ module top_level(
                         train_mem_init_state <= TMI_IDLE;
                         resp_status    <= STATUS_BAD_PACKET;
                         resp_result    <= 32'sd0;
-                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                        resp_checksum  <= 8'h00;
                         response_ready <= 1'b1;
                     end else if (train_mem_init_active) begin
                         case (train_mem_init_state)
                             TMI_A_WRITE_WAIT: begin
                                 if (train_mem_init_idx == (N_WEIGHTS - 1)) begin
-                                    train_mem_init_idx   <= 17'd0;
+                                    train_mem_init_idx   <= '0;
                                     train_mem_init_state <= TMI_BT_WRITE_REQ;
                                 end else begin
-                                    train_mem_init_idx   <= train_mem_init_idx + 17'd1;
+                                    train_mem_init_idx   <= train_mem_init_idx + {{(TRAIN_DENSE_ADDR_W-1){1'b0}}, 1'b1};
                                     train_mem_init_state <= TMI_A_WRITE_REQ;
                                 end
                             end
@@ -1709,7 +2040,7 @@ module top_level(
                                 if (train_mem_init_idx == (N_WEIGHTS - 1)) begin
                                     train_mem_init_state <= TMI_DONE;
                                 end else begin
-                                    train_mem_init_idx   <= train_mem_init_idx + 17'd1;
+                                    train_mem_init_idx   <= train_mem_init_idx + {{(TRAIN_DENSE_ADDR_W-1){1'b0}}, 1'b1};
                                     train_mem_init_state <= TMI_BT_WRITE_REQ;
                                 end
                             end
@@ -1718,7 +2049,7 @@ module top_level(
                                 train_mem_init_state <= TMI_IDLE;
                                 resp_status    <= STATUS_BAD_PACKET;
                                 resp_result    <= 32'sd0;
-                                resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                                resp_checksum  <= 8'h00;
                                 response_ready <= 1'b1;
                             end
                         endcase
@@ -1782,7 +2113,7 @@ module top_level(
                                 train_trace_multi_post_active <= 1'b0;
                                 resp_status    <= STATUS_BAD_PACKET;
                                 resp_result    <= 32'sd0;
-                                resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                                resp_checksum  <= 8'h00;
                                 response_ready <= 1'b1;
                             end
                         endcase
@@ -1826,7 +2157,7 @@ module top_level(
                                 train_chunk_state <= TCK_IDLE;
                                 resp_status    <= STATUS_BAD_PACKET;
                                 resp_result    <= 32'sd0;
-                                resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                                resp_checksum  <= 8'h00;
                                 response_ready <= 1'b1;
                             end
                         endcase
@@ -1851,14 +2182,14 @@ module top_level(
                                 train_gen_state  <= TGK_IDLE;
                                 resp_status    <= STATUS_BAD_PACKET;
                                 resp_result    <= 32'sd0;
-                                resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                                resp_checksum  <= 8'h00;
                                 response_ready <= 1'b1;
                             end
                         endcase
                     end else begin
                         resp_status    <= STATUS_BAD_PACKET;
                         resp_result    <= 32'sd0;
-                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                        resp_checksum  <= 8'h00;
                         response_ready <= 1'b1;
                     end
                 end else begin
@@ -1876,7 +2207,7 @@ module top_level(
                         end
                         resp_status    <= ddr_resp_status_core;
                         resp_result    <= ddr_resp_rdata_core;
-                        resp_checksum  <= calc_resp_checksum(ddr_resp_status_core, ddr_resp_rdata_core);
+                        resp_checksum  <= 8'h00;
                         response_ready <= 1'b1;
                     end
                 end
@@ -1893,7 +2224,7 @@ module top_level(
                 rx_timeout_counter <= '0;
                 resp_status        <= STATUS_BAD_PACKET;
                 resp_result        <= 32'sd0;
-                resp_checksum      <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                resp_checksum  <= 8'h00;
                 response_ready     <= 1'b1;
             end else begin
                 rx_timeout_counter <= rx_timeout_counter + 16'd1;
@@ -1908,25 +2239,31 @@ module top_level(
                         MEMRD_SPIKE_COUNT: begin
                             resp_status    <= STATUS_OK;
                             resp_result    <= {16'd0, infer_spike_rd_data};
-                            resp_checksum  <= calc_resp_checksum(STATUS_OK, {16'd0, infer_spike_rd_data});
+                            resp_checksum  <= 8'h00;
+                            response_ready <= 1'b1;
+                        end
+                        MEMRD_RAW_U8: begin
+                            resp_status    <= STATUS_OK;
+                            resp_result    <= {24'd0, raw_image0_rd_data};
+                            resp_checksum  <= 8'h00;
                             response_ready <= 1'b1;
                         end
                         MEMRD_TRAIN_LABEL_STAT_SUM: begin
                             resp_status    <= STATUS_OK;
                             resp_result    <= train_label_sum_rd_data;
-                            resp_checksum  <= calc_resp_checksum(STATUS_OK, train_label_sum_rd_data);
+                            resp_checksum  <= 8'h00;
                             response_ready <= 1'b1;
                         end
                         MEMRD_TRAIN_LABEL_STAT_COUNT: begin
                             resp_status    <= STATUS_OK;
                             resp_result    <= train_label_count_rd_data;
-                            resp_checksum  <= calc_resp_checksum(STATUS_OK, train_label_count_rd_data);
+                            resp_checksum  <= 8'h00;
                             response_ready <= 1'b1;
                         end
                         default: begin
                             resp_status    <= STATUS_BAD_PACKET;
                             resp_result    <= 32'sd0;
-                            resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                            resp_checksum  <= 8'h00;
                             response_ready <= 1'b1;
                         end
                     endcase
@@ -1973,13 +2310,14 @@ module top_level(
                         raw_image0_sum_u8 <= imgload_sum_u8_accum + {24'd0, lane_byte_sel(imgload_word_data, imgload_word_lane)};
                         resp_status    <= STATUS_OK;
                         resp_result    <= imgload_byte_idx + 10'd1;
-                        resp_checksum  <= calc_resp_checksum(STATUS_OK, imgload_byte_idx + 10'd1);
+                        resp_checksum  <= 8'h00;
                         response_ready <= 1'b1;
                     end else begin
                         imgload_byte_idx <= imgload_byte_idx + 10'd1;
                         if (imgload_word_lane == 2'd3) begin
                             imgload_word_valid <= 1'b0;
                             imgload_word_lane <= 2'd0;
+                            imgload_addr_word <= imgload_addr_word + 32'd1;
                         end else begin
                             imgload_word_lane <= imgload_word_lane + 2'd1;
                         end
@@ -2157,7 +2495,7 @@ module top_level(
                         if (!train_chunk_active) begin
                             resp_status    <= STATUS_OK;
                             resp_result    <= {22'd0, train_pre_count};
-                            resp_checksum  <= calc_resp_checksum(STATUS_OK, {22'd0, train_pre_count});
+                            resp_checksum  <= 8'h00;
                             response_ready <= 1'b1;
                         end
                     end
@@ -2168,7 +2506,7 @@ module top_level(
             if (TRAIN_ENABLE && train_stdp_active && !ddr_req_pending_core && !response_ready && !sd_ddr_flush_active && !imgload_word_valid && !train_trace_active) begin
                 case (train_stdp_state)
                     TSK_SUM_READ_W_REQ: begin
-                        infer_w_rd_addr           <= train_stdp_w_row_base[16:0] + {7'd0, train_stdp_col_idx};
+                        infer_w_rd_addr           <= train_stdp_w_row_base[W_ADDR_W-1:0] + {7'd0, train_stdp_col_idx};
                         train_stdp_state          <= TSK_SUM_READ_W_WAIT;
                     end
                     TSK_SUM_READ_W_WAIT: begin
@@ -2183,7 +2521,7 @@ module top_level(
                         end
                     end
                     TSK_READ_W_REQ: begin
-                        infer_w_rd_addr           <= train_stdp_w_row_base[16:0] + {7'd0, train_stdp_col_idx};
+                        infer_w_rd_addr           <= train_stdp_w_row_base[W_ADDR_W-1:0] + {7'd0, train_stdp_col_idx};
                         train_stdp_state          <= TSK_READ_W_WAIT;
                     end
                     TSK_READ_W_WAIT: begin
@@ -2242,10 +2580,10 @@ module top_level(
                                 train_chunk_state <= TCK_IDLE;
                                 resp_status    <= STATUS_BAD_PACKET;
                                 resp_result    <= 32'sd0;
-                                resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                                resp_checksum  <= 8'h00;
                                 response_ready <= 1'b1;
                             end else begin
-                                train_stdp_w_norm_q16 <= $signed(train_stdp_div_q);
+                                train_stdp_w_norm_q16 <= $signed(train_stdp_div_q_holdfix);
                                 train_stdp_state <= TSK_DIV_DW_PREP;
                             end
                         end
@@ -2342,7 +2680,7 @@ module top_level(
                                 train_chunk_state <= TCK_IDLE;
                                 resp_status    <= STATUS_BAD_PACKET;
                                 resp_result    <= 32'sd0;
-                                resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                                resp_checksum  <= 8'h00;
                                 response_ready <= 1'b1;
                             end else begin
                                 dW_step_q16_tmp = $signed(train_stdp_div_q);
@@ -2364,7 +2702,7 @@ module top_level(
                     end
                     TSK_WRITE_W_REQ: begin
                         infer_w_wr_en             <= 1'b1;
-                        infer_w_wr_addr           <= train_stdp_w_row_base[16:0] + {7'd0, train_stdp_col_idx};
+                        infer_w_wr_addr           <= train_stdp_w_row_base[W_ADDR_W-1:0] + {7'd0, train_stdp_col_idx};
                         infer_w_wr_data           <= train_stdp_w_new[15:0];
                         train_stdp_state          <= TSK_WRITE_W_WAIT;
                     end
@@ -2412,25 +2750,9 @@ module top_level(
                                 train_stdp_batch_active <= 1'b0;
                                 if (train_chunk_active) begin
                                     if (train_chunk_samples_left <= 16'd1) begin
-                                        if ((train_chunk_mode == 3'd3) || (train_chunk_mode == 3'd4)) begin
-                                            // Phase3 continues with a blank-period inference after STDP.
-                                            train_chunk_samples_left <= 16'd0;
-                                            train_chunk_state        <= TCK_BLANK_INFER_START;
-                                        end else begin
-                                            train_chunk_active       <= 1'b0;
-                                            train_chunk_state        <= TCK_IDLE;
-                                            train_chunk_mode         <= 2'd0;
-                                            train_chunk_samples_left <= 16'd0;
-                                            resp_status    <= STATUS_OK;
-                                            if (train_chunk_mode == 3'd2) begin
-                                                resp_result <= train_chunk_last_infer_spikes;
-                                                resp_checksum <= calc_resp_checksum(STATUS_OK, train_chunk_last_infer_spikes);
-                                            end else begin
-                                                resp_result <= {16'd0, 16'd1}; // phase0/phase1 returns completed chunk count
-                                                resp_checksum <= calc_resp_checksum(STATUS_OK, {16'd0, 16'd1});
-                                            end
-                                            response_ready <= 1'b1;
-                                        end
+                                        // Phase3 continues with a blank-period inference after STDP.
+                                        train_chunk_samples_left <= 16'd0;
+                                        train_chunk_state        <= TCK_BLANK_INFER_START;
                                     end else begin
                                         train_chunk_samples_left <= train_chunk_samples_left - 16'd1;
                                         train_stdp_batch_active    <= 1'b1;
@@ -2457,7 +2779,7 @@ module top_level(
                                 end else begin
                                     resp_status    <= STATUS_OK;
                                     resp_result    <= N_NEURONS;
-                                    resp_checksum  <= calc_resp_checksum(STATUS_OK, N_NEURONS);
+                                    resp_checksum  <= 8'h00;
                                     response_ready <= 1'b1;
                                 end
                             end else begin
@@ -2482,7 +2804,7 @@ module top_level(
                             train_stdp_state  <= TSK_IDLE;
                             resp_status    <= STATUS_OK;
                             resp_result    <= {25'd0, train_stdp_row_end - train_stdp_row0};
-                            resp_checksum  <= calc_resp_checksum(STATUS_OK, {25'd0, train_stdp_row_end - train_stdp_row0});
+                            resp_checksum  <= 8'h00;
                             response_ready <= 1'b1;
                         end
                     end
@@ -2498,7 +2820,7 @@ module top_level(
                             if (!train_mem_init_active) begin
                                 train_mem_init_active <= 1'b1;
                                 train_mem_init_state  <= TMI_A_WRITE_REQ;
-                                train_mem_init_idx    <= 17'd0;
+                                train_mem_init_idx    <= '0;
                             end
                         end else if (raw_image0_valid && (raw_bytes_per_image == 32'd784) && (raw_image0_sum_u8 != 32'd0)) begin
                             infer_active       <= 1'b1;
@@ -2515,6 +2837,8 @@ module top_level(
                                 infer_apply_idx    <= 7'd0;
                                 infer_sum_c_inh    <= 32'd0;
                                 infer_total_spikes <= 32'd0;
+                                infer_dbg_total_input_spikes_generated <= 32'd0;
+                                infer_dbg_first_step_input_spikes <= 32'd0;
                                 infer_pre_active_count <= 10'd0;
                                 raw_image0_rd_addr <= 10'd0;
                                 infer_poisson_thresh_rd_addr <= 10'd0;
@@ -2540,6 +2864,8 @@ module top_level(
                                 infer_apply_idx    <= 7'd0;
                                 infer_sum_c_inh    <= 32'd0;
                                 infer_total_spikes <= 32'd0;
+                                infer_dbg_total_input_spikes_generated <= 32'd0;
+                                infer_dbg_first_step_input_spikes <= 32'd0;
                                 if (!infer_model_state_valid) begin
                                     infer_rng_state <= 32'h12345678;
                                 end
@@ -2556,7 +2882,7 @@ module top_level(
                         end else begin
                             resp_status       <= STATUS_BAD_PACKET;
                             resp_result       <= 32'h36E20001;
-                            resp_checksum     <= calc_resp_checksum(STATUS_BAD_PACKET, 32'h36E20001);
+                            resp_checksum  <= 8'h00;
                             response_ready    <= 1'b1;
                             train_chunk_active <= 1'b0;
                             train_chunk_mode  <= 2'd0;
@@ -2587,29 +2913,7 @@ module top_level(
                         snap_count_waddr <= train_chunk_snap_copy_idx;
                         snap_count_wdata <= infer_spike_rd_data;
                         if (train_chunk_snap_copy_idx == (N_NEURONS - 1)) begin
-                            if (train_chunk_mode == 3'd4) begin
-                                if ($unsigned(infer_total_spikes) < TRAIN_RETRY_MIN_INJ_SPIKES) begin
-                                    logic [31:0] next_max_fr_tmp;
-                                    next_max_fr_tmp = train_chunk_retry_curr_max_fr + TRAIN_RETRY_MAX_FR_STEP;
-                                    train_chunk_retry_curr_max_fr <= next_max_fr_tmp;
-                                    infer_poisson_num_const_cfg <= (POISSON_NUM_CONST * next_max_fr_tmp) >> 5;
-                                    train_chunk_retry_continue_infer <= 1'b1;
-                                    // Phase2 online learning: inj(event-STDP) -> rebase -> blank.
-                                    train_chunk_state <= TCK_REBASE_GIN_INIT;
-                                end else begin
-                                    train_chunk_retry_accepted_max_fr <= train_chunk_retry_curr_max_fr;
-                                    train_chunk_retry_continue_infer <= 1'b0;
-                                    train_chunk_state <= TCK_REBASE_GIN_INIT;
-                                end
-                            end else begin
-                                if (train_chunk_mode == 3'd3) begin
-                                    train_chunk_state <= TCK_REBASE_GIN_INIT;
-                                end else if (train_chunk_mode == 3'd2) begin
-                                    train_chunk_state <= TCK_PICK_WINNER_INIT;
-                                end else begin
-                                    train_chunk_state <= TCK_GEN_XIN_START;
-                                end
-                            end
+                            train_chunk_state <= TCK_REBASE_GIN_INIT;
                         end else begin
                             train_chunk_snap_copy_idx <= train_chunk_snap_copy_idx + 7'd1;
                             infer_spike_rd_addr <= train_chunk_snap_copy_idx + 7'd1;
@@ -2668,7 +2972,7 @@ module top_level(
                         end else begin
                             resp_status       <= STATUS_BAD_PACKET;
                             resp_result       <= 32'h37E30001;
-                            resp_checksum     <= calc_resp_checksum(STATUS_BAD_PACKET, 32'h37E30001);
+                            resp_checksum  <= 8'h00;
                             response_ready    <= 1'b1;
                             train_chunk_active <= 1'b0;
                             train_chunk_mode  <= 2'd0;
@@ -2681,11 +2985,7 @@ module top_level(
                             if (response_ready && (resp_status == STATUS_OK)) begin
                                 response_ready <= 1'b0;
                             end
-                            if ((train_chunk_mode == 3'd4) && train_chunk_retry_continue_infer) begin
-                                train_chunk_state <= TCK_INFER_START;
-                            end else begin
-                                train_chunk_state <= TCK_DONE;
-                            end
+                            train_chunk_state <= TCK_DONE;
                         end
                     end
                     TCK_GEN_XIN_START: begin
@@ -2799,11 +3099,7 @@ module top_level(
                         end
                     end
                     TCK_STDP_START: begin
-                        if ((train_chunk_mode == 3'd3) || (train_chunk_mode == 3'd4)) begin
-                            train_stdp_update_nt <= {16'd0, train_chunk_steps_left};
-                        end else begin
-                            train_stdp_update_nt <= TRAIN_UPDATE_NT;
-                        end
+                        train_stdp_update_nt <= {16'd0, train_chunk_steps_left};
                         train_stdp_batch_active    <= 1'b1;
                         train_stdp_batch_tile_rows <= train_chunk_tile_rows;
                         train_stdp_batch_next_row0 <= 7'd0;
@@ -2828,78 +3124,81 @@ module top_level(
                     end
                     TCK_STDP_WAIT: begin
                         if (!train_stdp_active && !train_stdp_batch_active) begin
-                            if ((train_chunk_mode == 3'd3) || (train_chunk_mode == 3'd4)) begin
-                                train_chunk_state <= TCK_REBASE_GIN_INIT;
-                            end else begin
-                                train_chunk_state <= TCK_DONE;
-                            end
+                            train_chunk_state <= TCK_REBASE_GIN_INIT;
                         end
                     end
                     TCK_REBASE_GIN_INIT: begin
                         train_rebase_neuron_idx <= 7'd0;
                         train_rebase_input_idx <= 10'd0;
+                        train_rebase_edge_idx <= '0;
+                        train_rebase_edge_end <= '0;
                         train_rebase_accum <= 32'sd0;
                         train_rebase_phase <= 3'd0;
-                        infer_pre_rd_addr <= 10'd0;
                         train_chunk_state <= TCK_REBASE_GIN_RUN;
                     end
                     TCK_REBASE_GIN_RUN: begin
-                        logic [16:0] w_idx_rebase;
-                        if (train_rebase_input_idx < infer_pre_active_count) begin
-                            if (train_rebase_phase == 3'd0) begin
-                                infer_pre_rd_addr <= train_rebase_input_idx;
-                                train_rebase_phase <= 3'd1;
-                            end else if (train_rebase_phase == 3'd1) begin
-                                train_rebase_phase <= 3'd2;
-                            end else if (train_rebase_phase == 3'd2) begin
-                                w_idx_rebase = (train_rebase_neuron_idx * N_IN) + infer_pre_rd_data;
-                                infer_w_rd_addr <= w_idx_rebase;
-                                train_rebase_phase <= 3'd3;
-                            end else if (train_rebase_phase == 3'd3) begin
-                                train_rebase_phase <= 3'd4;
-                            end else begin
-                                if (infer_w_rd_data_q != 16'd0) begin
-                                    train_rebase_accum <= train_rebase_accum + $signed({16'd0, infer_w_rd_data_q});
-                                end
-                                train_rebase_input_idx <= train_rebase_input_idx + 10'd1;
-                                train_rebase_phase <= 3'd0;
-                            end
-                        end else begin
-                            infer_g_in_state[train_rebase_neuron_idx] <= fxp_mul_s16_16(train_rebase_accum, FXP_SCALE_1000);
-                            if (train_rebase_neuron_idx == (N_NEURONS - 1)) begin
-                                if ((train_chunk_mode == 3'd3) || (train_chunk_mode == 3'd4)) begin
+                        if (train_rebase_phase == 3'd0) begin
+                            csr_row_ptr_rd_addr <= train_rebase_neuron_idx[ROW_IDX_W:0];
+                            train_rebase_phase <= 3'd1;
+                        end else if (train_rebase_phase == 3'd1) begin
+                            train_rebase_edge_idx <= csr_row_ptr_rd_data[W_ADDR_W-1:0];
+                            csr_row_ptr_rd_addr <= train_rebase_neuron_idx[ROW_IDX_W:0] + {{ROW_IDX_W{1'b0}}, 1'b1};
+                            train_rebase_phase <= 3'd2;
+                        end else if (train_rebase_phase == 3'd2) begin
+                            train_rebase_edge_end <= csr_row_ptr_rd_data[W_ADDR_W-1:0];
+                            if (train_rebase_edge_idx >= csr_row_ptr_rd_data[W_ADDR_W-1:0]) begin
+                                infer_g_in_state[train_rebase_neuron_idx] <= fxp_mul_s16_16(train_rebase_accum, FXP_SCALE_1000);
+                                if (train_rebase_neuron_idx == (N_NEURONS - 1)) begin
                                     train_chunk_state <= TCK_BLANK_INFER_START;
                                 end else begin
-                                    train_chunk_state <= TCK_DONE;
+                                    train_rebase_neuron_idx <= train_rebase_neuron_idx + 7'd1;
+                                    train_rebase_accum <= 32'sd0;
+                                    train_rebase_phase <= 3'd0;
                                 end
                             end else begin
-                                train_rebase_neuron_idx <= train_rebase_neuron_idx + 7'd1;
-                                train_rebase_input_idx <= 10'd0;
-                                train_rebase_accum <= 32'sd0;
-                                train_rebase_phase <= 3'd0;
-                                infer_pre_rd_addr <= 10'd0;
+                                csr_col_idx_rd_addr <= train_rebase_edge_idx;
+                                train_rebase_phase <= 3'd3;
+                            end
+                        end else if (train_rebase_phase == 3'd3) begin
+                            infer_pre_spike_rd_addr <= {3'd0, csr_col_idx_rd_data};
+                            train_rebase_phase <= 3'd4;
+                        end else if (train_rebase_phase == 3'd4) begin
+                            if (infer_pre_spike_rd_data) begin
+                                infer_w_rd_addr <= train_rebase_edge_idx;
+                                train_rebase_phase <= 3'd5;
+                            end else begin
+                                if ((train_rebase_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1}) >= train_rebase_edge_end) begin
+                                    train_rebase_phase <= 3'd2;
+                                end else begin
+                                    train_rebase_edge_idx <= train_rebase_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1};
+                                    csr_col_idx_rd_addr <= train_rebase_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1};
+                                    train_rebase_phase <= 3'd3;
+                                end
+                            end
+                        end else if (train_rebase_phase == 3'd5) begin
+                            train_rebase_phase <= 3'd6;
+                        end else begin
+                            train_rebase_accum <= train_rebase_accum + $signed({16'd0, infer_w_rd_data_q});
+                            if ((train_rebase_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1}) >= train_rebase_edge_end) begin
+                                train_rebase_phase <= 3'd2;
+                            end else begin
+                                train_rebase_edge_idx <= train_rebase_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1};
+                                csr_col_idx_rd_addr <= train_rebase_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1};
+                                train_rebase_phase <= 3'd3;
                             end
                         end
                     end
                     TCK_DONE: begin
-                        if ((train_chunk_mode == 3'd3) || (train_chunk_mode == 3'd4)) begin
-                            train_chunk_active       <= 1'b0;
-                            train_chunk_state        <= TCK_IDLE;
-                            train_chunk_mode         <= 2'd0;
-                            train_chunk_samples_left <= 16'd0;
-                            train_chunk_retry_continue_infer <= 1'b0;
-                            if (train_chunk_mode == 3'd4) begin
-                                infer_poisson_num_const_cfg <= POISSON_NUM_CONST;
-                            end
-                            // Return inj/blank totals packed as [31:16]=blank, [15:0]=inj (truncated)
-                            resp_status    <= STATUS_OK;
-                            resp_result    <= {train_chunk_last_blank_spikes[15:0], train_chunk_last_infer_spikes[15:0]};
-                            resp_checksum  <= calc_resp_checksum(STATUS_OK, {train_chunk_last_blank_spikes[15:0], train_chunk_last_infer_spikes[15:0]});
-                            response_ready <= 1'b1;
-                        end else begin
-                            // STDP batch completion path returns the response in phase0/phase1/phase2.
-                            train_chunk_state <= TCK_IDLE;
-                        end
+                        train_chunk_active       <= 1'b0;
+                        train_chunk_state        <= TCK_IDLE;
+                        train_chunk_mode         <= 2'd0;
+                        train_chunk_samples_left <= 16'd0;
+                        train_chunk_retry_continue_infer <= 1'b0;
+                        // Return inj/blank totals packed as [31:16]=blank, [15:0]=inj (truncated)
+                        resp_status    <= STATUS_OK;
+                        resp_result    <= {train_chunk_last_blank_spikes[15:0], train_chunk_last_infer_spikes[15:0]};
+                        resp_checksum  <= 8'h00;
+                        response_ready <= 1'b1;
                     end
                     default: begin end
                 endcase
@@ -2943,7 +3242,7 @@ module top_level(
                         if (!train_chunk_active) begin
                             resp_status    <= STATUS_OK;
                             resp_result    <= {16'd0, train_gen_count_total};
-                            resp_checksum  <= calc_resp_checksum(STATUS_OK, {16'd0, train_gen_count_total});
+                            resp_checksum  <= 8'h00;
                             response_ready <= 1'b1;
                         end
                     end
@@ -2956,11 +3255,11 @@ module top_level(
                 !train_trace_active && !train_stdp_active && !train_gen_active) begin
                 case (train_mem_init_state)
                     TMI_W_READ_REQ: begin
-                        train_mem_init_idx <= 17'd0;
+                        train_mem_init_idx <= '0;
                         train_mem_init_state <= TMI_A_WRITE_REQ;
                     end
                     TMI_W_READ_WAIT: begin
-                        train_mem_init_idx <= 17'd0;
+                        train_mem_init_idx <= '0;
                         train_mem_init_state <= TMI_A_WRITE_REQ;
                     end
                     TMI_A_WRITE_REQ: begin
@@ -3053,7 +3352,7 @@ module top_level(
                         train_label_stats_state <= TLS_IDLE;
                         resp_status    <= STATUS_OK;
                         resp_result    <= {28'd0, train_label_stats_label};
-                        resp_checksum  <= calc_resp_checksum(STATUS_OK, {28'd0, train_label_stats_label});
+                        resp_checksum  <= 8'h00;
                         response_ready <= 1'b1;
                     end
                     default: begin
@@ -3061,13 +3360,16 @@ module top_level(
                         train_label_stats_state <= TLS_IDLE;
                         resp_status    <= STATUS_BAD_PACKET;
                         resp_result    <= 32'sd0;
-                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                        resp_checksum  <= 8'h00;
                         response_ready <= 1'b1;
                     end
                 endcase
             end
 
-            if (rx_dv && !response_ready && !memrd_pending && !sd_copy_active && !infer_active && !imgload_active) begin
+            // During infer/imgload, drop incoming request bytes to avoid protocol desync
+            // while long-running pipelines are active.
+            if (rx_dv && !response_ready && !memrd_pending &&
+                !sd_copy_active && !infer_active && !imgload_active) begin
                 case (rx_state)
                     RX_WAIT_SYNC: begin
                         if (rx_byte == REQ_SYNC) begin
@@ -3101,21 +3403,20 @@ module top_level(
                             rx_state        <= RX_WAIT_SYNC;
                             resp_status     <= STATUS_BAD_PACKET;
                             resp_result     <= 32'sd0;
-                            resp_checksum   <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                            resp_checksum  <= 8'h00;
                             response_ready  <= 1'b1;
                         end else if (
-                            ((req_opcode == OP_SD_SECTORS_TO_DDR) || (req_opcode == OP_LOAD_IMAGE_FROM_DDR) ||
-                             (req_opcode == OP_RUN_SAMPLE_INFER) || (req_opcode == OP_READ_SPIKE_COUNT) ||
-                             (req_opcode == OP_TRAIN_QUERY_CAPS) ||
-                             (req_opcode == OP_TRAIN_RUN_SAMPLE_PHASE3) || (req_opcode == OP_TRAIN_RUN_SAMPLE_PHASE4) ||
-                             (req_opcode == OP_TRAIN_LABEL_STATS_RESET) || (req_opcode == OP_TRAIN_LABEL_STATS_ACCUM) ||
-                             (req_opcode == OP_READ_TRAIN_LABEL_STAT_SUM) || (req_opcode == OP_READ_TRAIN_LABEL_STAT_COUNT))
+                            ((req_opcode == OP_DDR_READ32) || (req_opcode == OP_SD_SECTORS_TO_DDR) || (req_opcode == OP_LOAD_IMAGE_FROM_DDR) ||
+                             (req_opcode == OP_RUN_SAMPLE_INFER) || (req_opcode == OP_READ_SPIKE_COUNT) || (req_opcode == OP_READ_RAW_U8) ||
+                             (req_opcode == OP_READ_INFER_DEBUG) || (req_opcode == OP_TRAIN_QUERY_CAPS) ||
+                             (req_opcode == OP_READ_TRAIN_DEBUG) ||
+                             (req_opcode == OP_TRAIN_RUN_SAMPLE_PHASE3))
                             && (rx_byte != 8'd2)
                         ) begin
                             rx_state        <= RX_WAIT_SYNC;
                             resp_status     <= STATUS_BAD_PACKET;
                             resp_result     <= 32'sd0;
-                            resp_checksum   <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                            resp_checksum  <= 8'h00;
                             response_ready  <= 1'b1;
                         end else if (rx_byte == 8'd0) begin
                             rx_state <= RX_GET_CHECKSUM;
@@ -3163,28 +3464,55 @@ module top_level(
                         if ((req_checksum_accum != rx_byte) || (req_ver != PROTO_VER)) begin
                             resp_status    <= STATUS_BAD_PACKET;
                             resp_result    <= 32'sd0;
-                            resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                            resp_checksum  <= 8'h00;
                             response_ready <= 1'b1;
                         end else if (TRAIN_ENABLE &&
                                      (train_trace_active || train_stdp_active || train_gen_active || train_label_stats_active || train_stdp_batch_active || train_chunk_active)) begin
                             resp_status    <= STATUS_BAD_PACKET;
                             resp_result    <= {8'h31, req_opcode, 16'h0000}; // TRAIN_BUSY debug tag
-                            resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {8'h31, req_opcode, 16'h0000});
+                            resp_checksum  <= 8'h00;
                             response_ready <= 1'b1;
                         end else if (!TRAIN_ENABLE &&
-                                     ((req_opcode == OP_TRAIN_RUN_SAMPLE_PHASE3) ||
-                                      (req_opcode == OP_TRAIN_RUN_SAMPLE_PHASE4) ||
-                                      (req_opcode == OP_TRAIN_LABEL_STATS_RESET) ||
-                                      (req_opcode == OP_TRAIN_LABEL_STATS_ACCUM) ||
-                                      (req_opcode == OP_READ_TRAIN_LABEL_STAT_SUM) ||
-                                      (req_opcode == OP_READ_TRAIN_LABEL_STAT_COUNT))) begin
+                                     (req_opcode == OP_TRAIN_RUN_SAMPLE_PHASE3)) begin
                             resp_status    <= STATUS_UNSUPPORTED_OP;
                             // Debug payload: [31:24]=0xF0, [23:16]=req_opcode, [15:8]=req_nargs, [7:0]=rx_state
                             resp_result    <= {8'hF0, req_opcode, req_nargs, {5'd0, rx_state}};
-                            resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, {8'hF0, req_opcode, req_nargs, {5'd0, rx_state}});
+                            resp_checksum  <= 8'h00;
                             response_ready <= 1'b1;
                         end else begin
                             case (req_opcode)
+                                OP_DDR_READ32: begin
+                                    if ((req_nargs == 8'd2) &&
+                                        (arg0 >= 0) &&
+                                        (arg0 < $signed(DDR_ADDR_WORD_LIMIT)) &&
+                                        ddr_calib_complete_core &&
+                                        !ddr_req_pending_core &&
+                                        !sd_ddr_flush_active &&
+                                        !imgload_active &&
+                                        !sd_copy_active &&
+                                        !infer_active &&
+                                        !train_trace_active && !train_stdp_active && !train_gen_active &&
+                                        !train_label_stats_active && !train_chunk_active) begin
+                                        ddr_req_pending_core      <= 1'b1;
+                                        ddr_req_we_core           <= 1'b0;
+                                        ddr_req_from_sd_core      <= 1'b0;
+                                        ddr_req_from_imgload_core <= 1'b0;
+                                        ddr_req_from_train_core   <= 1'b0;
+                                        ddr_req_from_host_core    <= 1'b1;
+                                        ddr_req_addr_word_core    <= arg0[31:0];
+                                        ddr_req_wdata_core        <= 32'd0;
+                                        ddr_req_wide_core         <= 1'b0;
+                                        ddr_req_wdata128_core     <= 128'd0;
+                                        ddr_req_sel16_core        <= 16'd0;
+                                        ddr_req_word_count_core   <= 3'd1;
+                                        ddr_req_toggle_core       <= ~ddr_req_toggle_core;
+                                    end else begin
+                                        resp_status    <= STATUS_BAD_PACKET;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= 8'h00;
+                                        response_ready <= 1'b1;
+                                    end
+                                end
                                 OP_SD_SECTORS_TO_DDR: begin
                                     if (
                                         (req_nargs == 8'd2) &&
@@ -3220,11 +3548,15 @@ module top_level(
                                     end else begin
                                         resp_status    <= STATUS_BAD_PACKET;
                                         resp_result    <= {BADDBG_SD_REQ_ARG, req_opcode, arg0[15:0]};
-                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {BADDBG_SD_REQ_ARG, req_opcode, arg0[15:0]});
+                                        resp_checksum  <= 8'h00;
                                         response_ready <= 1'b1;
                                     end
                                 end
                                 OP_LOAD_IMAGE_FROM_DDR: begin
+                                    // Semantics:
+                                    //   arg0 = DDR source byte offset (base_byte)
+                                    //   arg1 = number of bytes to copy
+                                    // Destination is always raw_image0[0..arg1-1] (dest base fixed to 0).
                                     if ((req_nargs == 8'd2) &&
                                         (arg0 >= 0) &&
                                         (arg1 > 0) && (arg1 <= N_IN) &&
@@ -3238,10 +3570,10 @@ module top_level(
                                         imgload_lane <= arg0[1:0];
                                         imgload_byte_idx <= 10'd0;
                                         imgload_total_bytes <= arg1[9:0];
-                                        imgload_sum_u8_accum <= 32'd0;
-                                        imgload_word_valid <= 1'b0;
-                                        imgload_word_data <= 32'd0;
-                                        imgload_word_lane <= 2'd0;
+            imgload_sum_u8_accum <= 32'd0;
+            imgload_word_valid <= 1'b0;
+            imgload_word_data <= 32'd0;
+            imgload_word_lane <= 2'd0;
                                         raw_image0_valid <= 1'b0;
                                         raw_image0_capture_idx <= 10'd0;
                                         raw_image0_sum_u8 <= 32'd0;
@@ -3249,7 +3581,7 @@ module top_level(
                                     end else begin
                                         resp_status    <= STATUS_BAD_PACKET;
                                         resp_result    <= 32'sd0;
-                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                                        resp_checksum  <= 8'h00;
                                         response_ready <= 1'b1;
                                     end
                                 end
@@ -3273,6 +3605,8 @@ module top_level(
                                         infer_apply_idx    <= 7'd0;
                                         infer_trace_phase  <= 2'd0;
                                         infer_total_spikes <= 32'd0;
+                                        infer_dbg_total_input_spikes_generated <= 32'd0;
+                                        infer_dbg_first_step_input_spikes <= 32'd0;
                                         infer_rng_state    <= arg0[31:0];
                                         infer_skip_init_clear <= 1'b0;
                                         infer_force_no_input  <= 1'b0;
@@ -3284,7 +3618,7 @@ module top_level(
                                     end else begin
                                         resp_status    <= STATUS_BAD_PACKET;
                                         resp_result    <= 32'sd0;
-                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                                        resp_checksum  <= 8'h00;
                                         response_ready <= 1'b1;
                                     end
                                 end
@@ -3299,70 +3633,135 @@ module top_level(
                                     end else begin
                                         resp_status    <= STATUS_BAD_PACKET;
                                         resp_result    <= 32'sd0;
-                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                                        resp_checksum  <= 8'h00;
                                         response_ready <= 1'b1;
                                     end
                                 end
-                                OP_TRAIN_LABEL_STATS_RESET: begin
+                                OP_READ_RAW_U8: begin
                                     if ((req_nargs == 8'd2) &&
-                                        !ddr_req_pending_core &&
-                                        !train_trace_active && !train_stdp_active && !train_gen_active &&
-                                        !train_label_stats_active && !train_chunk_active && !infer_active) begin
-                                        train_label_stats_active <= 1'b1;
-                                        train_label_stats_state <= TLS_RESET_SUM;
-                                        train_label_stats_idx <= 10'd0;
-                                        train_label_stats_label <= 4'd0;
-                                        train_label_stats_base_idx <= 10'd0;
-                                    end else begin
-                                        resp_status    <= STATUS_BAD_PACKET;
-                                        resp_result    <= 32'sd0;
-                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
-                                        response_ready <= 1'b1;
-                                    end
-                                end
-                                OP_TRAIN_LABEL_STATS_ACCUM: begin
-                                    if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < 32'sd10) &&
-                                        !ddr_req_pending_core &&
-                                        !train_trace_active && !train_stdp_active && !train_gen_active &&
-                                        !train_label_stats_active && !train_chunk_active && !infer_active) begin
-                                        logic [9:0] base_tmp;
-                                        base_tmp = ({6'd0, arg0[3:0]} * N_NEURONS);
-                                        train_label_stats_active <= 1'b1;
-                                        train_label_stats_state <= TLS_ACCUM_READ;
-                                        train_label_stats_label <= arg0[3:0];
-                                        train_label_stats_idx <= 10'd0;
-                                        train_label_stats_base_idx <= base_tmp;
-                                    end else begin
-                                        resp_status    <= STATUS_BAD_PACKET;
-                                        resp_result    <= 32'sd0;
-                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
-                                        response_ready <= 1'b1;
-                                    end
-                                end
-                                OP_READ_TRAIN_LABEL_STAT_SUM: begin
-                                    if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < 32'sd10) &&
-                                        (arg1 >= 0) && (arg1 < N_NEURONS)) begin
-                                        train_label_sum_rd_addr <= ({6'd0, arg0[3:0]} * N_NEURONS) + arg1[6:0];
-                                        memrd_kind    <= MEMRD_TRAIN_LABEL_STAT_SUM;
+                                        (arg0 >= 0) && (arg0 < N_IN) &&
+                                        !imgload_active) begin
+                                        raw_image0_rd_addr <= arg0[9:0];
+                                        memrd_kind    <= MEMRD_RAW_U8;
                                         memrd_wait    <= 1'b1;
                                         memrd_pending <= 1'b1;
                                     end else begin
                                         resp_status    <= STATUS_BAD_PACKET;
-                                        resp_result    <= {8'h17, req_opcode, arg0[15:0]};
-                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {8'h17, req_opcode, arg0[15:0]});
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= 8'h00;
                                         response_ready <= 1'b1;
                                     end
                                 end
-                                OP_READ_TRAIN_LABEL_STAT_COUNT: begin
-                                    if ((req_nargs == 8'd2) && (arg0 >= 0) && (arg0 < 32'sd10)) begin
-                                        train_label_count_rd_addr <= arg0[3:0];
-                                        memrd_kind    <= MEMRD_TRAIN_LABEL_STAT_COUNT;
-                                        memrd_wait    <= 1'b1;
-                                        memrd_pending <= 1'b1;
+                                OP_READ_INFER_DEBUG: begin
+                                    if ((req_nargs == 8'd2) && (arg0 >= 0)) begin
+                                        logic [31:0] dbg_infer_val;
+                                        dbg_infer_val = 32'd0;
+                                        case (arg0[7:0])
+                                            8'd0: dbg_infer_val = infer_total_spikes;
+                                            8'd1: dbg_infer_val = infer_steps_target;
+                                            8'd2: dbg_infer_val = {16'd0, infer_step_idx};
+                                            8'd3: dbg_infer_val = {26'd0, infer_state};
+                                            8'd4: dbg_infer_val = {22'd0, infer_pre_active_count};
+                                            8'd5: dbg_infer_val = raw_image0_sum_u8;
+                                            8'd6: dbg_infer_val = infer_poisson_num_const_cfg;
+                                            8'd7: dbg_infer_val = {31'd0, infer_active};
+                                            8'd8: dbg_infer_val = {31'd0, imgload_active};
+                                            8'd9: dbg_infer_val = {31'd0, ddr_req_pending_core};
+                                            8'd10: dbg_infer_val = {31'd0, sd_copy_active};
+                                            8'd11: dbg_infer_val = {29'd0, rx_state};
+                                            8'd12: dbg_infer_val = {31'd0, response_ready};
+                                            8'd13: dbg_infer_val = infer_dbg_first_step_input_spikes;
+                                            8'd14: dbg_infer_val = infer_dbg_total_input_spikes_generated;
+                                            default: dbg_infer_val = 32'd0;
+                                        endcase
+                                        resp_status    <= STATUS_OK;
+                                        resp_result    <= dbg_infer_val;
+                                        resp_checksum  <= 8'h00;
+                                        response_ready <= 1'b1;
                                     end else begin
                                         resp_status    <= STATUS_BAD_PACKET;
-                                        resp_result    <= {8'h18, req_opcode, arg0[15:0]};
-                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {8'h18, req_opcode, arg0[15:0]});
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= 8'h00;
+                                        response_ready <= 1'b1;
+                                    end
+                                end
+                                OP_READ_TRAIN_DEBUG: begin
+                                    if ((req_nargs == 8'd2) && (arg0 >= 0)) begin
+                                        logic [31:0] dbg_train_val;
+                                        dbg_train_val = 32'd0;
+                                        case (arg0[7:0])
+                                            8'd0: dbg_train_val = {31'd0, train_trace_active};
+                                            8'd1: dbg_train_val = {27'd0, train_trace_state};
+                                            8'd2: dbg_train_val = {22'd0, train_a_idx};
+                                            8'd3: dbg_train_val = {22'd0, train_pre_idx};
+                                            8'd4: dbg_train_val = {25'd0, train_b_col_idx};
+                                            8'd5: dbg_train_val = {31'd0, train_stdp_active};
+                                            8'd6: dbg_train_val = {26'd0, train_stdp_state};
+                                            8'd7: dbg_train_val = {25'd0, train_stdp_row_idx};
+                                            8'd8: dbg_train_val = {22'd0, train_stdp_col_idx};
+                                            8'd9: dbg_train_val = {31'd0, train_gen_active};
+                                            8'd10: dbg_train_val = {28'd0, train_gen_state};
+                                            8'd11: dbg_train_val = {31'd0, ddr_req_pending_core};
+                                            8'd12: dbg_train_val = {31'd0, train_xin_cache_valid};
+                                            8'd13: dbg_train_val = {31'd0, train_xexc_cache_valid};
+                                            8'd14: dbg_train_val = ddr_req_addr_word_core;
+                                            8'd15: dbg_train_val = {29'd0, ddr_req_word_count_core};
+                                            8'd16: dbg_train_val = {31'd0, ddr_req_we_core};
+                                            8'd17: dbg_train_val = {31'd0, ddr_req_from_train_core};
+                                            8'd18: dbg_train_val = train_tmp_x_val;
+                                            8'd19: dbg_train_val = train_tmp_mem_val;
+                                            8'd20: dbg_train_val = {16'd0, train_gen_count_total};
+                                            8'd21: dbg_train_val = {16'd0, train_gen_idx};
+                                            8'd22: dbg_train_val = {30'd0, ddr_bridge_state};
+                                            8'd23: dbg_train_val = {31'd0, ddr_wb_stall};
+                                            8'd24: dbg_train_val = {31'd0, ddr_wb_ack};
+                                            8'd25: dbg_train_val = {31'd0, ddr_req_toggle_core};
+                                            8'd26: dbg_train_val = {31'd0, ddr_req_toggle_ddr_sync2};
+                                            8'd27: dbg_train_val = {31'd0, ddr_req_toggle_ddr_seen};
+                                            8'd28: dbg_train_val = {31'd0, ddr_rsp_toggle_ddr};
+                                            8'd29: dbg_train_val = {31'd0, ddr_rsp_toggle_core_sync2};
+                                            8'd30: dbg_train_val = {31'd0, ddr_rsp_toggle_core_seen};
+                                            8'd31: dbg_train_val = {31'd0, ddr_req_we_ddr};
+                                            8'd32: dbg_train_val = {8'd0, ddr_req_addr_word_ddr};
+                                            8'd33: dbg_train_val = {31'd0, ddr_req_from_sd_core};
+                                            8'd34: dbg_train_val = {30'd0, ddr_req_addr_word_ddr[1:0]};
+                                            8'd35: dbg_train_val = {31'd0, train_chunk_active};
+                                            8'd36: dbg_train_val = {27'd0, train_chunk_state};
+                                            8'd37: dbg_train_val = {29'd0, train_chunk_mode};
+                                            8'd38: dbg_train_val = train_chunk_last_infer_spikes;
+                                            8'd39: dbg_train_val = train_chunk_last_blank_spikes;
+                                            8'd40: dbg_train_val = train_chunk_retry_curr_max_fr;
+                                            8'd41: dbg_train_val = train_chunk_retry_accepted_max_fr;
+                                            // always-on minimal IDs
+                                            8'd48: dbg_train_val = {31'd0, train_gen_active};
+                                            8'd49: dbg_train_val = {28'd0, train_gen_state};
+                                            8'd50: dbg_train_val = {16'd0, train_gen_idx};
+                                            8'd51: dbg_train_val = {16'd0, train_gen_count_total};
+                                            8'd52: dbg_train_val = {31'd0, ddr_req_pending_core};
+                                            8'd53: dbg_train_val = {30'd0, ddr_bridge_state};
+                                            8'd54: dbg_train_val = ddr_req_addr_word_core;
+                                            8'd55: dbg_train_val = {26'd0, ddr_req_toggle_ddr_sync2, ddr_req_toggle_ddr_seen,
+                                                                     ddr_rsp_toggle_core_sync2, ddr_rsp_toggle_core_seen,
+                                                                     ddr_req_we_core, ddr_req_from_train_core};
+                                            // SD/IMG debug
+                                            8'd56: dbg_train_val = {31'd0, sd_copy_active};
+                                            8'd57: dbg_train_val = {31'd0, sd_ddr_flush_active};
+                                            8'd58: dbg_train_val = {31'd0, sd_in_read};
+                                            8'd59: dbg_train_val = {30'd0, sd_sector_buf_ready};
+                                            8'd60: dbg_train_val = {31'd0, imgload_active};
+                                            8'd61: dbg_train_val = {31'd0, imgload_word_valid};
+                                            8'd62: dbg_train_val = {8'd0, sd_status};
+                                            8'd63: dbg_train_val = {8'd0, sd_wait_counter};
+                                            default: dbg_train_val = 32'd0;
+                                        endcase
+                                        resp_status    <= STATUS_OK;
+                                        resp_result    <= dbg_train_val;
+                                        resp_checksum  <= 8'h00;
+                                        response_ready <= 1'b1;
+                                    end else begin
+                                        resp_status    <= STATUS_BAD_PACKET;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= 8'h00;
                                         response_ready <= 1'b1;
                                     end
                                 end
@@ -3370,12 +3769,12 @@ module top_level(
                                     if (req_nargs == 8'd2) begin
                                         resp_status    <= STATUS_OK;
                                         resp_result    <= TRAIN_ENABLE ? TRAIN_CAPS_VALUE : 32'd0;
-                                        resp_checksum  <= calc_resp_checksum(STATUS_OK, TRAIN_ENABLE ? TRAIN_CAPS_VALUE : 32'd0);
+                                        resp_checksum  <= 8'h00;
                                         response_ready <= 1'b1;
                                     end else begin
                                         resp_status    <= STATUS_BAD_PACKET;
                                         resp_result    <= 32'sd0;
-                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                                        resp_checksum  <= 8'h00;
                                         response_ready <= 1'b1;
                                     end
                                 end
@@ -3411,66 +3810,7 @@ module top_level(
                                     end else begin
                                         resp_status    <= STATUS_BAD_PACKET;
                                         resp_result    <= TRAIN_CAPS_VALUE;
-                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, TRAIN_CAPS_VALUE);
-                                        response_ready <= 1'b1;
-                                    end
-                                end
-                                OP_TRAIN_RUN_SAMPLE_PHASE4: begin
-                                    // arg0 = inj steps (>0), arg1 = tile_rows (>0); retries max_fr in-FPGA before synthetic trace/STDP + blank.
-                                    if ((req_nargs == 8'd2) &&
-                                        (arg0 > 0) && (arg0 <= 32'sd65535) &&
-                                        (arg1 > 0) && (arg1 <= N_NEURONS) &&
-                                        ddr_calib_complete_core &&
-                                        !ddr_req_pending_core &&
-                                        !train_trace_active &&
-                                        !train_stdp_active &&
-                                        !train_stdp_batch_active &&
-                                        !train_chunk_active) begin
-                                        train_chunk_active       <= 1'b1;
-                                        train_chunk_mode         <= 3'd4;
-                                        train_chunk_state        <= TCK_INFER_START;
-                                        train_chunk_samples_left <= 16'd1;
-                                        // mine.py alignment: STDP update is over all neurons, not tiled.
-                                        train_chunk_tile_rows    <= N_NEURONS[6:0];
-                                        train_chunk_steps_left   <= arg0[15:0];
-                                        train_chunk_seed_xin     <= 32'h13579BDF;
-                                        train_chunk_seed_xexc    <= 32'h2468ACE1;
-                                        train_chunk_winner       <= 7'd0;
-                                        train_chunk_pre_idx      <= 10'd0;
-                                        train_chunk_last_infer_spikes <= 32'd0;
-                                        train_chunk_last_blank_spikes <= 32'd0;
-                                        train_chunk_retry_curr_max_fr <= TRAIN_RETRY_MAX_FR_START;
-                                        train_chunk_retry_accepted_max_fr <= TRAIN_RETRY_MAX_FR_START;
-                                        train_chunk_retry_continue_infer <= 1'b0;
-                                        train_stdp_update_nt <= {16'd0, arg0[15:0]};
-                                        infer_poisson_num_const_cfg <= POISSON_NUM_CONST;
-                                    end else begin
-                                        resp_status    <= STATUS_BAD_PACKET;
-                                        // [31:24]=0x38 tag, [23]=calib, [22]=ddr_pending, [21]=trace,
-                                        // [20]=stdp, [19]=stdp_batch, [18]=chunk, [17]=label_stats, [16]=infer.
-                                        // [15:8]=req_nargs, [7:0]=arg1(tile_rows) low8.
-                                        resp_result    <= {8'h38,
-                                                           ddr_calib_complete_core,
-                                                           ddr_req_pending_core,
-                                                           train_trace_active,
-                                                           train_stdp_active,
-                                                           train_stdp_batch_active,
-                                                           train_chunk_active,
-                                                           train_label_stats_active,
-                                                           infer_active,
-                                                           req_nargs,
-                                                           arg1[7:0]};
-                                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {8'h38,
-                                                           ddr_calib_complete_core,
-                                                           ddr_req_pending_core,
-                                                           train_trace_active,
-                                                           train_stdp_active,
-                                                           train_stdp_batch_active,
-                                                           train_chunk_active,
-                                                           train_label_stats_active,
-                                                           infer_active,
-                                                           req_nargs,
-                                                           arg1[7:0]});
+                                        resp_checksum  <= 8'h00;
                                         response_ready <= 1'b1;
                                     end
                                 end
@@ -3478,7 +3818,7 @@ module top_level(
                                     resp_status    <= STATUS_UNSUPPORTED_OP;
                                     // Debug payload: [31:24]=0xF1, [23:16]=req_opcode, [15:8]=req_nargs, [7:0]=rx_state
                                     resp_result    <= {8'hF1, req_opcode, req_nargs, {5'd0, rx_state}};
-                                    resp_checksum  <= calc_resp_checksum(STATUS_UNSUPPORTED_OP, {8'hF1, req_opcode, req_nargs, {5'd0, rx_state}});
+                                    resp_checksum  <= 8'h00;
                                     response_ready <= 1'b1;
                                 end
                             endcase
@@ -3510,7 +3850,7 @@ module top_level(
                         resp_status    <= STATUS_BAD_PACKET;
                         // [31:24]=reason, [23:16]=opcode, [15]=SD_CD_N, [4:0]=sd_status
                         resp_result    <= {BADDBG_SD_CD_N, OP_SD_SECTORS_TO_DDR, SD_CD_N, 10'd0, sd_status};
-                        resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {BADDBG_SD_CD_N, OP_SD_SECTORS_TO_DDR, SD_CD_N, 10'd0, sd_status});
+                        resp_checksum  <= 8'h00;
                         response_ready <= 1'b1;
                     end else if (sd_ready) begin
                         sd_address    <= sd_copy_lba;
@@ -3529,7 +3869,7 @@ module top_level(
                             resp_status    <= STATUS_BAD_PACKET;
                             // [31:24]=reason, [23:16]=opcode, [15:0]=wait_counter[15:0]
                             resp_result    <= {BADDBG_SD_WAIT_TO, OP_SD_SECTORS_TO_DDR, sd_wait_counter[15:0]};
-                            resp_checksum  <= calc_resp_checksum(STATUS_BAD_PACKET, {BADDBG_SD_WAIT_TO, OP_SD_SECTORS_TO_DDR, sd_wait_counter[15:0]});
+                            resp_checksum  <= 8'h00;
                             response_ready <= 1'b1;
                         end else begin
                             sd_wait_counter <= sd_wait_counter + 24'd1;
@@ -3574,7 +3914,7 @@ module top_level(
                             sd_copy_active <= 1'b0;
                             resp_status    <= STATUS_OK;
                             resp_result    <= sd_copy_words_written;
-                            resp_checksum  <= calc_resp_checksum(STATUS_OK, sd_copy_words_written);
+                            resp_checksum  <= 8'h00;
                             response_ready <= 1'b1;
                         end
                         if (sd_use_sector_limit && (sd_copy_sectors_left == 32'd1)) begin
@@ -3683,7 +4023,7 @@ module top_level(
                             infer_state <= INFER_IDLE;
                             resp_status <= STATUS_BAD_PACKET;
                             resp_result <= 32'sd0;
-                            resp_checksum <= calc_resp_checksum(STATUS_BAD_PACKET, 32'sd0);
+                            resp_checksum  <= 8'h00;
                             response_ready <= 1'b1;
                         end
                     end
@@ -3713,6 +4053,9 @@ module top_level(
                             if (!infer_force_no_input) begin
                                 infer_rng_state <= infer_rng_mul_prod_q32[31:0] + LCG_C;
                             end
+                            infer_pre_spike_wr_en <= 1'b1;
+                            infer_pre_spike_wr_addr <= infer_input_idx;
+                            infer_pre_spike_wr_data <= infer_trace_spike_latched;
                             if (infer_trace_spike_latched) begin
                                 infer_pre_wr_en <= 1'b1;
                                 infer_pre_active_count <= infer_pre_active_count + 10'd1;
@@ -3739,6 +4082,10 @@ module top_level(
                             train_xin_wr_data <= infer_apply_xin_next;
                             infer_trace_phase <= 3'd0;
                             if (infer_input_idx == (N_IN - 1)) begin
+                                infer_dbg_total_input_spikes_generated <= infer_dbg_total_input_spikes_generated + {22'd0, infer_pre_active_count};
+                                if (infer_step_idx == 16'd0) begin
+                                    infer_dbg_first_step_input_spikes <= {22'd0, infer_pre_active_count};
+                                end
                                 infer_input_idx <= 10'd0;
                                 infer_state <= INFER_ACCUM_NEURON;
                             end else begin
@@ -3749,36 +4096,61 @@ module top_level(
                     end
 
                     INFER_ACCUM_NEURON: begin
-                        if (infer_input_idx < infer_pre_active_count) begin
-                            logic [16:0] w_idx;
-                            if (infer_accum_weight_phase == 3'd0) begin
-                                infer_pre_rd_addr <= infer_input_idx;
-                                infer_accum_weight_phase <= 3'd1;
-                            end else if (infer_accum_weight_phase == 3'd1) begin
-                                // prelist BRAM synchronous read latency fill cycle.
-                                infer_accum_weight_phase <= 3'd2;
-                            end else if (infer_accum_weight_phase == 3'd2) begin
-                                w_idx = (infer_neuron_idx * N_IN) + infer_pre_rd_data;
-                                infer_w_rd_addr <= w_idx;
-                                infer_accum_weight_phase <= 3'd3;
-                            end else if (infer_accum_weight_phase == 3'd3) begin
-                                // weight BRAM synchronous read latency fill cycle.
-                                infer_accum_weight_phase <= 3'd4;
-                            end else begin
-                                if (infer_w_rd_data_q != 16'd0) begin
-                                    infer_accum <= infer_accum + $signed({16'd0, infer_w_rd_data_q});
-                                end
-                                infer_input_idx <= infer_input_idx + 10'd1;
-                                infer_accum_weight_phase <= 3'd0;
-                            end
-	                        end else begin
+                        // Sparse O(N_EDGES) accumulation: walk CSR edges for current neuron.
+                        if (infer_accum_weight_phase == 3'd0) begin
+                            csr_row_ptr_rd_addr <= infer_neuron_idx[ROW_IDX_W:0];
+                            infer_accum_weight_phase <= 3'd1;
+                        end else if (infer_accum_weight_phase == 3'd1) begin
+                            infer_evt_edge_idx <= csr_row_ptr_rd_data[W_ADDR_W-1:0];
+                            csr_row_ptr_rd_addr <= infer_neuron_idx[ROW_IDX_W:0] + {{ROW_IDX_W{1'b0}}, 1'b1};
+                            infer_accum_weight_phase <= 3'd2;
+                        end else if (infer_accum_weight_phase == 3'd2) begin
+                            infer_evt_edge_end <= csr_row_ptr_rd_data[W_ADDR_W-1:0];
+                            if (infer_evt_edge_idx >= csr_row_ptr_rd_data[W_ADDR_W-1:0]) begin
                                 infer_delay_pipe_valid <= 1'b1;
                                 infer_delay_pipe_idx <= infer_neuron_idx;
-                                infer_input_idx <= 10'd0;
                                 infer_accum_weight_phase <= 3'd0;
                                 infer_state <= INFER_ACCUM_NEURON_GIN_MUL;
-	                        end
-	                    end
+                            end else begin
+                                csr_col_idx_rd_addr <= infer_evt_edge_idx;
+                                infer_accum_weight_phase <= 3'd3;
+                            end
+                        end else if (infer_accum_weight_phase == 3'd3) begin
+                            infer_pre_spike_rd_addr <= {3'd0, csr_col_idx_rd_data};
+                            infer_accum_weight_phase <= 3'd4;
+                        end else if (infer_accum_weight_phase == 3'd4) begin
+                            if (infer_pre_spike_rd_data) begin
+                                infer_w_rd_addr <= infer_evt_edge_idx;
+                                infer_accum_weight_phase <= 3'd5;
+                            end else begin
+                                if ((infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1}) >= infer_evt_edge_end) begin
+                                    infer_delay_pipe_valid <= 1'b1;
+                                    infer_delay_pipe_idx <= infer_neuron_idx;
+                                    infer_accum_weight_phase <= 3'd0;
+                                    infer_state <= INFER_ACCUM_NEURON_GIN_MUL;
+                                end else begin
+                                    infer_evt_edge_idx <= infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1};
+                                    csr_col_idx_rd_addr <= infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1};
+                                    infer_accum_weight_phase <= 3'd3;
+                                end
+                            end
+                        end else if (infer_accum_weight_phase == 3'd5) begin
+                            // weight BRAM read latency fill cycle.
+                            infer_accum_weight_phase <= 3'd6;
+                        end else begin
+                            infer_accum <= infer_accum + $signed({16'd0, infer_w_rd_data_q});
+                            if ((infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1}) >= infer_evt_edge_end) begin
+                                infer_delay_pipe_valid <= 1'b1;
+                                infer_delay_pipe_idx <= infer_neuron_idx;
+                                infer_accum_weight_phase <= 3'd0;
+                                infer_state <= INFER_ACCUM_NEURON_GIN_MUL;
+                            end else begin
+                                infer_evt_edge_idx <= infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1};
+                                csr_col_idx_rd_addr <= infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1};
+                                infer_accum_weight_phase <= 3'd3;
+                            end
+                        end
+                    end
 
                     INFER_ACCUM_NEURON_GIN_MUL: begin
                         // Register DSP output first to shorten the critical path into g_in pipeline regs.
@@ -4107,7 +4479,7 @@ module top_level(
                             logic run_online_trace_now;
                             logic step_last_now;
                             run_online_trace_now = (TRAIN_ENABLE && train_chunk_active &&
-                                                    ((train_chunk_mode == 3'd3) || (train_chunk_mode == 3'd4)) &&
+                                                    (train_chunk_mode == 3'd3) &&
                                                     !infer_force_no_input);
                             step_last_now = ((infer_step_idx + 16'd1) >= infer_steps_target[15:0]);
 	                        infer_g_inh_state[infer_apply_idx] <= fxp_mul_s16_16(infer_pass2_diff_c_inh, FXP_INH_COEFF);
@@ -4122,11 +4494,14 @@ module top_level(
                                     infer_evt_post_input_idx <= 10'd0;
                                     infer_evt_trace_val <= 32'sd0;
                                     infer_evt_w_cur <= 32'sd0;
+                                    infer_evt_edge_idx <= '0;
+                                    infer_evt_edge_end <= '0;
+                                    infer_evt_edge_ptr <= '0;
                                     infer_trace_wait_last_step <= step_last_now;
                                     if (infer_pre_active_count != 10'd0) begin
                                         infer_state <= INFER_EVT_PRE_PRELIST_REQ;
                                     end else if (infer_step_winner_valid) begin
-                                        infer_state <= INFER_EVT_POST_TRACE_REQ;
+                                        infer_state <= INFER_EVT_POST_PTR0_REQ;
                                     end else begin
                                         infer_state <= INFER_EVT_DONE;
                                     end
@@ -4144,7 +4519,7 @@ module top_level(
                                     end else begin
 	                                    resp_status <= STATUS_OK;
 	                                    resp_result <= infer_total_spikes;
-	                                    resp_checksum <= calc_resp_checksum(STATUS_OK, infer_total_spikes);
+	                                    resp_checksum  <= 8'h00;
 	                                    response_ready <= 1'b1;
                                     end
 	                            end else begin
@@ -4170,7 +4545,51 @@ module top_level(
 
                     INFER_EVT_PRE_PRELIST_WAIT: begin
                         infer_evt_pre_idx <= infer_pre_rd_data;
-                        infer_evt_post_idx <= 7'd0;
+                        infer_state <= INFER_EVT_PRE_PTR0_REQ;
+                    end
+
+                    INFER_EVT_PRE_PTR0_REQ: begin
+                        csc_col_ptr_rd_addr <= {1'b0, infer_evt_pre_idx};
+                        infer_state <= INFER_EVT_PRE_PTR0_WAIT;
+                    end
+
+                    INFER_EVT_PRE_PTR0_WAIT: begin
+                        infer_evt_edge_idx <= csc_col_ptr_rd_data[EDGE_ADDR_W-1:0];
+                        infer_state <= INFER_EVT_PRE_PTR1_REQ;
+                    end
+
+                    INFER_EVT_PRE_PTR1_REQ: begin
+                        csc_col_ptr_rd_addr <= {1'b0, infer_evt_pre_idx} + {{COL_IDX_W{1'b0}}, 1'b1};
+                        infer_state <= INFER_EVT_PRE_PTR1_WAIT;
+                    end
+
+                    INFER_EVT_PRE_PTR1_WAIT: begin
+                        infer_evt_edge_end <= csc_col_ptr_rd_data[EDGE_ADDR_W-1:0];
+                        if (infer_evt_edge_idx >= csc_col_ptr_rd_data[EDGE_ADDR_W-1:0]) begin
+                            if ((infer_evt_prelist_idx + 10'd1) >= infer_pre_active_count) begin
+                                if (infer_evt_has_winner) begin
+                                    infer_state <= INFER_EVT_POST_PTR0_REQ;
+                                end else begin
+                                    infer_state <= INFER_EVT_DONE;
+                                end
+                            end else begin
+                                infer_evt_prelist_idx <= infer_evt_prelist_idx + 10'd1;
+                                infer_state <= INFER_EVT_PRE_PRELIST_REQ;
+                            end
+                        end else begin
+                            infer_state <= INFER_EVT_PRE_EDGE_REQ;
+                        end
+                    end
+
+                    INFER_EVT_PRE_EDGE_REQ: begin
+                        csc_row_idx_rd_addr <= infer_evt_edge_idx;
+                        csc_edge_idx_rd_addr <= infer_evt_edge_idx;
+                        infer_state <= INFER_EVT_PRE_EDGE_WAIT;
+                    end
+
+                    INFER_EVT_PRE_EDGE_WAIT: begin
+                        infer_evt_post_idx <= csc_row_idx_rd_data;
+                        infer_evt_edge_ptr <= csc_edge_idx_rd_data;
                         infer_state <= INFER_EVT_PRE_TRACE_REQ;
                     end
 
@@ -4180,10 +4599,8 @@ module top_level(
                     end
 
                     INFER_EVT_PRE_TRACE_WAIT: begin
-                        logic [16:0] w_idx_pre;
                         infer_evt_trace_val <= $signed(train_xexc_rd_data);
-                        w_idx_pre = (infer_evt_post_idx * N_IN) + infer_evt_pre_idx;
-                        infer_w_rd_addr <= w_idx_pre;
+                        infer_w_rd_addr <= infer_evt_edge_ptr;
                         infer_state <= INFER_EVT_PRE_W_WAIT;
                     end
 
@@ -4193,27 +4610,51 @@ module top_level(
                     end
 
                     INFER_EVT_PRE_APPLY: begin
+                        infer_evt_mid_q16 <= fxp_mul_s16_16(TRAIN_LR_M_Q16, infer_evt_w_cur);
+                        infer_state <= INFER_EVT_PRE_APPLY_MUL1;
+                    end
+
+                    INFER_EVT_PRE_APPLY_MUL1: begin
+                        infer_evt_term_prod_q32 <= $signed(infer_evt_mid_q16) * $signed(infer_evt_trace_val);
+                        infer_state <= INFER_EVT_PRE_APPLY_MUL2;
+                    end
+
+                    INFER_EVT_PRE_APPLY_MUL2: begin
+                        if (infer_evt_term_prod_q32 >= 0)
+                            infer_evt_term_q16 <= $signed((infer_evt_term_prod_q32 + 64'sd32768) >>> 16);
+                        else
+                            infer_evt_term_q16 <= $signed((infer_evt_term_prod_q32 - 64'sd32768) >>> 16);
+                        infer_state <= INFER_EVT_PRE_APPLY_CLIP;
+                    end
+
+                    INFER_EVT_PRE_APPLY_CLIP: begin
                         logic signed [31:0] dW_q16;
+                        dW_q16 = -infer_evt_term_q16;
+                        if (dW_q16 > TRAIN_CLIP_DW_Q16)
+                            dW_q16 = TRAIN_CLIP_DW_Q16;
+                        else if (dW_q16 < -TRAIN_CLIP_DW_Q16)
+                            dW_q16 = -TRAIN_CLIP_DW_Q16;
+                        infer_evt_dw_q16 <= dW_q16;
+                        infer_state <= INFER_EVT_PRE_APPLY_WNEXT;
+                    end
+
+                    INFER_EVT_PRE_APPLY_WNEXT: begin
                         logic signed [31:0] w_next_q16;
-                        logic [16:0] w_idx_pre;
-                        // Lightweight phase2 update: constant depression step gated by post trace activity.
-                        dW_q16 = (infer_evt_trace_val != 32'sd0) ? (-TRAIN_CLIP_DW_Q16) : 32'sd0;
-                        w_next_q16 = infer_evt_w_cur + dW_q16;
+                        w_next_q16 = infer_evt_w_cur + infer_evt_dw_q16;
                         if (w_next_q16 > TRAIN_WMAX_Q16)
                             w_next_q16 = TRAIN_WMAX_Q16;
                         else if (w_next_q16 < TRAIN_WMIN_Q16)
                             w_next_q16 = TRAIN_WMIN_Q16;
+                        infer_evt_w_next_q16 <= w_next_q16;
                         if (w_next_q16[15:0] != infer_evt_w_cur[15:0]) begin
-                            w_idx_pre = (infer_evt_post_idx * N_IN) + infer_evt_pre_idx;
                             infer_w_wr_en   <= 1'b1;
-                            infer_w_wr_addr <= w_idx_pre;
+                            infer_w_wr_addr <= infer_evt_edge_ptr;
                             infer_w_wr_data <= w_next_q16[15:0];
                         end
-                        if (infer_evt_post_idx == (N_NEURONS - 1)) begin
+                        if ((infer_evt_edge_idx + {{(EDGE_ADDR_W-1){1'b0}},1'b1}) >= infer_evt_edge_end) begin
                             if ((infer_evt_prelist_idx + 10'd1) >= infer_pre_active_count) begin
                                 if (infer_evt_has_winner) begin
-                                    infer_evt_post_input_idx <= 10'd0;
-                                    infer_state <= INFER_EVT_POST_TRACE_REQ;
+                                    infer_state <= INFER_EVT_POST_PTR0_REQ;
                                 end else begin
                                     infer_state <= INFER_EVT_DONE;
                                 end
@@ -4222,9 +4663,44 @@ module top_level(
                                 infer_state <= INFER_EVT_PRE_PRELIST_REQ;
                             end
                         end else begin
-                            infer_evt_post_idx <= infer_evt_post_idx + 7'd1;
-                            infer_state <= INFER_EVT_PRE_TRACE_REQ;
+                            infer_evt_edge_idx <= infer_evt_edge_idx + {{(EDGE_ADDR_W-1){1'b0}},1'b1};
+                            infer_state <= INFER_EVT_PRE_EDGE_REQ;
                         end
+                    end
+
+                    INFER_EVT_POST_PTR0_REQ: begin
+                        csr_row_ptr_rd_addr <= infer_evt_winner_idx[ROW_IDX_W:0];
+                        infer_state <= INFER_EVT_POST_PTR0_WAIT;
+                    end
+
+                    INFER_EVT_POST_PTR0_WAIT: begin
+                        infer_evt_edge_idx <= csr_row_ptr_rd_data[EDGE_ADDR_W-1:0];
+                        infer_state <= INFER_EVT_POST_PTR1_REQ;
+                    end
+
+                    INFER_EVT_POST_PTR1_REQ: begin
+                        csr_row_ptr_rd_addr <= infer_evt_winner_idx[ROW_IDX_W:0] + {{ROW_IDX_W{1'b0}}, 1'b1};
+                        infer_state <= INFER_EVT_POST_PTR1_WAIT;
+                    end
+
+                    INFER_EVT_POST_PTR1_WAIT: begin
+                        infer_evt_edge_end <= csr_row_ptr_rd_data[EDGE_ADDR_W-1:0];
+                        if (infer_evt_edge_idx >= csr_row_ptr_rd_data[EDGE_ADDR_W-1:0]) begin
+                            infer_state <= INFER_EVT_DONE;
+                        end else begin
+                            infer_state <= INFER_EVT_POST_EDGE_REQ;
+                        end
+                    end
+
+                    INFER_EVT_POST_EDGE_REQ: begin
+                        csr_col_idx_rd_addr <= infer_evt_edge_idx;
+                        infer_state <= INFER_EVT_POST_EDGE_WAIT;
+                    end
+
+                    INFER_EVT_POST_EDGE_WAIT: begin
+                        infer_evt_post_input_idx <= {3'd0, csr_col_idx_rd_data};
+                        infer_evt_edge_ptr <= infer_evt_edge_idx;
+                        infer_state <= INFER_EVT_POST_TRACE_REQ;
                     end
 
                     INFER_EVT_POST_TRACE_REQ: begin
@@ -4233,40 +4709,64 @@ module top_level(
                     end
 
                     INFER_EVT_POST_TRACE_WAIT: begin
-                        logic [16:0] w_idx_post;
                         infer_evt_trace_val <= $signed(train_xin_rd_data);
-                        w_idx_post = (infer_evt_winner_idx * N_IN) + infer_evt_post_input_idx;
-                        infer_w_rd_addr <= w_idx_post;
+                        infer_w_rd_addr <= infer_evt_edge_ptr;
                         infer_state <= INFER_EVT_POST_W_WAIT;
                     end
 
                     INFER_EVT_POST_W_WAIT: begin
                         infer_evt_w_cur <= $signed({16'd0, infer_w_rd_data});
+                        infer_evt_w_gap_q16 <= (TRAIN_WMAX_Q16 - $signed({16'd0, infer_w_rd_data}));
                         infer_state <= INFER_EVT_POST_APPLY;
                     end
 
                     INFER_EVT_POST_APPLY: begin
+                        infer_evt_mid_q16 <= fxp_mul_s16_16(TRAIN_LR_P_Q16, infer_evt_w_gap_q16);
+                        infer_state <= INFER_EVT_POST_APPLY_MUL1;
+                    end
+
+                    INFER_EVT_POST_APPLY_MUL1: begin
+                        infer_evt_term_prod_q32 <= $signed(infer_evt_mid_q16) * $signed(infer_evt_trace_val);
+                        infer_state <= INFER_EVT_POST_APPLY_MUL2;
+                    end
+
+                    INFER_EVT_POST_APPLY_MUL2: begin
+                        if (infer_evt_term_prod_q32 >= 0)
+                            infer_evt_term_q16 <= $signed((infer_evt_term_prod_q32 + 64'sd32768) >>> 16);
+                        else
+                            infer_evt_term_q16 <= $signed((infer_evt_term_prod_q32 - 64'sd32768) >>> 16);
+                        infer_state <= INFER_EVT_POST_APPLY_CLIP;
+                    end
+
+                    INFER_EVT_POST_APPLY_CLIP: begin
                         logic signed [31:0] dW_q16;
+                        dW_q16 = infer_evt_term_q16;
+                        if (dW_q16 > TRAIN_CLIP_DW_Q16)
+                            dW_q16 = TRAIN_CLIP_DW_Q16;
+                        else if (dW_q16 < -TRAIN_CLIP_DW_Q16)
+                            dW_q16 = -TRAIN_CLIP_DW_Q16;
+                        infer_evt_dw_q16 <= dW_q16;
+                        infer_state <= INFER_EVT_POST_APPLY_WNEXT;
+                    end
+
+                    INFER_EVT_POST_APPLY_WNEXT: begin
                         logic signed [31:0] w_next_q16;
-                        logic [16:0] w_idx_post;
-                        // Lightweight phase2 update: constant potentiation step gated by pre trace activity.
-                        dW_q16 = (infer_evt_trace_val != 32'sd0) ? TRAIN_CLIP_DW_Q16 : 32'sd0;
-                        w_next_q16 = infer_evt_w_cur + dW_q16;
+                        w_next_q16 = infer_evt_w_cur + infer_evt_dw_q16;
                         if (w_next_q16 > TRAIN_WMAX_Q16)
                             w_next_q16 = TRAIN_WMAX_Q16;
                         else if (w_next_q16 < TRAIN_WMIN_Q16)
                             w_next_q16 = TRAIN_WMIN_Q16;
+                        infer_evt_w_next_q16 <= w_next_q16;
                         if (w_next_q16[15:0] != infer_evt_w_cur[15:0]) begin
-                            w_idx_post = (infer_evt_winner_idx * N_IN) + infer_evt_post_input_idx;
                             infer_w_wr_en   <= 1'b1;
-                            infer_w_wr_addr <= w_idx_post;
+                            infer_w_wr_addr <= infer_evt_edge_ptr;
                             infer_w_wr_data <= w_next_q16[15:0];
                         end
-                        if (infer_evt_post_input_idx == (N_IN - 1)) begin
+                        if ((infer_evt_edge_idx + {{(EDGE_ADDR_W-1){1'b0}},1'b1}) >= infer_evt_edge_end) begin
                             infer_state <= INFER_EVT_DONE;
                         end else begin
-                            infer_evt_post_input_idx <= infer_evt_post_input_idx + 10'd1;
-                            infer_state <= INFER_EVT_POST_TRACE_REQ;
+                            infer_evt_edge_idx <= infer_evt_edge_idx + {{(EDGE_ADDR_W-1){1'b0}},1'b1};
+                            infer_state <= INFER_EVT_POST_EDGE_REQ;
                         end
                     end
 
@@ -4284,7 +4784,7 @@ module top_level(
                             end else begin
                                 resp_status <= STATUS_OK;
                                 resp_result <= infer_total_spikes;
-                                resp_checksum <= calc_resp_checksum(STATUS_OK, infer_total_spikes);
+                                resp_checksum  <= 8'h00;
                                 response_ready <= 1'b1;
                             end
                         end else begin
@@ -4317,7 +4817,7 @@ module top_level(
                         3'd3: tx_byte <= resp_result[15:8];
                         3'd4: tx_byte <= resp_result[23:16];
                         3'd5: tx_byte <= resp_result[31:24];
-                        3'd6: tx_byte <= resp_checksum;
+                        3'd6: tx_byte <= calc_resp_checksum(resp_status, resp_result);
                         default: tx_byte <= 8'h00;
                     endcase
                     tx_state <= TX_WAIT_DONE;

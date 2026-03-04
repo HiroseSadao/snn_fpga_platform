@@ -3,6 +3,22 @@
 set_property -dict {PACKAGE_PIN N15 IOSTANDARD LVCMOS33} [get_ports {clk_100mhz}]
 create_clock -add -name gclk -period 10.000 -waveform {0 4} [get_ports {clk_100mhz}]
 
+# Inter-clock CDC constraint (lab06-style):
+# Constrain datapath-only delay across controller/core clock domains
+# instead of forcing full setup/hold closure between unrelated clocks.
+set_max_delay -datapath_only 6 \
+    -from [get_clocks clk_controller_clk_wiz_0] \
+    -to   [get_clocks clk_passthrough_clk_wiz_0]
+set_max_delay -datapath_only 6 \
+    -from [get_clocks clk_passthrough_clk_wiz_0] \
+    -to   [get_clocks clk_controller_clk_wiz_0]
+
+# DDR PHY reset fanout goes to many SERDES RST pins; treat min-delay on this
+# asynchronous-style reset network as false for hold analysis.
+set_false_path -hold \
+    -from [get_pins -hier -quiet *u_ddr3_top/ddr3_phy_inst/sync_rst_reg/Q] \
+    -to   [get_pins -hier -quiet *u_ddr3_top/ddr3_phy_inst/*SERDESE2*/RST]
+
 
 # Set Bank 0 voltage
 #set_property CFGBVS VCCO [current_design]
