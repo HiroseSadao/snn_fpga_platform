@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Wed Mar  4 04:08:51 2026
-| Host         : eecs-digital-04 running 64-bit Ubuntu 24.04.3 LTS
+| Date         : Thu Mar  5 02:06:25 2026
+| Host         : eecs-digital-13 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_timing -file obj/post_place_timing.rpt
 | Design       : top_level
 | Device       : 7s50-csga324
@@ -12,20 +12,20 @@ Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanc
 
 Timing Report
 
-Slack (MET) :             0.129ns  (required time - arrival time)
-  Source:                 train_chunk_seed_xin_reg[14]/C
-                            (rising edge-triggered cell FDRE clocked by clk_passthrough_clk_wiz_0  {rise@0.000ns fall@5.000ns period=10.000ns})
-  Destination:            train_chunk_seed_xin_reg[31]/D
+Slack (MET) :             0.173ns  (required time - arrival time)
+  Source:                 train_gen_lcg_state1/CLK
+                            (rising edge-triggered cell DSP48E1 clocked by clk_passthrough_clk_wiz_0  {rise@0.000ns fall@5.000ns period=10.000ns})
+  Destination:            train_gen_lcg_state1__0_i_1_psdsp/D
                             (rising edge-triggered cell FDRE clocked by clk_passthrough_clk_wiz_0  {rise@0.000ns fall@5.000ns period=10.000ns})
   Path Group:             clk_passthrough_clk_wiz_0
   Path Type:              Setup (Max at Slow Process Corner)
   Requirement:            10.000ns  (clk_passthrough_clk_wiz_0 rise@10.000ns - clk_passthrough_clk_wiz_0 rise@0.000ns)
-  Data Path Delay:        9.554ns  (logic 7.358ns (77.015%)  route 2.196ns (22.985%))
-  Logic Levels:           8  (CARRY4=4 DSP48E1=2 LUT1=1 LUT2=1)
-  Clock Path Skew:        -0.022ns (DCD - SCD + CPR)
-    Destination Clock Delay (DCD):    -1.624ns = ( 8.376 - 10.000 ) 
-    Source Clock Delay      (SCD):    -1.036ns
-    Clock Pessimism Removal (CPR):    0.567ns
+  Data Path Delay:        9.541ns  (logic 6.951ns (72.854%)  route 2.590ns (27.146%))
+  Logic Levels:           7  (CARRY4=4 DSP48E1=1 LUT1=1 LUT6=1)
+  Clock Path Skew:        -0.132ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    -1.616ns = ( 8.384 - 10.000 ) 
+    Source Clock Delay      (SCD):    -0.932ns
+    Clock Pessimism Removal (CPR):    0.553ns
   Clock Uncertainty:      0.074ns  ((TSJ^2 + DJ^2)^1/2) / 2 + PE
     Total System Jitter     (TSJ):    0.071ns
     Discrete Jitter          (DJ):    0.129ns
@@ -43,34 +43,32 @@ Slack (MET) :             0.129ns  (required time - arrival time)
                                                      -7.025    -4.352 r  u_ddr_clk_wiz/mmcm_adv_inst/CLKOUT5
                          net (fo=1, estimated)        1.666    -2.686    u_ddr_clk_wiz/clk_passthrough_clk_wiz_0
     BUFGCTRL_X0Y4        BUFG (Prop_bufg_I_O)         0.096    -2.590 r  u_ddr_clk_wiz/clkout6_buf/O
-                         net (fo=13669, estimated)    1.554    -1.036    core_clk
-    SLICE_X12Y27         FDRE                                         r  train_chunk_seed_xin_reg[14]/C
+                         net (fo=13632, estimated)    1.658    -0.932    core_clk
+    DSP48_X0Y15          DSP48E1                                      r  train_gen_lcg_state1/CLK
   -------------------------------------------------------------------    -------------------
-    SLICE_X12Y27         FDRE (Prop_fdre_C_Q)         0.518    -0.518 r  train_chunk_seed_xin_reg[14]/Q
-                         net (fo=3, estimated)        0.433    -0.085    data1[6]
-    DSP48_X0Y10          DSP48E1 (Prop_dsp48e1_B[14]_PCOUT[47])
-                                                      3.851     3.766 r  train_chunk_seed_xin1/PCOUT[47]
-                         net (fo=1, estimated)        0.000     3.766    train_chunk_seed_xin1_n_106
-    DSP48_X0Y11          DSP48E1 (Prop_dsp48e1_PCIN[47]_P[1])
-                                                      1.518     5.284 f  train_chunk_seed_xin1__0/P[1]
-                         net (fo=2, estimated)        0.619     5.903    u_uart_rx/train_chunk_seed_xin_reg[31][1]
-    SLICE_X11Y26         LUT1 (Prop_lut1_I0_O)        0.124     6.027 r  u_uart_rx/train_chunk_seed_xin[20]_i_4/O
-                         net (fo=1, routed)           0.000     6.027    u_uart_rx/train_chunk_seed_xin[20]_i_4_n_0
-    SLICE_X11Y26         CARRY4 (Prop_carry4_S[1]_CO[3])
-                                                      0.550     6.577 r  u_uart_rx/train_chunk_seed_xin_reg[20]_i_2/CO[3]
-                         net (fo=1, estimated)        0.000     6.577    u_uart_rx/train_chunk_seed_xin_reg[20]_i_2_n_0
-    SLICE_X11Y27         CARRY4 (Prop_carry4_CI_CO[3])
-                                                      0.114     6.691 r  u_uart_rx/train_chunk_seed_xin_reg[24]_i_2/CO[3]
-                         net (fo=1, estimated)        0.000     6.691    u_uart_rx/train_chunk_seed_xin_reg[24]_i_2_n_0
-    SLICE_X11Y28         CARRY4 (Prop_carry4_CI_CO[3])
-                                                      0.114     6.805 r  u_uart_rx/train_chunk_seed_xin_reg[28]_i_2/CO[3]
-                         net (fo=1, estimated)        0.000     6.805    u_uart_rx/train_chunk_seed_xin_reg[28]_i_2_n_0
-    SLICE_X11Y29         CARRY4 (Prop_carry4_CI_O[2])
-                                                      0.239     7.044 r  u_uart_rx/train_chunk_seed_xin_reg[31]_i_4/O[2]
-                         net (fo=1, estimated)        0.808     7.852    u_uart_rx/train_chunk_seed_xin_reg[31]_i_4_n_5
-    SLICE_X13Y28         LUT2 (Prop_lut2_I0_O)        0.330     8.182 r  u_uart_rx/train_chunk_seed_xin[31]_i_2/O
-                         net (fo=1, estimated)        0.336     8.518    train_chunk_seed_xin1_out[31]
-    SLICE_X12Y27         FDRE                                         r  train_chunk_seed_xin_reg[31]/D
+    DSP48_X0Y15          DSP48E1 (Prop_dsp48e1_CLK_PCOUT[47])
+                                                      4.008     3.076 r  train_gen_lcg_state1/PCOUT[47]
+                         net (fo=1, estimated)        0.000     3.076    train_gen_lcg_state1_n_106
+    DSP48_X0Y16          DSP48E1 (Prop_dsp48e1_PCIN[47]_P[0])
+                                                      1.518     4.594 f  train_gen_lcg_state1__0/P[0]
+                         net (fo=2, estimated)        1.436     6.030    train_gen_lcg_state1__0_n_105
+    SLICE_X28Y29         LUT1 (Prop_lut1_I0_O)        0.124     6.154 r  train_gen_lcg_state1__0_i_34/O
+                         net (fo=1, routed)           0.000     6.154    train_gen_lcg_state1__0_i_34_n_0
+    SLICE_X28Y29         CARRY4 (Prop_carry4_S[0]_CO[3])
+                                                      0.532     6.686 r  train_gen_lcg_state1__0_i_22/CO[3]
+                         net (fo=1, estimated)        0.000     6.686    train_gen_lcg_state1__0_i_22_n_0
+    SLICE_X28Y30         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     6.800 r  train_gen_lcg_state1__0_i_18/CO[3]
+                         net (fo=1, estimated)        0.000     6.800    train_gen_lcg_state1__0_i_18_n_0
+    SLICE_X28Y31         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     6.914 r  train_gen_lcg_state1__0_i_17/CO[3]
+                         net (fo=1, estimated)        0.000     6.914    train_gen_lcg_state1__0_i_17_n_0
+    SLICE_X28Y32         CARRY4 (Prop_carry4_CI_O[2])
+                                                      0.239     7.153 r  train_gen_lcg_state1__0_i_16/O[2]
+                         net (fo=1, estimated)        0.963     8.116    train_gen_lcg_state1__0_i_16_n_5
+    SLICE_X14Y34         LUT6 (Prop_lut6_I1_O)        0.302     8.418 r  train_gen_lcg_state1__0_i_1/O
+                         net (fo=1, estimated)        0.191     8.609    train_gen_lcg_state0_out[31]
+    SLICE_X15Y34         FDRE                                         r  train_gen_lcg_state1__0_i_1_psdsp/D
   -------------------------------------------------------------------    -------------------
 
                          (clock clk_passthrough_clk_wiz_0 rise edge)
@@ -83,16 +81,16 @@ Slack (MET) :             0.129ns  (required time - arrival time)
                                                      -7.279     5.263 r  u_ddr_clk_wiz/mmcm_adv_inst/CLKOUT5
                          net (fo=1, estimated)        1.583     6.846    u_ddr_clk_wiz/clk_passthrough_clk_wiz_0
     BUFGCTRL_X0Y4        BUFG (Prop_bufg_I_O)         0.091     6.937 r  u_ddr_clk_wiz/clkout6_buf/O
-                         net (fo=13669, estimated)    1.439     8.376    core_clk
-    SLICE_X12Y27         FDRE                                         r  train_chunk_seed_xin_reg[31]/C
-                         clock pessimism              0.567     8.942    
-                         clock uncertainty           -0.074     8.869    
-    SLICE_X12Y27         FDRE (Setup_fdre_C_D)       -0.221     8.648    train_chunk_seed_xin_reg[31]
+                         net (fo=13632, estimated)    1.447     8.384    core_clk
+    SLICE_X15Y34         FDRE                                         r  train_gen_lcg_state1__0_i_1_psdsp/C
+                         clock pessimism              0.553     8.936    
+                         clock uncertainty           -0.074     8.863    
+    SLICE_X15Y34         FDRE (Setup_fdre_C_D)       -0.081     8.782    train_gen_lcg_state1__0_i_1_psdsp
   -------------------------------------------------------------------
-                         required time                          8.648    
-                         arrival time                          -8.518    
+                         required time                          8.782    
+                         arrival time                          -8.609    
   -------------------------------------------------------------------
-                         slack                                  0.129    
+                         slack                                  0.173    
 
 
 

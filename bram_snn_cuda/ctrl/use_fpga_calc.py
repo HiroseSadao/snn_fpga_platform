@@ -85,6 +85,10 @@ RAW1_HEADER_BYTES = 20
 RAW1_NUM_IMAGES_DEFAULT = 10_000
 RAW1_TOTAL_BYTES_DEFAULT = RAW1_HEADER_BYTES + RAW1_NUM_IMAGES_DEFAULT + (RAW1_NUM_IMAGES_DEFAULT * N_IN)
 RAW1_TOTAL_SECTORS_DEFAULT = (RAW1_TOTAL_BYTES_DEFAULT + 511) // 512
+IMGLOAD_SRC_BIAS_BYTES = 0
+IMGLOAD_GUARD_SEC = 0.01
+IMG_STAGING_MARGIN_WORDS = 262144  # must match top_level.sv IMG_STAGING_BASE_WORD margin
+
 
 # Fixed-point training constants (mine.py defaults)
 TRAIN_WMAX_Q16 = int(round(0.05 * (1 << FXP_SHIFT)))
@@ -126,10 +130,9 @@ class TrainDDRLayout:
 
 
 def build_train_ddr_layout() -> TrainDDRLayout:
-    """Step1: 学習用メモリマップ（DDR前提）の論理配置を固定する。
+    """Step1: fix the logical DDR layout used by training kernels.
 
-    ここでは word address (32-bit word) 単位で定義する。
-    実FPGA側がまだDDR未接続でも、host/HDL間の契約として先に固定しておく。
+    Layout addresses are defined in 32-bit word units as a host/HDL contract.
     """
     word = 0
     base_w_q16 = word                    # 1 weight / word (lower 16b used)
@@ -165,6 +168,14 @@ def build_train_ddr_layout() -> TrainDDRLayout:
         base_prelist_work=base_prelist_work,
         total_words=word,
     )
+
+
+
+
+def img_staging_base_word() -> int:
+    """Must mirror top_level.sv IMG_STAGING_BASE_WORD."""
+    layout = build_train_ddr_layout()
+    return int(layout.base_prelist_work) + int(IMG_STAGING_MARGIN_WORDS)
 
 
 def calc_checksum(payload: bytes) -> int:
@@ -271,6 +282,13 @@ def decode_bad_packet_result(result: int) -> str:
         return (
             f"reason=SD_SECTOR_LIMIT_END(0x24), "
             f"opcode=0x{opcode:02X}, sectors_left_lo16=0x{arg0_lo16:04X}({arg0_lo16})"
+        )
+    if reason == 0x28:
+        byte_idx = (u >> 2) & 0x3FF
+        lane = u & 0x3
+        return (
+            f"reason=IMGLOAD_DDR_TIMEOUT_OR_RANGE(0x28), "
+            f"opcode=0x{opcode:02X}, byte_idx={byte_idx}, lane={lane}"
         )
     if reason == 0x14:
         return (
@@ -898,58 +916,16 @@ def fpga_ddr_read32(
     return int(result)
 
 
-def fpga_debug_dump_ddr_words(ser: serial.Serial, *, base_word: int, count: int, label: str) -> list[int] | None:
-    """Best-effort DDR word dump for SD->DDR path debugging."""
-    words: list[int] = []
-    try:
-        for i in range(max(0, int(count))):
-            v = fpga_ddr_read32(ser, int(base_word) + i)
-            words.append(int(v) & 0xFFFFFFFF)
-    except Exception as exc:
-        print(f"DDR dump skipped ({label}): {exc}")
-        return None
-    nz = sum(1 for w in words if w != 0)
-    head = " ".join(f"{w:08X}" for w in words[: min(8, len(words))])
-    print(
-        f"DDR dump ({label}): base_word=0x{int(base_word):08X}, count={len(words)}, "
-        f"nonzero={nz}, head=[{head}]"
-    )
-    return words
-
-
-def fpga_debug_dump_raw_image_head(
+def fpga_read_ddr_words(
     ser: serial.Serial,
     *,
-    start_idx: int = 0,
-    nbytes: int = 64,
-    label: str = "raw_image0",
-) -> list[int] | None:
-    """Best-effort raw_image0 dump after DDR->raw_image load."""
-    try:
-        s = max(0, min(int(start_idx), int(N_IN)))
-        n = max(0, min(int(nbytes), int(N_IN) - s))
-        head: list[int] = []
-        for idx in range(n):
-            status, value = send_request(
-                ser,
-                OP_READ_RAW_U8,
-                [s + idx, 0],
-                response_timeout=1.0,
-                transient_retry_max=max(TRANSIENT_RETRY_MAX, 8),
-            )
-            require_ok(status, f"READ_RAW_U8_DUMP[{s + idx}]")
-            head.append(int(value) & 0xFF)
-    except Exception as exc:
-        print(f"raw_image0 dump skipped ({label}): {exc}")
-        return None
-    nz = sum(1 for b in head if b != 0)
-    ssum = int(sum(head))
-    head_hex = " ".join(f"{b:02X}" for b in head[: min(32, len(head))])
-    print(
-        f"raw_image0 dump ({label}): start=0x{s:03X}, nbytes={len(head)}, nonzero={nz}, sum={ssum}, "
-        f"head32=[{head_hex}]"
-    )
-    return head
+    base_word: int,
+    count: int,
+) -> list[int]:
+    out: list[int] = []
+    for i in range(max(0, int(count))):
+        out.append(fpga_ddr_read32(ser, int(base_word) + i))
+    return out
 
 
 def _ddr_words_to_bytes_le(words: list[int]) -> list[int]:
@@ -960,6 +936,43 @@ def _ddr_words_to_bytes_le(words: list[int]) -> list[int]:
         out.append((ww >> 8) & 0xFF)
         out.append((ww >> 16) & 0xFF)
         out.append((ww >> 24) & 0xFF)
+    return out
+
+
+def _count_mismatch(a: list[int], b: list[int]) -> int:
+    n = min(len(a), len(b))
+    return sum(1 for i in range(n) if int(a[i]) != int(b[i]))
+
+
+def _first_nonzero_indices(data: list[int], *, limit: int = 8) -> list[int]:
+    out: list[int] = []
+    for i, v in enumerate(data):
+        if int(v) != 0:
+            out.append(i)
+            if len(out) >= int(limit):
+                break
+    return out
+
+
+def fpga_read_raw_image_span(
+    ser: serial.Serial,
+    *,
+    start_idx: int,
+    nbytes: int,
+) -> list[int]:
+    s = max(0, min(int(start_idx), int(N_IN)))
+    n = max(0, min(int(nbytes), int(N_IN) - s))
+    out: list[int] = []
+    for idx in range(n):
+        status, value = send_request(
+            ser,
+            OP_READ_RAW_U8,
+            [s + idx, 0],
+            response_timeout=1.0,
+            transient_retry_max=max(TRANSIENT_RETRY_MAX, 8),
+        )
+        require_ok(status, f"READ_RAW_U8_SPAN[{s + idx}]")
+        out.append(int(value) & 0xFF)
     return out
 
 
@@ -1517,7 +1530,7 @@ def fpga_trace_update_kernel(
     winner_idx: int,
     pre_count: int,
 ) -> int:
-    """Kernel trigger only. Data搬入(x_in/x_exc/prelist)は別opcode実装前提。"""
+    """Kernel trigger only. x_in/x_exc/prelist are prepared by other opcodes."""
     time.sleep(0.01)
     try:
         status, result = send_request(
@@ -2334,86 +2347,142 @@ def prepare_fpga_sample_image_via_streamed_load(
 ) -> None:
     if int(sample_idx) < 0:
         raise ValueError(f"sample_idx must be >=0, got {sample_idx}")
+
     img_byte_off = RAW1_HEADER_BYTES + RAW1_NUM_IMAGES_DEFAULT + (int(sample_idx) * N_IN)
     img_sector_off = img_byte_off // 512
     img_byte_in_sector = img_byte_off % 512
-    sectors_needed = (img_byte_in_sector + N_IN + 511) // 512
+    img_base_addr_byte = int(img_byte_in_sector)
+    sectors_needed = (img_byte_in_sector + IMGLOAD_SRC_BIAS_BYTES + N_IN + 511) // 512
+
     if verbose:
         print(
             "Preparing input image via streamed FPGA image load path: "
             f"sample_idx={int(sample_idx)}, sector_off={img_sector_off}, sectors={sectors_needed}, "
-            f"byte_in_sector={img_byte_in_sector}"
+            f"byte_in_sector={img_byte_in_sector}, src_bias_bytes={IMGLOAD_SRC_BIAS_BYTES}"
         )
-    try:
-        fpga_sd_sectors_to_ddr(
-            ser=ser,
-            start_lba=int(start_lba) + img_sector_off,
-            num_sectors=sectors_needed,
-            timeout_sec=timeout_sec,
-            verbose=verbose,
+
+    fpga_sd_sectors_to_ddr(
+        ser=ser,
+        start_lba=int(start_lba) + img_sector_off,
+        num_sectors=sectors_needed,
+        timeout_sec=timeout_sec,
+        verbose=verbose,
+    )
+
+    # Host-side guard to avoid first-word mis-association on older RTL builds.
+    if IMGLOAD_GUARD_SEC > 0.0:
+        time.sleep(IMGLOAD_GUARD_SEC)
+
+    fpga_load_image_from_ddr(
+        ser=ser,
+        base_addr_byte=img_base_addr_byte,
+        n_bytes=N_IN,
+        timeout_sec=timeout_sec,
+        verbose=verbose,
+    )
+
+    # Verify against the same MNIST source/quantization path used by import_MNIST_raw.py.
+    expected_img_u8, _ = read_mnist_image_u8(int(sample_idx))
+    raw_slice = fpga_read_raw_image_span(ser, start_idx=0, nbytes=N_IN)
+
+    if len(raw_slice) != N_IN:
+        raise RuntimeError(
+            "MNIST->raw_image0 verify failed to collect enough bytes: "
+            f"raw={len(raw_slice)}, expected={N_IN}"
         )
-        # Fixed debug window requested: dump from base_word=0x49.
-        ddr_words = fpga_debug_dump_ddr_words(
-            ser,
-            base_word=0x49,
-            count=20,
-            label=f"after SD->DDR sample_idx={int(sample_idx)}",
+
+    # DDR source vs raw_image0 diagnostics:
+    # - dump around expected DDR source address
+    # - compare raw against expected and against +/- byte deltas
+    # This makes source-address slips and destination-index slips visible.
+    expected_src_base_byte = int(img_base_addr_byte) + int(IMGLOAD_SRC_BIAS_BYTES)
+    staging_base_word = img_staging_base_word()
+    probe_margin_bytes = 64
+    probe_span_bytes = N_IN + (2 * probe_margin_bytes)
+    probe_base_byte = max(0, expected_src_base_byte - probe_margin_bytes)
+    probe_base_word = int(staging_base_word) + (probe_base_byte // 4)
+    probe_byte_off_in_word = probe_base_byte % 4
+    probe_words = (probe_byte_off_in_word + probe_span_bytes + 3) // 4
+
+    ddr_probe_words = fpga_read_ddr_words(
+        ser,
+        base_word=probe_base_word,
+        count=probe_words,
+    )
+    ddr_probe_bytes = _ddr_words_to_bytes_le(ddr_probe_words)
+    ddr_probe_bytes = ddr_probe_bytes[probe_byte_off_in_word:probe_byte_off_in_word + probe_span_bytes]
+    expected_off_in_probe = expected_src_base_byte - probe_base_byte
+    ddr_expected = ddr_probe_bytes[expected_off_in_probe:expected_off_in_probe + N_IN]
+
+    cmp_len = min(128, len(ddr_expected), len(raw_slice))
+    mism_expected = _count_mismatch(ddr_expected[:cmp_len], raw_slice[:cmp_len])
+    best_delta = 0
+    best_delta_mism = 10**9
+    for delta in range(-64, 65):
+        d0 = expected_off_in_probe + delta
+        d1 = d0 + cmp_len
+        if d0 < 0 or d1 > len(ddr_probe_bytes):
+            continue
+        m = _count_mismatch(ddr_probe_bytes[d0:d1], raw_slice[:cmp_len])
+        if m < best_delta_mism:
+            best_delta_mism = m
+            best_delta = delta
+
+    best_raw_start = 0
+    best_raw_start_mism = 10**9
+    for raw_start in range(0, min(257, max(1, len(raw_slice) - cmp_len + 1))):
+        m = _count_mismatch(ddr_expected[:cmp_len], raw_slice[raw_start:raw_start + cmp_len])
+        if m < best_raw_start_mism:
+            best_raw_start_mism = m
+            best_raw_start = raw_start
+
+    if verbose:
+        dump_cols = 32
+        dump_len = min(len(expected_img_u8), len(raw_slice))
+        print(
+            "DDR source probe: "
+            f"staging_base_word=0x{staging_base_word:08X}, "
+            f"expected_base_off=0x{expected_src_base_byte:08X}, "
+            f"probe_base_off=0x{probe_base_byte:08X}, span={probe_span_bytes}B"
         )
-        fpga_load_image_from_ddr(
-            ser=ser,
-            base_addr_byte=img_byte_in_sector,
-            n_bytes=N_IN,
-            timeout_sec=timeout_sec,
-            verbose=verbose,
-        )
-        # raw_image0 multi-offset probe (requested):
-        # start=0x000, 0x100, 0x200; each 64 bytes.
-        raw_dump_start0: list[int] | None = None
-        for start_off in (0x000, 0x100, 0x200):
-            raw_head = fpga_debug_dump_raw_image_head(
-                ser,
-                start_idx=start_off,
-                nbytes=64,
-                label=f"after DDR->raw_image sample_idx={int(sample_idx)} off=0x{start_off:03X}",
+        print(f"DDR expected full ({dump_len}B):")
+        for i in range(0, dump_len, dump_cols):
+            print(
+                f"  [{i:03d}:{min(i + dump_cols, dump_len):03d}] "
+                + " ".join(f"{int(x)&0xFF:02X}" for x in expected_img_u8[i:i + dump_cols])
             )
-            if start_off == 0x000:
-                raw_dump_start0 = raw_head
-        # Verification-2: compare DDR[0x124..0x124+63] vs raw_image0[0..63]
-        if (ddr_words is not None) and (raw_dump_start0 is not None):
-            ddr_bytes = _ddr_words_to_bytes_le(ddr_words)
-            if len(ddr_bytes) >= 4:
-                b0, b1, b2, b3 = ddr_bytes[0], ddr_bytes[1], ddr_bytes[2], ddr_bytes[3]
-                print(
-                    "DDR base_byte[0x124] 4B: "
-                    f"{b0:02X} {b1:02X} {b2:02X} {b3:02X}"
-                )
-            # base_byte=0x124 -> offset 0 in base_word=0x49 window.
-            ddr_slice = ddr_bytes[:64]
-            raw_slice = raw_dump_start0[:64]
-            mism = [i for i, (a, b) in enumerate(zip(ddr_slice, raw_slice)) if a != b]
-            if len(ddr_slice) < 64 or len(raw_slice) < 64:
-                print(
-                    "DDR->raw verify skipped: insufficient bytes "
-                    f"(ddr={len(ddr_slice)}, raw={len(raw_slice)})"
-                )
-            elif not mism:
-                print("DDR->raw verify: PASS (DDR[0x124:0x164] == raw_image0[0:64])")
-            else:
-                i0 = mism[0]
-                print(
-                    "DDR->raw verify: FAIL "
-                    f"(mismatch_count={len(mism)}, first_mismatch=i={i0}, "
-                    f"ddr=0x{ddr_slice[i0]:02X}, raw=0x{raw_slice[i0]:02X})"
-                )
-        try:
-            infer_dbg = fpga_read_infer_debug(ser)
-            if "raw_image0_sum_u8" in infer_dbg:
-                print(f"raw_image0_sum_u8={int(infer_dbg['raw_image0_sum_u8'])}")
-        except Exception as exc:
-            print(f"raw_image0_sum_u8 read skipped: {exc}")
-    except Exception:
-        fpga_probe_runtime_debug(ser, context="prepare_fpga_sample_image_via_streamed_load failure")
-        raise
+        print(f"raw_image0 full ({dump_len}B):")
+        for i in range(0, dump_len, dump_cols):
+            print(
+                f"  [{i:03d}:{min(i + dump_cols, dump_len):03d}] "
+                + " ".join(f"{int(x)&0xFF:02X}" for x in raw_slice[i:i + dump_cols])
+            )
+        print(
+            "DDR<->raw compare: "
+            f"mismatch@delta0={mism_expected}/{cmp_len}, "
+            f"best_delta={best_delta:+d}B (mismatch={best_delta_mism}/{cmp_len}), "
+            f"best_raw_start={best_raw_start} (mismatch={best_raw_start_mism}/{cmp_len}), "
+            f"raw_first_nonzero={_first_nonzero_indices(raw_slice, limit=8)}"
+        )
+
+    mism = [
+        i
+        for i, (exp_b, raw_b) in enumerate(zip(expected_img_u8, raw_slice))
+        if int(exp_b) != int(raw_b)
+    ]
+    if mism:
+        i0 = mism[0]
+        raise RuntimeError(
+            "MNIST->raw_image0 verify: FAIL "
+            f"(sample_idx={int(sample_idx)}, mismatch_count={len(mism)}, "
+            f"first_mismatch=i={i0}, expected=0x{int(expected_img_u8[i0]):02X}, raw=0x{int(raw_slice[i0]):02X})"
+        )
+
+    if verbose:
+        print(
+            "MNIST->raw_image0 verify: PASS "
+            f"(sample_idx={int(sample_idx)}, compared_bytes={N_IN})"
+        )
 
 
 def lcg_next_u32(state: int) -> int:
@@ -3068,42 +3137,95 @@ def fpga_phase3_verify_one_shot(ser: serial.Serial, args: argparse.Namespace) ->
     sample_idx = int(args.sample_idx)
     inj_steps = max(1, int(args.chunk_nsteps))
     tile_rows = max(1, int(args.train_tile_rows))
+    verify_count = 5
     print(
         "Phase3 one-shot verify start: "
-        f"sample_idx={sample_idx}, inj_steps={inj_steps}, tile_rows={tile_rows}, "
+        f"sample_idx={sample_idx}..{sample_idx + verify_count - 1}, "
+        f"inj_steps={inj_steps}, tile_rows={tile_rows}, "
         "mode=phase3 (CSR/CSC edge update + blank)"
     )
 
-    prepare_fpga_sample_image_via_streamed_load(
-        ser,
-        sample_idx=sample_idx,
-        start_lba=int(args.start_lba),
-        timeout_sec=float(args.timeout),
-    )
-    ret = fpga_train_run_sample_phase3(
-        ser,
-        inj_steps=inj_steps,
-        tile_rows=tile_rows,
-    )
-    inj_total = int(ret) & 0xFFFF
-    blank_total = (int(ret) >> 16) & 0xFFFF
-    infer_counts = fpga_read_spike_counts(ser)
-    if len(infer_counts) != N_NEURONS:
-        raise RuntimeError(
-            f"READ_SPIKE_COUNT length mismatch: got {len(infer_counts)}, expected {N_NEURONS}"
-        )
-    infer_sum = int(sum(infer_counts))
-    print(
-        "Phase3 one-shot verify result: "
-        f"phase3_ret=0x{(int(ret) & 0xFFFFFFFF):08X}, "
-        f"inj_total={inj_total}, blank_total={blank_total}, infer_count_sum={infer_sum}"
-    )
-    if infer_sum != (inj_total + blank_total):
-        print(
-            "Warning: infer_count_sum != inj_total+blank_total. "
-            "Run completed, but counter aggregation points differ in this build."
-        )
-    print("Phase3 one-shot verify: PASS")
+    run_ok = 0
+    run_ng = 0
+    run_results: list[dict[str, object]] = []
+
+    for k in range(verify_count):
+        curr_sample_idx = sample_idx + k
+        print(f"  [run {k + 1}/{verify_count}] sample_idx={curr_sample_idx}")
+        try:
+            prepare_fpga_sample_image_via_streamed_load(
+                ser,
+                sample_idx=curr_sample_idx,
+                start_lba=int(args.start_lba),
+                timeout_sec=float(args.timeout),
+            )
+            ret = fpga_train_run_sample_phase3(
+                ser,
+                inj_steps=inj_steps,
+                tile_rows=tile_rows,
+            )
+            inj_total = int(ret) & 0xFFFF
+            blank_total = (int(ret) >> 16) & 0xFFFF
+            infer_counts = fpga_read_spike_counts(ser)
+            if len(infer_counts) != N_NEURONS:
+                raise RuntimeError(
+                    f"READ_SPIKE_COUNT length mismatch: got {len(infer_counts)}, expected {N_NEURONS}"
+                )
+            infer_sum = int(sum(infer_counts))
+
+            run_ok += 1
+            run_results.append(
+                {
+                    "sample_idx": curr_sample_idx,
+                    "ok": True,
+                    "phase3_ret": int(ret) & 0xFFFFFFFF,
+                    "inj_total": inj_total,
+                    "blank_total": blank_total,
+                    "infer_count_sum": infer_sum,
+                    "error": "",
+                }
+            )
+            print(
+                "  result: "
+                f"phase3_ret=0x{(int(ret) & 0xFFFFFFFF):08X}, "
+                f"inj_total={inj_total}, blank_total={blank_total}, infer_count_sum={infer_sum}"
+            )
+            if infer_sum != (inj_total + blank_total):
+                print(
+                    "  Warning: infer_count_sum != inj_total+blank_total. "
+                    "Run completed, but counter aggregation points differ in this build."
+                )
+        except Exception as exc:
+            run_ng += 1
+            run_results.append(
+                {
+                    "sample_idx": curr_sample_idx,
+                    "ok": False,
+                    "phase3_ret": 0,
+                    "inj_total": 0,
+                    "blank_total": 0,
+                    "infer_count_sum": 0,
+                    "error": str(exc),
+                }
+            )
+            print(f"  run failed: {exc}")
+
+    print("Phase3 verify summary (5 samples):")
+    for r in run_results:
+        if bool(r["ok"]):
+            print(
+                f"  sample_idx={int(r['sample_idx'])}: OK, "
+                f"phase3_ret=0x{int(r['phase3_ret']) & 0xFFFFFFFF:08X}, "
+                f"inj_total={int(r['inj_total'])}, blank_total={int(r['blank_total'])}, "
+                f"infer_count_sum={int(r['infer_count_sum'])}"
+            )
+        else:
+            print(
+                f"  sample_idx={int(r['sample_idx'])}: NG, "
+                f"error={r['error']}"
+            )
+
+    print(f"Phase3 one-shot verify finished: OK={run_ok}, NG={run_ng}")
 
 
 def parse_args() -> argparse.Namespace:
