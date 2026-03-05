@@ -419,6 +419,7 @@ module top_level(
     (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) logic ddr_rsp_toggle_core_sync1, ddr_rsp_toggle_core_sync2;
     logic        ddr_rsp_toggle_core_seen;
     logic        ddr_rsp_capture_pending_core;
+    logic        ddr_rsp_payload_ready_core;
     logic        ddr_rsp_drain_active_core;
     logic [1:0]  ddr_rsp_drain_quiet_core;
     logic [31:0] ddr_resp_rdata_core;
@@ -426,9 +427,11 @@ module top_level(
     logic [56:0]  ddr_req_payload_core;
     logic [56:0]  ddr_req_payload_core_reg;
     logic [56:0]  ddr_req_payload_ddr_sync;
-    logic [33:0]  ddr_rsp_payload_ddr;
-    logic [33:0]  ddr_rsp_payload_ddr_reg;
-    logic [33:0]  ddr_rsp_payload_core_sync;
+    logic [34:0]  ddr_rsp_payload_ddr;
+    logic [34:0]  ddr_rsp_payload_ddr_reg;
+    logic [34:0]  ddr_rsp_payload_core_sync;
+    logic        ddr_req_tag_ddr;
+    logic        ddr_rsp_req_tag_ddr;
     logic        ddr_rsp_was_write_ddr;
     logic        ddr_resp_was_write_core;
 
@@ -855,8 +858,9 @@ module top_level(
             ddr_req_we_core              // [0]
         };
         ddr_rsp_payload_ddr = {
-            (ddr_rsp_status_ddr == STATUS_OK), // [33]
-            ddr_rsp_was_write_ddr,             // [32]
+            (ddr_rsp_status_ddr == STATUS_OK), // [34]
+            ddr_rsp_was_write_ddr,             // [33]
+            ddr_rsp_req_tag_ddr,               // [32]
             ddr_rsp_rdata_ddr                  // [31:0]
         };
     end
@@ -880,7 +884,7 @@ module top_level(
         .INIT_SYNC_FF(0),
         .SIM_ASSERT_CHK(0),
         .SRC_INPUT_REG(1),
-        .WIDTH(34)
+        .WIDTH(35)
     ) u_cdc_rsp_payload (
         .src_clk (clk_controller),
         .src_in  (ddr_rsp_payload_ddr_reg),
@@ -1583,6 +1587,8 @@ module top_level(
             ddr_req_wdata_ddr <= 32'd0;
             ddr_rsp_rdata_ddr <= 32'd0;
             ddr_rsp_status_ddr <= STATUS_BAD_PACKET;
+            ddr_req_tag_ddr <= 1'b0;
+            ddr_rsp_req_tag_ddr <= 1'b0;
             ddr_rsp_was_write_ddr <= 1'b0;
         end else begin
             ddr_req_toggle_ddr_sync1 <= ddr_req_toggle_core;
@@ -1593,6 +1599,7 @@ module top_level(
                 DDRBR_IDLE: begin
                     if (ddr_req_toggle_ddr_sync2 != ddr_req_toggle_ddr_seen) begin
                         ddr_req_toggle_ddr_seen <= ddr_req_toggle_ddr_sync2;
+                        ddr_req_tag_ddr <= ddr_req_toggle_ddr_sync2;
                         ddr_req_we_ddr <= ddr_req_payload_ddr_sync[0];
                         ddr_req_addr_word_ddr <= {8'd0, ddr_req_payload_ddr_sync[24:1]};
                         ddr_req_wdata_ddr <= ddr_req_payload_ddr_sync[56:25];
@@ -1603,6 +1610,8 @@ module top_level(
                 DDRBR_ISSUE: begin
                     if (!ddr_calib_complete) begin
                         ddr_rsp_status_ddr <= STATUS_BAD_PACKET;
+                        ddr_rsp_was_write_ddr <= ddr_req_we_ddr;
+                        ddr_rsp_req_tag_ddr <= ddr_req_tag_ddr;
                         ddr_rsp_rdata_ddr  <= 32'sd0;
                         ddr_bridge_state   <= DDRBR_RESP;
                     end else if (!ddr_wb_stall) begin
@@ -1630,6 +1639,7 @@ module top_level(
                     ddr_wb_stb <= 1'b1;
                     if (ddr_wb_ack) begin
                         ddr_rsp_was_write_ddr <= ddr_req_we_ddr;
+                        ddr_rsp_req_tag_ddr <= ddr_req_tag_ddr;
                         if (ddr_req_we_ddr) begin
                             ddr_rsp_status_ddr <= STATUS_OK;
                             ddr_rsp_rdata_ddr  <= ddr_req_addr_word_ddr;
@@ -1698,6 +1708,7 @@ module top_level(
             ddr_rsp_toggle_core_sync2 <= 1'b0;
             ddr_rsp_toggle_core_seen  <= 1'b0;
             ddr_rsp_capture_pending_core <= 1'b0;
+            ddr_rsp_payload_ready_core <= 1'b0;
             ddr_rsp_drain_active_core <= 1'b0;
             ddr_rsp_drain_quiet_core <= 2'd0;
             ddr_resp_rdata_core <= 32'd0;
@@ -2003,22 +2014,27 @@ module top_level(
             end else begin
                 imgload_ddr_wait_counter <= 32'd0;
             end
-
             if (ddr_req_pending_core && !response_ready &&
                 !ddr_rsp_capture_pending_core &&
                 !ddr_rsp_drain_active_core &&
                 (ddr_rsp_toggle_core_sync2 != ddr_rsp_toggle_core_seen)) begin
                 ddr_rsp_toggle_core_seen <= ddr_rsp_toggle_core_sync2;
-                ddr_resp_rdata_core <= ddr_rsp_payload_core_sync[31:0];
-                ddr_resp_status_core <= ddr_rsp_payload_core_sync[33] ? STATUS_OK : STATUS_BAD_PACKET;
-                ddr_resp_was_write_core <= ddr_rsp_payload_core_sync[32];
                 ddr_rsp_capture_pending_core <= 1'b1;
+                ddr_rsp_payload_ready_core <= 1'b0;
                 ddr_rsp_kind_core <= ddr_req_kind_core;
             end
-
             if (ddr_req_pending_core && !response_ready && ddr_rsp_capture_pending_core) begin
-                ddr_rsp_capture_pending_core <= 1'b0;
-                if ((ddr_rsp_kind_core == DDR_REQ_IMGLOAD) && ddr_resp_was_write_core) begin
+                if (!ddr_rsp_payload_ready_core) begin
+                    if (ddr_rsp_payload_core_sync[32] == ddr_req_toggle_core) begin
+                        ddr_resp_rdata_core <= ddr_rsp_payload_core_sync[31:0];
+                        ddr_resp_status_core <= ddr_rsp_payload_core_sync[34] ? STATUS_OK : STATUS_BAD_PACKET;
+                        ddr_resp_was_write_core <= ddr_rsp_payload_core_sync[33];
+                        ddr_rsp_payload_ready_core <= 1'b1;
+                    end
+                end else begin
+                    ddr_rsp_capture_pending_core <= 1'b0;
+                    ddr_rsp_payload_ready_core <= 1'b0;
+                    if ((ddr_rsp_kind_core == DDR_REQ_IMGLOAD) && ddr_resp_was_write_core) begin
                     // Ignore stale write ACK while waiting for an imgload read response.
                 end else begin
                     ddr_req_pending_core <= 1'b0;
@@ -2290,6 +2306,7 @@ module top_level(
                 end
             end
             end
+            end
             if (response_ready || (rx_state == RX_WAIT_SYNC)) begin
                 rx_timeout_counter <= '0;
             end else if (rx_dv) begin
@@ -2411,6 +2428,7 @@ module top_level(
                     if (imgload_addr_word < DDR_ADDR_WORD_LIMIT) begin
                         ddr_rsp_toggle_core_seen <= ddr_rsp_toggle_core_sync2;
                         ddr_rsp_capture_pending_core <= 1'b0;
+                        ddr_rsp_payload_ready_core <= 1'b0;
                         ddr_req_pending_core    <= 1'b1;
                         ddr_req_we_core         <= 1'b0;
                         ddr_req_from_sd_core    <= 1'b0;
@@ -3670,6 +3688,7 @@ module top_level(
                                         sd_sector_buf_ready <= 2'b00;
                                         ddr_rsp_toggle_core_seen <= ddr_rsp_toggle_core_sync2;
                                         ddr_rsp_capture_pending_core <= 1'b0;
+                                        ddr_rsp_payload_ready_core <= 1'b0;
                                         ddr_rsp_drain_active_core <= 1'b1;
                                         ddr_rsp_drain_quiet_core <= 2'd0;
                                         imgload_start_pending <= 1'b1;

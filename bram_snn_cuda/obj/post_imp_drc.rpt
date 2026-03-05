@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Thu Mar  5 03:30:30 2026
-| Host         : eecs-digital-11 running 64-bit Ubuntu 24.04.3 LTS
+| Date         : Thu Mar  5 04:09:27 2026
+| Host         : eecs-digital-17 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_drc -file obj/post_imp_drc.rpt
 | Design       : top_level
 | Device       : xc7s50csga324-1
@@ -24,12 +24,12 @@ Table of Contents
       Design limits: <entire design considered>
            Ruledeck: default
              Max checks: <unlimited>
-             Checks found: 26
+             Checks found: 30
 +----------+----------+-----------------------------------------------------+--------+
 | Rule     | Severity | Description                                         | Checks |
 +----------+----------+-----------------------------------------------------+--------+
 | CFGBVS-1 | Warning  | Missing CFGBVS and CONFIG_VOLTAGE Design Properties | 1      |
-| DPIP-1   | Warning  | Input pipelining                                    | 25     |
+| DPIP-1   | Warning  | Input pipelining                                    | 29     |
 +----------+----------+-----------------------------------------------------+--------+
 
 2. REPORT DETAILS
@@ -99,75 +99,95 @@ Related violations: <none>
 
 DPIP-1#11 Warning
 Input pipelining  
-DSP infer_eval_i_syn_inh_prod_q320 input infer_eval_i_syn_inh_prod_q320/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP infer_eval_i_syn_inh_prod_q320 input infer_eval_i_syn_inh_prod_q320/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#12 Warning
 Input pipelining  
-DSP infer_eval_i_syn_inh_prod_q320__0 input infer_eval_i_syn_inh_prod_q320__0/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP infer_eval_i_syn_inh_prod_q320 input infer_eval_i_syn_inh_prod_q320/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#13 Warning
 Input pipelining  
-DSP infer_eval_i_syn_inh_prod_q32_reg input infer_eval_i_syn_inh_prod_q32_reg/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP infer_eval_i_syn_inh_prod_q320__0 input infer_eval_i_syn_inh_prod_q320__0/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#14 Warning
 Input pipelining  
-DSP infer_eval_i_syn_inh_prod_q32_reg input infer_eval_i_syn_inh_prod_q32_reg/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP infer_eval_i_syn_inh_prod_q320__0 input infer_eval_i_syn_inh_prod_q320__0/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#15 Warning
 Input pipelining  
-DSP infer_eval_i_syn_inh_prod_q32_reg__0 input infer_eval_i_syn_inh_prod_q32_reg__0/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP infer_eval_i_syn_inh_prod_q32_reg input infer_eval_i_syn_inh_prod_q32_reg/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#16 Warning
 Input pipelining  
-DSP infer_evt_term_prod_q320__0 input infer_evt_term_prod_q320__0/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP infer_eval_i_syn_inh_prod_q32_reg input infer_eval_i_syn_inh_prod_q32_reg/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#17 Warning
 Input pipelining  
-DSP infer_prep_div_prod_q320 input infer_prep_div_prod_q320/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP infer_eval_i_syn_inh_prod_q32_reg__0 input infer_eval_i_syn_inh_prod_q32_reg__0/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#18 Warning
 Input pipelining  
-DSP infer_prep_div_prod_q32_reg input infer_prep_div_prod_q32_reg/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP infer_evt_term_prod_q320 input infer_evt_term_prod_q320/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#19 Warning
 Input pipelining  
-DSP train_chunk_seed_xexc1 input train_chunk_seed_xexc1/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP infer_evt_term_prod_q32_reg input infer_evt_term_prod_q32_reg/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#20 Warning
 Input pipelining  
-DSP train_chunk_seed_xexc1__0 input train_chunk_seed_xexc1__0/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP infer_prep_div_prod_q320 input infer_prep_div_prod_q320/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#21 Warning
 Input pipelining  
-DSP train_chunk_seed_xin1 input train_chunk_seed_xin1/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP infer_prep_div_prod_q32_reg input infer_prep_div_prod_q32_reg/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#22 Warning
 Input pipelining  
-DSP train_chunk_seed_xin1__0 input train_chunk_seed_xin1__0/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP train_chunk_seed_xexc1 input train_chunk_seed_xexc1/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#23 Warning
 Input pipelining  
-DSP train_stdp_pot_mid_prod_q320 input train_stdp_pot_mid_prod_q320/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP train_chunk_seed_xexc1__0 input train_chunk_seed_xexc1__0/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#24 Warning
 Input pipelining  
-DSP train_stdp_pot_mid_prod_q32_reg input train_stdp_pot_mid_prod_q32_reg/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP train_chunk_seed_xin1 input train_chunk_seed_xin1/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#25 Warning
+Input pipelining  
+DSP train_chunk_seed_xin1__0 input train_chunk_seed_xin1__0/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
+Related violations: <none>
+
+DPIP-1#26 Warning
+Input pipelining  
+DSP train_gen_lcg_state1__0 input train_gen_lcg_state1__0/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
+Related violations: <none>
+
+DPIP-1#27 Warning
+Input pipelining  
+DSP train_stdp_pot_mid_prod_q320 input train_stdp_pot_mid_prod_q320/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
+Related violations: <none>
+
+DPIP-1#28 Warning
+Input pipelining  
+DSP train_stdp_pot_mid_prod_q32_reg input train_stdp_pot_mid_prod_q32_reg/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
+Related violations: <none>
+
+DPIP-1#29 Warning
 Input pipelining  
 DSP train_trace_bt_pre_base0__0 input train_trace_bt_pre_base0__0/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
