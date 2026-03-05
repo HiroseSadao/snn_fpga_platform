@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Thu Mar  5 02:06:25 2026
-| Host         : eecs-digital-13 running 64-bit Ubuntu 24.04.3 LTS
+| Date         : Thu Mar  5 03:28:51 2026
+| Host         : eecs-digital-11 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_timing -file obj/post_place_timing.rpt
 | Design       : top_level
 | Device       : 7s50-csga324
@@ -12,20 +12,20 @@ Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanc
 
 Timing Report
 
-Slack (MET) :             0.173ns  (required time - arrival time)
-  Source:                 train_gen_lcg_state1/CLK
-                            (rising edge-triggered cell DSP48E1 clocked by clk_passthrough_clk_wiz_0  {rise@0.000ns fall@5.000ns period=10.000ns})
-  Destination:            train_gen_lcg_state1__0_i_1_psdsp/D
+Slack (MET) :             0.326ns  (required time - arrival time)
+  Source:                 train_stdp_w_val_reg[0]/C
+                            (rising edge-triggered cell FDRE clocked by clk_passthrough_clk_wiz_0  {rise@0.000ns fall@5.000ns period=10.000ns})
+  Destination:            train_stdp_dividend_reg[31]/D
                             (rising edge-triggered cell FDRE clocked by clk_passthrough_clk_wiz_0  {rise@0.000ns fall@5.000ns period=10.000ns})
   Path Group:             clk_passthrough_clk_wiz_0
   Path Type:              Setup (Max at Slow Process Corner)
   Requirement:            10.000ns  (clk_passthrough_clk_wiz_0 rise@10.000ns - clk_passthrough_clk_wiz_0 rise@0.000ns)
-  Data Path Delay:        9.541ns  (logic 6.951ns (72.854%)  route 2.590ns (27.146%))
-  Logic Levels:           7  (CARRY4=4 DSP48E1=1 LUT1=1 LUT6=1)
-  Clock Path Skew:        -0.132ns (DCD - SCD + CPR)
-    Destination Clock Delay (DCD):    -1.616ns = ( 8.384 - 10.000 ) 
-    Source Clock Delay      (SCD):    -0.932ns
-    Clock Pessimism Removal (CPR):    0.553ns
+  Data Path Delay:        9.700ns  (logic 4.851ns (50.010%)  route 4.849ns (49.990%))
+  Logic Levels:           13  (CARRY4=8 LUT3=3 LUT4=2)
+  Clock Path Skew:        0.025ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    -1.561ns = ( 8.439 - 10.000 ) 
+    Source Clock Delay      (SCD):    -1.033ns
+    Clock Pessimism Removal (CPR):    0.554ns
   Clock Uncertainty:      0.074ns  ((TSJ^2 + DJ^2)^1/2) / 2 + PE
     Total System Jitter     (TSJ):    0.071ns
     Discrete Jitter          (DJ):    0.129ns
@@ -43,32 +43,46 @@ Slack (MET) :             0.173ns  (required time - arrival time)
                                                      -7.025    -4.352 r  u_ddr_clk_wiz/mmcm_adv_inst/CLKOUT5
                          net (fo=1, estimated)        1.666    -2.686    u_ddr_clk_wiz/clk_passthrough_clk_wiz_0
     BUFGCTRL_X0Y4        BUFG (Prop_bufg_I_O)         0.096    -2.590 r  u_ddr_clk_wiz/clkout6_buf/O
-                         net (fo=13632, estimated)    1.658    -0.932    core_clk
-    DSP48_X0Y15          DSP48E1                                      r  train_gen_lcg_state1/CLK
+                         net (fo=13582, estimated)    1.557    -1.033    core_clk
+    SLICE_X56Y54         FDRE                                         r  train_stdp_w_val_reg[0]/C
   -------------------------------------------------------------------    -------------------
-    DSP48_X0Y15          DSP48E1 (Prop_dsp48e1_CLK_PCOUT[47])
-                                                      4.008     3.076 r  train_gen_lcg_state1/PCOUT[47]
-                         net (fo=1, estimated)        0.000     3.076    train_gen_lcg_state1_n_106
-    DSP48_X0Y16          DSP48E1 (Prop_dsp48e1_PCIN[47]_P[0])
-                                                      1.518     4.594 f  train_gen_lcg_state1__0/P[0]
-                         net (fo=2, estimated)        1.436     6.030    train_gen_lcg_state1__0_n_105
-    SLICE_X28Y29         LUT1 (Prop_lut1_I0_O)        0.124     6.154 r  train_gen_lcg_state1__0_i_34/O
-                         net (fo=1, routed)           0.000     6.154    train_gen_lcg_state1__0_i_34_n_0
-    SLICE_X28Y29         CARRY4 (Prop_carry4_S[0]_CO[3])
-                                                      0.532     6.686 r  train_gen_lcg_state1__0_i_22/CO[3]
-                         net (fo=1, estimated)        0.000     6.686    train_gen_lcg_state1__0_i_22_n_0
-    SLICE_X28Y30         CARRY4 (Prop_carry4_CI_CO[3])
-                                                      0.114     6.800 r  train_gen_lcg_state1__0_i_18/CO[3]
-                         net (fo=1, estimated)        0.000     6.800    train_gen_lcg_state1__0_i_18_n_0
-    SLICE_X28Y31         CARRY4 (Prop_carry4_CI_CO[3])
-                                                      0.114     6.914 r  train_gen_lcg_state1__0_i_17/CO[3]
-                         net (fo=1, estimated)        0.000     6.914    train_gen_lcg_state1__0_i_17_n_0
-    SLICE_X28Y32         CARRY4 (Prop_carry4_CI_O[2])
-                                                      0.239     7.153 r  train_gen_lcg_state1__0_i_16/O[2]
-                         net (fo=1, estimated)        0.963     8.116    train_gen_lcg_state1__0_i_16_n_5
-    SLICE_X14Y34         LUT6 (Prop_lut6_I1_O)        0.302     8.418 r  train_gen_lcg_state1__0_i_1/O
-                         net (fo=1, estimated)        0.191     8.609    train_gen_lcg_state0_out[31]
-    SLICE_X15Y34         FDRE                                         r  train_gen_lcg_state1__0_i_1_psdsp/D
+    SLICE_X56Y54         FDRE (Prop_fdre_C_Q)         0.518    -0.515 r  train_stdp_w_val_reg[0]/Q
+                         net (fo=14, estimated)       0.504    -0.011    train_stdp_w_val_reg_n_0_[0]
+    SLICE_X57Y54         CARRY4 (Prop_carry4_S[0]_CO[3])
+                                                      0.656     0.645 r  train_stdp_dividend_reg[11]_i_12/CO[3]
+                         net (fo=1, estimated)        0.000     0.645    train_stdp_dividend_reg[11]_i_12_n_0
+    SLICE_X57Y55         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     0.759 r  train_stdp_dividend_reg[11]_i_15/CO[3]
+                         net (fo=1, estimated)        0.000     0.759    train_stdp_dividend_reg[11]_i_15_n_0
+    SLICE_X57Y56         CARRY4 (Prop_carry4_CI_O[0])
+                                                      0.222     0.981 r  train_stdp_dividend_reg[23]_i_20/O[0]
+                         net (fo=2, estimated)        0.930     1.911    train_stdp_dividend_reg[23]_i_20_n_7
+    SLICE_X58Y56         LUT3 (Prop_lut3_I2_O)        0.324     2.235 r  train_stdp_dividend[23]_i_15/O
+                         net (fo=2, estimated)        0.999     3.234    train_stdp_dividend[23]_i_15_n_0
+    SLICE_X58Y57         LUT4 (Prop_lut4_I0_O)        0.332     3.566 r  train_stdp_dividend[23]_i_19/O
+                         net (fo=1, routed)           0.000     3.566    train_stdp_dividend[23]_i_19_n_0
+    SLICE_X58Y57         CARRY4 (Prop_carry4_S[0]_CO[3])
+                                                      0.532     4.098 r  train_stdp_dividend_reg[23]_i_11/CO[3]
+                         net (fo=1, estimated)        0.000     4.098    train_stdp_dividend_reg[23]_i_11_n_0
+    SLICE_X58Y58         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     4.212 r  train_stdp_dividend_reg[27]_i_11/CO[3]
+                         net (fo=1, estimated)        0.000     4.212    train_stdp_dividend_reg[27]_i_11_n_0
+    SLICE_X58Y59         CARRY4 (Prop_carry4_CI_O[1])
+                                                      0.334     4.546 r  train_stdp_dividend_reg[31]_i_9/O[1]
+                         net (fo=2, estimated)        0.744     5.290    train_stdp_dividend_reg[31]_i_9_n_6
+    SLICE_X60Y60         LUT3 (Prop_lut3_I1_O)        0.329     5.619 r  train_stdp_dividend[27]_i_4/O
+                         net (fo=2, estimated)        0.865     6.484    train_stdp_dividend[27]_i_4_n_0
+    SLICE_X60Y60         LUT4 (Prop_lut4_I0_O)        0.348     6.832 r  train_stdp_dividend[27]_i_8/O
+                         net (fo=1, routed)           0.000     6.832    train_stdp_dividend[27]_i_8_n_0
+    SLICE_X60Y60         CARRY4 (Prop_carry4_S[2]_CO[3])
+                                                      0.380     7.212 r  train_stdp_dividend_reg[27]_i_2/CO[3]
+                         net (fo=1, estimated)        0.000     7.212    train_stdp_dividend_reg[27]_i_2_n_0
+    SLICE_X60Y61         CARRY4 (Prop_carry4_CI_O[3])
+                                                      0.315     7.527 r  train_stdp_dividend_reg[31]_i_4/O[3]
+                         net (fo=1, estimated)        0.807     8.334    train_stdp_dividend_reg[31]_i_4_n_4
+    SLICE_X63Y61         LUT3 (Prop_lut3_I0_O)        0.333     8.667 r  train_stdp_dividend[31]_i_2/O
+                         net (fo=1, routed)           0.000     8.667    train_stdp_dividend[31]
+    SLICE_X63Y61         FDRE                                         r  train_stdp_dividend_reg[31]/D
   -------------------------------------------------------------------    -------------------
 
                          (clock clk_passthrough_clk_wiz_0 rise edge)
@@ -81,16 +95,16 @@ Slack (MET) :             0.173ns  (required time - arrival time)
                                                      -7.279     5.263 r  u_ddr_clk_wiz/mmcm_adv_inst/CLKOUT5
                          net (fo=1, estimated)        1.583     6.846    u_ddr_clk_wiz/clk_passthrough_clk_wiz_0
     BUFGCTRL_X0Y4        BUFG (Prop_bufg_I_O)         0.091     6.937 r  u_ddr_clk_wiz/clkout6_buf/O
-                         net (fo=13632, estimated)    1.447     8.384    core_clk
-    SLICE_X15Y34         FDRE                                         r  train_gen_lcg_state1__0_i_1_psdsp/C
-                         clock pessimism              0.553     8.936    
-                         clock uncertainty           -0.074     8.863    
-    SLICE_X15Y34         FDRE (Setup_fdre_C_D)       -0.081     8.782    train_gen_lcg_state1__0_i_1_psdsp
+                         net (fo=13582, estimated)    1.502     8.439    core_clk
+    SLICE_X63Y61         FDRE                                         r  train_stdp_dividend_reg[31]/C
+                         clock pessimism              0.554     8.992    
+                         clock uncertainty           -0.074     8.919    
+    SLICE_X63Y61         FDRE (Setup_fdre_C_D)        0.075     8.994    train_stdp_dividend_reg[31]
   -------------------------------------------------------------------
-                         required time                          8.782    
-                         arrival time                          -8.609    
+                         required time                          8.994    
+                         arrival time                          -8.667    
   -------------------------------------------------------------------
-                         slack                                  0.173    
+                         slack                                  0.326    
 
 
 

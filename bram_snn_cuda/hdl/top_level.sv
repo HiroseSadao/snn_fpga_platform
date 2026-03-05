@@ -426,9 +426,11 @@ module top_level(
     logic [56:0]  ddr_req_payload_core;
     logic [56:0]  ddr_req_payload_core_reg;
     logic [56:0]  ddr_req_payload_ddr_sync;
-    logic [32:0]  ddr_rsp_payload_ddr;
-    logic [32:0]  ddr_rsp_payload_ddr_reg;
-    logic [32:0]  ddr_rsp_payload_core_sync;
+    logic [33:0]  ddr_rsp_payload_ddr;
+    logic [33:0]  ddr_rsp_payload_ddr_reg;
+    logic [33:0]  ddr_rsp_payload_core_sync;
+    logic        ddr_rsp_was_write_ddr;
+    logic        ddr_resp_was_write_core;
 
     (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) logic ddr_req_toggle_ddr_sync1, ddr_req_toggle_ddr_sync2;
     logic        ddr_req_toggle_ddr_seen;
@@ -853,8 +855,9 @@ module top_level(
             ddr_req_we_core              // [0]
         };
         ddr_rsp_payload_ddr = {
-            (ddr_rsp_status_ddr == STATUS_OK), // [32]
-            ddr_rsp_rdata_ddr            // [31:0]
+            (ddr_rsp_status_ddr == STATUS_OK), // [33]
+            ddr_rsp_was_write_ddr,             // [32]
+            ddr_rsp_rdata_ddr                  // [31:0]
         };
     end
 
@@ -877,7 +880,7 @@ module top_level(
         .INIT_SYNC_FF(0),
         .SIM_ASSERT_CHK(0),
         .SRC_INPUT_REG(1),
-        .WIDTH(33)
+        .WIDTH(34)
     ) u_cdc_rsp_payload (
         .src_clk (clk_controller),
         .src_in  (ddr_rsp_payload_ddr_reg),
@@ -1580,6 +1583,7 @@ module top_level(
             ddr_req_wdata_ddr <= 32'd0;
             ddr_rsp_rdata_ddr <= 32'd0;
             ddr_rsp_status_ddr <= STATUS_BAD_PACKET;
+            ddr_rsp_was_write_ddr <= 1'b0;
         end else begin
             ddr_req_toggle_ddr_sync1 <= ddr_req_toggle_core;
             ddr_req_toggle_ddr_sync2 <= ddr_req_toggle_ddr_sync1;
@@ -1625,6 +1629,7 @@ module top_level(
                     // that expect stb to remain high while the request is outstanding.
                     ddr_wb_stb <= 1'b1;
                     if (ddr_wb_ack) begin
+                        ddr_rsp_was_write_ddr <= ddr_req_we_ddr;
                         if (ddr_req_we_ddr) begin
                             ddr_rsp_status_ddr <= STATUS_OK;
                             ddr_rsp_rdata_ddr  <= ddr_req_addr_word_ddr;
@@ -1697,6 +1702,7 @@ module top_level(
             ddr_rsp_drain_quiet_core <= 2'd0;
             ddr_resp_rdata_core <= 32'd0;
             ddr_resp_status_core <= STATUS_BAD_PACKET;
+            ddr_resp_was_write_core <= 1'b0;
             rx_timeout_counter<= '0;
             sd_rd             <= 1'b0;
             sd_wr             <= 1'b0;
@@ -2004,16 +2010,20 @@ module top_level(
                 (ddr_rsp_toggle_core_sync2 != ddr_rsp_toggle_core_seen)) begin
                 ddr_rsp_toggle_core_seen <= ddr_rsp_toggle_core_sync2;
                 ddr_resp_rdata_core <= ddr_rsp_payload_core_sync[31:0];
-                ddr_resp_status_core <= ddr_rsp_payload_core_sync[32] ? STATUS_OK : STATUS_BAD_PACKET;
+                ddr_resp_status_core <= ddr_rsp_payload_core_sync[33] ? STATUS_OK : STATUS_BAD_PACKET;
+                ddr_resp_was_write_core <= ddr_rsp_payload_core_sync[32];
                 ddr_rsp_capture_pending_core <= 1'b1;
                 ddr_rsp_kind_core <= ddr_req_kind_core;
             end
 
             if (ddr_req_pending_core && !response_ready && ddr_rsp_capture_pending_core) begin
                 ddr_rsp_capture_pending_core <= 1'b0;
-                ddr_req_pending_core <= 1'b0;
-                ddr_rsp_kind_core <= DDR_REQ_NONE;
-                ddr_req_kind_core <= DDR_REQ_NONE;
+                if ((ddr_rsp_kind_core == DDR_REQ_IMGLOAD) && ddr_resp_was_write_core) begin
+                    // Ignore stale write ACK while waiting for an imgload read response.
+                end else begin
+                    ddr_req_pending_core <= 1'b0;
+                    ddr_rsp_kind_core <= DDR_REQ_NONE;
+                    ddr_req_kind_core <= DDR_REQ_NONE;
                 if (ddr_rsp_kind_core == DDR_REQ_SD) begin
                     ddr_req_from_sd_core <= 1'b0;
                     if (ddr_resp_status_core != STATUS_OK) begin
@@ -2278,6 +2288,7 @@ module top_level(
                         response_ready <= 1'b1;
                     end
                 end
+            end
             end
             if (response_ready || (rx_state == RX_WAIT_SYNC)) begin
                 rx_timeout_counter <= '0;

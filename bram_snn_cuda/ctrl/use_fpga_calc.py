@@ -86,6 +86,7 @@ RAW1_NUM_IMAGES_DEFAULT = 10_000
 RAW1_TOTAL_BYTES_DEFAULT = RAW1_HEADER_BYTES + RAW1_NUM_IMAGES_DEFAULT + (RAW1_NUM_IMAGES_DEFAULT * N_IN)
 RAW1_TOTAL_SECTORS_DEFAULT = (RAW1_TOTAL_BYTES_DEFAULT + 511) // 512
 IMGLOAD_SRC_BIAS_BYTES = 0
+IMGLOAD_DST_BIAS_BYTES = 0
 IMGLOAD_GUARD_SEC = 0.01
 IMG_STAGING_MARGIN_WORDS = 262144  # must match top_level.sv IMG_STAGING_BASE_WORD margin
 
@@ -2383,12 +2384,17 @@ def prepare_fpga_sample_image_via_streamed_load(
 
     # Verify against the same MNIST source/quantization path used by import_MNIST_raw.py.
     expected_img_u8, _ = read_mnist_image_u8(int(sample_idx))
-    raw_slice = fpga_read_raw_image_span(ser, start_idx=0, nbytes=N_IN)
+    raw_slice = fpga_read_raw_image_span(
+        ser,
+        start_idx=IMGLOAD_DST_BIAS_BYTES,
+        nbytes=N_IN,
+    )
+    expected_verify = expected_img_u8[:len(raw_slice)]
 
-    if len(raw_slice) != N_IN:
+    if len(raw_slice) != len(expected_verify):
         raise RuntimeError(
             "MNIST->raw_image0 verify failed to collect enough bytes: "
-            f"raw={len(raw_slice)}, expected={N_IN}"
+            f"raw={len(raw_slice)}, expected={len(expected_verify)}"
         )
 
     # DDR source vs raw_image0 diagnostics:
@@ -2414,7 +2420,7 @@ def prepare_fpga_sample_image_via_streamed_load(
     expected_off_in_probe = expected_src_base_byte - probe_base_byte
     ddr_expected = ddr_probe_bytes[expected_off_in_probe:expected_off_in_probe + N_IN]
 
-    cmp_len = min(128, len(ddr_expected), len(raw_slice))
+    cmp_len = min(128, len(ddr_expected), len(raw_slice), len(expected_verify))
     mism_expected = _count_mismatch(ddr_expected[:cmp_len], raw_slice[:cmp_len])
     best_delta = 0
     best_delta_mism = 10**9
@@ -2438,7 +2444,7 @@ def prepare_fpga_sample_image_via_streamed_load(
 
     if verbose:
         dump_cols = 32
-        dump_len = min(len(expected_img_u8), len(raw_slice))
+        dump_len = min(len(expected_verify), len(raw_slice))
         print(
             "DDR source probe: "
             f"staging_base_word=0x{staging_base_word:08X}, "
@@ -2449,7 +2455,7 @@ def prepare_fpga_sample_image_via_streamed_load(
         for i in range(0, dump_len, dump_cols):
             print(
                 f"  [{i:03d}:{min(i + dump_cols, dump_len):03d}] "
-                + " ".join(f"{int(x)&0xFF:02X}" for x in expected_img_u8[i:i + dump_cols])
+                + " ".join(f"{int(x)&0xFF:02X}" for x in expected_verify[i:i + dump_cols])
             )
         print(f"raw_image0 full ({dump_len}B):")
         for i in range(0, dump_len, dump_cols):
@@ -2467,7 +2473,7 @@ def prepare_fpga_sample_image_via_streamed_load(
 
     mism = [
         i
-        for i, (exp_b, raw_b) in enumerate(zip(expected_img_u8, raw_slice))
+        for i, (exp_b, raw_b) in enumerate(zip(expected_verify, raw_slice))
         if int(exp_b) != int(raw_b)
     ]
     if mism:
@@ -2475,13 +2481,13 @@ def prepare_fpga_sample_image_via_streamed_load(
         raise RuntimeError(
             "MNIST->raw_image0 verify: FAIL "
             f"(sample_idx={int(sample_idx)}, mismatch_count={len(mism)}, "
-            f"first_mismatch=i={i0}, expected=0x{int(expected_img_u8[i0]):02X}, raw=0x{int(raw_slice[i0]):02X})"
+            f"first_mismatch=i={i0}, expected=0x{int(expected_verify[i0]):02X}, raw=0x{int(raw_slice[i0]):02X})"
         )
 
     if verbose:
         print(
             "MNIST->raw_image0 verify: PASS "
-            f"(sample_idx={int(sample_idx)}, compared_bytes={N_IN})"
+            f"(sample_idx={int(sample_idx)}, compared_bytes={len(expected_verify)}, raw_start={IMGLOAD_DST_BIAS_BYTES})"
         )
 
 

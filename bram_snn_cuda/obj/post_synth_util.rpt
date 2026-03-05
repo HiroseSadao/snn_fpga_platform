@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Thu Mar  5 02:05:39 2026
-| Host         : eecs-digital-13 running 64-bit Ubuntu 24.04.3 LTS
+| Date         : Thu Mar  5 03:28:08 2026
+| Host         : eecs-digital-11 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_utilization -file obj/post_synth_util.rpt -hierarchical -hierarchical_depth 4
 | Design       : top_level
 | Device       : xc7s50csga324-1
@@ -22,25 +22,23 @@ Table of Contents
 +-----------------------------+--------------------------------------+------------+------------+---------+------+-------+--------+--------+------------+
 |           Instance          |                Module                | Total LUTs | Logic LUTs | LUTRAMs | SRLs |  FFs  | RAMB36 | RAMB18 | DSP Blocks |
 +-----------------------------+--------------------------------------+------------+------------+---------+------+-------+--------+--------+------------+
-| top_level                   |                                (top) |      16432 |      15870 |     562 |    0 | 15581 |     24 |     14 |         63 |
-|   (top_level)               |                                (top) |       5245 |       4709 |     536 |    0 | 12455 |      1 |      9 |         63 |
+| top_level                   |                                (top) |      16089 |      15527 |     562 |    0 | 15609 |     24 |     14 |         63 |
+|   (top_level)               |                                (top) |       5227 |       4691 |     536 |    0 | 12464 |      1 |      9 |         63 |
 |   u_cdc_req_payload         |                 xpm_cdc_array_single |          0 |          0 |       0 |    0 |   171 |      0 |      0 |          0 |
-|   u_cdc_rsp_payload         | xpm_cdc_array_single__parameterized0 |          0 |          0 |       0 |    0 |    99 |      0 |      0 |          0 |
-|   u_csc_col_ptr_bram        |     xpm_memory_sprom__parameterized1 |         83 |         83 |       0 |    0 |     0 |      0 |      1 |          0 |
-|     (u_csc_col_ptr_bram)    |     xpm_memory_sprom__parameterized1 |         83 |         83 |       0 |    0 |     0 |      0 |      0 |          0 |
-|   u_csr_row_ptr_bram        |                     xpm_memory_sprom |         94 |         94 |       0 |    0 |     0 |      0 |      1 |          0 |
-|     (u_csr_row_ptr_bram)    |                     xpm_memory_sprom |         94 |         94 |       0 |    0 |     0 |      0 |      0 |          0 |
-|   u_ddr3_top                |                             ddr3_top |       2898 |       2898 |       0 |    0 |  2354 |      0 |      0 |          0 |
-|     (u_ddr3_top)            |                             ddr3_top |         64 |         64 |       0 |    0 |     0 |      0 |      0 |          0 |
+|   u_cdc_rsp_payload         | xpm_cdc_array_single__parameterized0 |          0 |          0 |       0 |    0 |   102 |      0 |      0 |          0 |
+|   u_csr_row_ptr_bram        |                     xpm_memory_sprom |        162 |        162 |       0 |    0 |     0 |      0 |      1 |          0 |
+|     (u_csr_row_ptr_bram)    |                     xpm_memory_sprom |        162 |        162 |       0 |    0 |     0 |      0 |      0 |          0 |
+|   u_ddr3_top                |                             ddr3_top |       2899 |       2899 |       0 |    0 |  2354 |      0 |      0 |          0 |
+|     (u_ddr3_top)            |                             ddr3_top |         65 |         65 |       0 |    0 |     0 |      0 |      0 |          0 |
 |     ddr3_controller_inst    |                      ddr3_controller |       2820 |       2820 |       0 |    0 |  2331 |      0 |      0 |          0 |
-|   u_infer_pre_spike_map     |    xpm_memory_sdpram__parameterized0 |        142 |        116 |      26 |    0 |     1 |      0 |      0 |          0 |
-|     (u_infer_pre_spike_map) |    xpm_memory_sdpram__parameterized0 |        104 |        104 |       0 |    0 |     0 |      0 |      0 |          0 |
+|   u_infer_pre_spike_map     |    xpm_memory_sdpram__parameterized0 |        131 |        105 |      26 |    0 |     1 |      0 |      0 |          0 |
+|     (u_infer_pre_spike_map) |    xpm_memory_sdpram__parameterized0 |         93 |         93 |       0 |    0 |     0 |      0 |      0 |          0 |
 |   u_infer_w_rom_bram        |    xpm_memory_sdpram__parameterized1 |         58 |         58 |       0 |    0 |     0 |      8 |      0 |          0 |
 |     (u_infer_w_rom_bram)    |    xpm_memory_sdpram__parameterized1 |         58 |         58 |       0 |    0 |     0 |      0 |      0 |          0 |
-|   u_poisson_divider         |                            divider2b |        211 |        211 |       0 |    0 |   137 |      0 |      0 |          0 |
-|   u_sd_controller           |                        sd_controller |       2964 |       2964 |       0 |    0 |   156 |      0 |      0 |          0 |
-|   u_stdp_divider            |                          divider2b_1 |        574 |        574 |       0 |    0 |   137 |      0 |      0 |          0 |
-|   u_uart_rx                 |                              uart_rx |       4045 |       4045 |       0 |    0 |    41 |      0 |      0 |          0 |
+|   u_poisson_divider         |                            divider2b |        220 |        220 |       0 |    0 |   137 |      0 |      0 |          0 |
+|   u_sd_controller           |                        sd_controller |       2813 |       2813 |       0 |    0 |   172 |      0 |      0 |          0 |
+|   u_stdp_divider            |                          divider2b_1 |        457 |        457 |       0 |    0 |   137 |      0 |      0 |          0 |
+|   u_uart_rx                 |                              uart_rx |       3949 |       3949 |       0 |    0 |    41 |      0 |      0 |          0 |
 +-----------------------------+--------------------------------------+------------+------------+---------+------+-------+--------+--------+------------+
 
 
