@@ -44,6 +44,7 @@ module top_level(
     localparam logic [7:0] OP_RUN_SAMPLE_INFER = 8'h20;
     localparam logic [7:0] OP_READ_SPIKE_COUNT = 8'h21;
     localparam logic [7:0] OP_READ_RAW_U8 = 8'h22;
+    localparam logic [7:0] OP_READ_INFER_DEBUG = 8'h24;
     localparam logic [7:0] OP_TRAIN_QUERY_CAPS = 8'h30;
     localparam logic [7:0] OP_TRAIN_RUN_SAMPLE_PHASE3 = 8'h37;
     localparam logic [31:0] DDR_ADDR_WORD_LIMIT = 32'd16777216; // 64MiB / 4
@@ -233,10 +234,11 @@ module top_level(
         INFER_EVT_POST_APPLY_WNEXT,
         INFER_EVT_DONE
     } infer_state_t;
-    typedef enum logic [1:0] {
+    typedef enum logic [2:0] {
         DDRBR_IDLE,
         DDRBR_ISSUE,
         DDRBR_WAIT_ACK,
+        DDRBR_READ_CAPTURE,
         DDRBR_RESP
     } ddr_bridge_state_t;
     typedef enum logic [2:0] {
@@ -420,20 +422,24 @@ module top_level(
     logic        ddr_rsp_toggle_core_seen;
     logic        ddr_rsp_capture_pending_core;
     logic        ddr_rsp_payload_ready_core;
+    logic [1:0]  ddr_rsp_payload_settle_core;
     logic        ddr_rsp_drain_active_core;
     logic [1:0]  ddr_rsp_drain_quiet_core;
     logic [31:0] ddr_resp_rdata_core;
     logic [7:0]  ddr_resp_status_core;
-    logic [56:0]  ddr_req_payload_core;
-    logic [56:0]  ddr_req_payload_core_reg;
-    logic [56:0]  ddr_req_payload_ddr_sync;
-    logic [34:0]  ddr_rsp_payload_ddr;
-    logic [34:0]  ddr_rsp_payload_ddr_reg;
-    logic [34:0]  ddr_rsp_payload_core_sync;
-    logic        ddr_req_tag_ddr;
-    logic        ddr_rsp_req_tag_ddr;
+    logic [72:0]  ddr_req_payload_core;
+    logic [72:0]  ddr_req_payload_core_reg;
+    logic [72:0]  ddr_req_payload_ddr_sync;
+    logic [49:0]  ddr_rsp_payload_ddr;
+    logic [49:0]  ddr_rsp_payload_ddr_reg;
+    logic [49:0]  ddr_rsp_payload_core_sync;
+    logic [15:0]  ddr_req_tag_ddr;
+    logic [15:0]  ddr_rsp_req_tag_ddr;
     logic        ddr_rsp_was_write_ddr;
     logic        ddr_resp_was_write_core;
+    logic [15:0]  ddr_req_tag_core;
+    logic [15:0]  ddr_req_tag_expect_core;
+    logic        ddr_req_pending_core_prev;
 
     (* ASYNC_REG = "TRUE", SHREG_EXTRACT = "NO" *) logic ddr_req_toggle_ddr_sync1, ddr_req_toggle_ddr_sync2;
     logic        ddr_req_toggle_ddr_seen;
@@ -509,6 +515,34 @@ module top_level(
     logic [31:0] imgload_start_addr_word;
     logic [1:0]  imgload_start_lane;
     logic [9:0]  imgload_start_total_bytes;
+    logic [31:0] imgdbg_req_base_byte;
+    logic [31:0] imgdbg_req_nbytes;
+    logic [31:0] imgdbg_start_addr_word;
+    logic [1:0]  imgdbg_start_lane;
+    logic        imgdbg_first_rsp_seen;
+    logic [31:0] imgdbg_first_rsp_word;
+    logic [1:0]  imgdbg_first_rsp_lane;
+    logic        imgdbg_first_wr_seen;
+    logic [9:0]  imgdbg_first_wr_addr;
+    logic [7:0]  imgdbg_first_wr_byte;
+    logic [31:0] imgdbg_head_word;
+    logic [31:0] imgdbg_wr_count;
+    logic [31:0] imgdbg_rsp_count;
+    logic        imgdbg_first_nonzero_rsp_seen;
+    logic [31:0] imgdbg_first_nonzero_rsp_idx;
+    logic [31:0] imgdbg_first_nonzero_rsp_word;
+    logic [1:0]  imgdbg_first_nonzero_rsp_lane;
+    logic        imgdbg_first_nonzero_wr_seen;
+    logic [9:0]  imgdbg_first_nonzero_wr_addr;
+    logic [7:0]  imgdbg_first_nonzero_wr_byte;
+    logic [31:0] imgdbg_rsp_word_at_byte148;
+    logic [31:0] imgdbg_rsp_word_at_byte152;
+    logic [31:0] imgdbg_rsp_word_at_byte156;
+    logic [31:0] imgdbg_rsp_word_at_byte160;
+    logic [7:0]  imgdbg_byte_at_148;
+    logic [7:0]  imgdbg_byte_at_152;
+    logic [7:0]  imgdbg_byte_at_156;
+    logic [7:0]  imgdbg_byte_at_160;
     logic        train_trace_active;
     train_trace_state_t train_trace_state;
     logic [6:0]  train_winner_idx;
@@ -853,14 +887,15 @@ module top_level(
 
     always_comb begin
         ddr_req_payload_core = {
-            ddr_req_wdata_core,          // [56:25]
-            ddr_req_addr_word_core[23:0],// [24:1]
-            ddr_req_we_core              // [0]
+            ddr_req_tag_core,              // [72:57]
+            ddr_req_wdata_core,            // [56:25]
+            ddr_req_addr_word_core[23:0],  // [24:1]
+            ddr_req_we_core                // [0]
         };
         ddr_rsp_payload_ddr = {
-            (ddr_rsp_status_ddr == STATUS_OK), // [34]
-            ddr_rsp_was_write_ddr,             // [33]
-            ddr_rsp_req_tag_ddr,               // [32]
+            (ddr_rsp_status_ddr == STATUS_OK), // [49]
+            ddr_rsp_was_write_ddr,             // [48]
+            ddr_rsp_req_tag_ddr,               // [47:32]
             ddr_rsp_rdata_ddr                  // [31:0]
         };
     end
@@ -871,7 +906,7 @@ module top_level(
         .INIT_SYNC_FF(0),
         .SIM_ASSERT_CHK(0),
         .SRC_INPUT_REG(1),
-        .WIDTH(57)
+        .WIDTH(73)
     ) u_cdc_req_payload (
         .src_clk (core_clk),
         .src_in  (ddr_req_payload_core_reg),
@@ -884,7 +919,7 @@ module top_level(
         .INIT_SYNC_FF(0),
         .SIM_ASSERT_CHK(0),
         .SRC_INPUT_REG(1),
-        .WIDTH(35)
+        .WIDTH(50)
     ) u_cdc_rsp_payload (
         .src_clk (clk_controller),
         .src_in  (ddr_rsp_payload_ddr_reg),
@@ -1587,8 +1622,8 @@ module top_level(
             ddr_req_wdata_ddr <= 32'd0;
             ddr_rsp_rdata_ddr <= 32'd0;
             ddr_rsp_status_ddr <= STATUS_BAD_PACKET;
-            ddr_req_tag_ddr <= 1'b0;
-            ddr_rsp_req_tag_ddr <= 1'b0;
+            ddr_req_tag_ddr <= 16'd0;
+            ddr_rsp_req_tag_ddr <= 16'd0;
             ddr_rsp_was_write_ddr <= 1'b0;
         end else begin
             ddr_req_toggle_ddr_sync1 <= ddr_req_toggle_core;
@@ -1599,7 +1634,7 @@ module top_level(
                 DDRBR_IDLE: begin
                     if (ddr_req_toggle_ddr_sync2 != ddr_req_toggle_ddr_seen) begin
                         ddr_req_toggle_ddr_seen <= ddr_req_toggle_ddr_sync2;
-                        ddr_req_tag_ddr <= ddr_req_toggle_ddr_sync2;
+                        ddr_req_tag_ddr <= ddr_req_payload_ddr_sync[72:57];
                         ddr_req_we_ddr <= ddr_req_payload_ddr_sync[0];
                         ddr_req_addr_word_ddr <= {8'd0, ddr_req_payload_ddr_sync[24:1]};
                         ddr_req_wdata_ddr <= ddr_req_payload_ddr_sync[56:25];
@@ -1640,21 +1675,27 @@ module top_level(
                     if (ddr_wb_ack) begin
                         ddr_rsp_was_write_ddr <= ddr_req_we_ddr;
                         ddr_rsp_req_tag_ddr <= ddr_req_tag_ddr;
+                        ddr_wb_stb <= 1'b0;
                         if (ddr_req_we_ddr) begin
                             ddr_rsp_status_ddr <= STATUS_OK;
                             ddr_rsp_rdata_ddr  <= ddr_req_addr_word_ddr;
+                            ddr_bridge_state <= DDRBR_RESP;
                         end else begin
-                            ddr_rsp_status_ddr <= STATUS_OK;
-                            case (ddr_req_addr_word_ddr[1:0])
-                                2'd0: ddr_rsp_rdata_ddr <= ddr_wb_rdata[31:0];
-                                2'd1: ddr_rsp_rdata_ddr <= ddr_wb_rdata[63:32];
-                                2'd2: ddr_rsp_rdata_ddr <= ddr_wb_rdata[95:64];
-                                default: ddr_rsp_rdata_ddr <= ddr_wb_rdata[127:96];
-                            endcase
+                            // Some DDR controller wrappers present read data one cycle after ACK.
+                            ddr_bridge_state <= DDRBR_READ_CAPTURE;
                         end
-                        ddr_wb_stb <= 1'b0;
-                        ddr_bridge_state <= DDRBR_RESP;
                     end
+                end
+
+                DDRBR_READ_CAPTURE: begin
+                    ddr_rsp_status_ddr <= STATUS_OK;
+                    case (ddr_req_addr_word_ddr[1:0])
+                        2'd0: ddr_rsp_rdata_ddr <= ddr_wb_rdata[31:0];
+                        2'd1: ddr_rsp_rdata_ddr <= ddr_wb_rdata[63:32];
+                        2'd2: ddr_rsp_rdata_ddr <= ddr_wb_rdata[95:64];
+                        default: ddr_rsp_rdata_ddr <= ddr_wb_rdata[127:96];
+                    endcase
+                    ddr_bridge_state <= DDRBR_RESP;
                 end
 
                 DDRBR_RESP: begin
@@ -1704,11 +1745,15 @@ module top_level(
             ddr_req_sel16_core   <= 16'd0;
             ddr_req_word_count_core <= 3'd0;
             ddr_req_toggle_core  <= 1'b0;
+            ddr_req_tag_core <= 16'd0;
+            ddr_req_tag_expect_core <= 16'd0;
+            ddr_req_pending_core_prev <= 1'b0;
             ddr_rsp_toggle_core_sync1 <= 1'b0;
             ddr_rsp_toggle_core_sync2 <= 1'b0;
             ddr_rsp_toggle_core_seen  <= 1'b0;
             ddr_rsp_capture_pending_core <= 1'b0;
             ddr_rsp_payload_ready_core <= 1'b0;
+            ddr_rsp_payload_settle_core <= 2'd0;
             ddr_rsp_drain_active_core <= 1'b0;
             ddr_rsp_drain_quiet_core <= 2'd0;
             ddr_resp_rdata_core <= 32'd0;
@@ -1766,6 +1811,34 @@ module top_level(
             imgload_start_addr_word <= 32'd0;
             imgload_start_lane <= 2'd0;
             imgload_start_total_bytes <= 10'd0;
+            imgdbg_req_base_byte <= 32'd0;
+            imgdbg_req_nbytes <= 32'd0;
+            imgdbg_start_addr_word <= 32'd0;
+            imgdbg_start_lane <= 2'd0;
+            imgdbg_first_rsp_seen <= 1'b0;
+            imgdbg_first_rsp_word <= 32'd0;
+            imgdbg_first_rsp_lane <= 2'd0;
+            imgdbg_first_wr_seen <= 1'b0;
+            imgdbg_first_wr_addr <= 10'd0;
+            imgdbg_first_wr_byte <= 8'd0;
+            imgdbg_head_word <= 32'd0;
+            imgdbg_wr_count <= 32'd0;
+            imgdbg_rsp_count <= 32'd0;
+            imgdbg_first_nonzero_rsp_seen <= 1'b0;
+            imgdbg_first_nonzero_rsp_idx <= 32'd0;
+            imgdbg_first_nonzero_rsp_word <= 32'd0;
+            imgdbg_first_nonzero_rsp_lane <= 2'd0;
+            imgdbg_first_nonzero_wr_seen <= 1'b0;
+            imgdbg_first_nonzero_wr_addr <= 10'd0;
+            imgdbg_first_nonzero_wr_byte <= 8'd0;
+            imgdbg_rsp_word_at_byte148 <= 32'd0;
+            imgdbg_rsp_word_at_byte152 <= 32'd0;
+            imgdbg_rsp_word_at_byte156 <= 32'd0;
+            imgdbg_rsp_word_at_byte160 <= 32'd0;
+            imgdbg_byte_at_148 <= 8'd0;
+            imgdbg_byte_at_152 <= 8'd0;
+            imgdbg_byte_at_156 <= 8'd0;
+            imgdbg_byte_at_160 <= 8'd0;
             train_trace_active   <= 1'b0;
             train_trace_state    <= TRK_IDLE;
             train_winner_idx     <= 7'd0;
@@ -1965,6 +2038,11 @@ module top_level(
             train_xexc_wr_en <= 1'b0;
             ddr_rsp_toggle_core_sync1 <= ddr_rsp_toggle_ddr;
             ddr_rsp_toggle_core_sync2 <= ddr_rsp_toggle_core_sync1;
+            if (!ddr_req_pending_core_prev && ddr_req_pending_core) begin
+                ddr_req_tag_expect_core <= ddr_req_tag_core;
+                ddr_req_tag_core <= ddr_req_tag_core + 16'd1;
+            end
+            ddr_req_pending_core_prev <= ddr_req_pending_core;
             if (ddr_rsp_drain_active_core && !ddr_req_pending_core) begin
                 if (ddr_rsp_toggle_core_sync2 != ddr_rsp_toggle_core_seen) begin
                     ddr_rsp_toggle_core_seen <= ddr_rsp_toggle_core_sync2;
@@ -2021,19 +2099,23 @@ module top_level(
                 ddr_rsp_toggle_core_seen <= ddr_rsp_toggle_core_sync2;
                 ddr_rsp_capture_pending_core <= 1'b1;
                 ddr_rsp_payload_ready_core <= 1'b0;
+                ddr_rsp_payload_settle_core <= 2'd3;
                 ddr_rsp_kind_core <= ddr_req_kind_core;
             end
             if (ddr_req_pending_core && !response_ready && ddr_rsp_capture_pending_core) begin
                 if (!ddr_rsp_payload_ready_core) begin
-                    if (ddr_rsp_payload_core_sync[32] == ddr_req_toggle_core) begin
+                    if (ddr_rsp_payload_settle_core != 2'd0) begin
+                        ddr_rsp_payload_settle_core <= ddr_rsp_payload_settle_core - 2'd1;
+                    end else if (ddr_rsp_payload_core_sync[47:32] == ddr_req_tag_expect_core) begin
                         ddr_resp_rdata_core <= ddr_rsp_payload_core_sync[31:0];
-                        ddr_resp_status_core <= ddr_rsp_payload_core_sync[34] ? STATUS_OK : STATUS_BAD_PACKET;
-                        ddr_resp_was_write_core <= ddr_rsp_payload_core_sync[33];
+                        ddr_resp_status_core <= ddr_rsp_payload_core_sync[49] ? STATUS_OK : STATUS_BAD_PACKET;
+                        ddr_resp_was_write_core <= ddr_rsp_payload_core_sync[48];
                         ddr_rsp_payload_ready_core <= 1'b1;
                     end
                 end else begin
                     ddr_rsp_capture_pending_core <= 1'b0;
                     ddr_rsp_payload_ready_core <= 1'b0;
+                    ddr_rsp_payload_settle_core <= 2'd0;
                     if ((ddr_rsp_kind_core == DDR_REQ_IMGLOAD) && ddr_resp_was_write_core) begin
                     // Ignore stale write ACK while waiting for an imgload read response.
                 end else begin
@@ -2081,6 +2163,25 @@ module top_level(
                         resp_checksum  <= 8'h00;
                         response_ready <= 1'b1;
                     end else begin
+                        imgdbg_rsp_count <= imgdbg_rsp_count + 32'd1;
+                        if (!imgdbg_first_rsp_seen) begin
+                            imgdbg_first_rsp_seen <= 1'b1;
+                            imgdbg_first_rsp_word <= ddr_resp_rdata_core;
+                            imgdbg_first_rsp_lane <= imgload_lane;
+                        end
+                        if (!imgdbg_first_nonzero_rsp_seen && (ddr_resp_rdata_core != 32'd0)) begin
+                            imgdbg_first_nonzero_rsp_seen <= 1'b1;
+                            imgdbg_first_nonzero_rsp_idx <= imgdbg_rsp_count;
+                            imgdbg_first_nonzero_rsp_word <= ddr_resp_rdata_core;
+                            imgdbg_first_nonzero_rsp_lane <= imgload_lane;
+                        end
+                        case (imgload_byte_idx)
+                            10'd148: imgdbg_rsp_word_at_byte148 <= ddr_resp_rdata_core;
+                            10'd152: imgdbg_rsp_word_at_byte152 <= ddr_resp_rdata_core;
+                            10'd156: imgdbg_rsp_word_at_byte156 <= ddr_resp_rdata_core;
+                            10'd160: imgdbg_rsp_word_at_byte160 <= ddr_resp_rdata_core;
+                            default: begin end
+                        endcase
                         imgload_word_valid <= 1'b1;
                         imgload_word_data  <= ddr_resp_rdata_core;
                         imgload_word_lane  <= imgload_lane;
@@ -2393,17 +2494,45 @@ module top_level(
 
             if (imgload_active && imgload_word_valid && !response_ready) begin
                 if (imgload_byte_idx < imgload_total_bytes) begin
+                    logic [7:0] imgload_curr_byte;
+                    imgload_curr_byte = lane_byte_sel(imgload_word_data, imgload_word_lane);
                     raw_image0_wr_en   <= 1'b1;
                     raw_image0_wr_addr <= imgload_byte_idx;
-                    raw_image0_wr_data <= lane_byte_sel(imgload_word_data, imgload_word_lane);
-                    imgload_sum_u8_accum <= imgload_sum_u8_accum + {24'd0, lane_byte_sel(imgload_word_data, imgload_word_lane)};
+                    raw_image0_wr_data <= imgload_curr_byte;
+                    imgload_sum_u8_accum <= imgload_sum_u8_accum + {24'd0, imgload_curr_byte};
+                    if (!imgdbg_first_wr_seen) begin
+                        imgdbg_first_wr_seen <= 1'b1;
+                        imgdbg_first_wr_addr <= imgload_byte_idx;
+                        imgdbg_first_wr_byte <= imgload_curr_byte;
+                    end
+                    if (!imgdbg_first_nonzero_wr_seen && (imgload_curr_byte != 8'd0)) begin
+                        imgdbg_first_nonzero_wr_seen <= 1'b1;
+                        imgdbg_first_nonzero_wr_addr <= imgload_byte_idx;
+                        imgdbg_first_nonzero_wr_byte <= imgload_curr_byte;
+                    end
+                    case (imgload_byte_idx)
+                        10'd148: imgdbg_byte_at_148 <= imgload_curr_byte;
+                        10'd152: imgdbg_byte_at_152 <= imgload_curr_byte;
+                        10'd156: imgdbg_byte_at_156 <= imgload_curr_byte;
+                        10'd160: imgdbg_byte_at_160 <= imgload_curr_byte;
+                        default: begin end
+                    endcase
+                    if (imgdbg_wr_count < 32'd4) begin
+                        case (imgdbg_wr_count[1:0])
+                            2'd0: imgdbg_head_word[7:0] <= imgload_curr_byte;
+                            2'd1: imgdbg_head_word[15:8] <= imgload_curr_byte;
+                            2'd2: imgdbg_head_word[23:16] <= imgload_curr_byte;
+                            default: imgdbg_head_word[31:24] <= imgload_curr_byte;
+                        endcase
+                    end
+                    imgdbg_wr_count <= imgdbg_wr_count + 32'd1;
                     if ((imgload_byte_idx + 10'd1) >= imgload_total_bytes) begin
                         imgload_active <= 1'b0;
                         imgload_word_valid <= 1'b0;
                         imgload_byte_idx <= imgload_byte_idx + 10'd1;
                         raw_image0_valid <= 1'b1;
                         raw_image0_capture_idx <= imgload_byte_idx + 10'd1;
-                        raw_image0_sum_u8 <= imgload_sum_u8_accum + {24'd0, lane_byte_sel(imgload_word_data, imgload_word_lane)};
+                        raw_image0_sum_u8 <= imgload_sum_u8_accum + {24'd0, imgload_curr_byte};
                         resp_status    <= STATUS_OK;
                         resp_result    <= imgload_byte_idx + 10'd1;
                         resp_checksum  <= 8'h00;
@@ -3123,7 +3252,8 @@ module top_level(
                     end
                     TCK_GEN_XIN_WAIT: begin
                         if (!train_gen_active) begin
-                            train_chunk_seed_xin <= ($unsigned(train_chunk_seed_xin) * LCG_A) + LCG_C;
+                            // Use generator terminal state directly to avoid extra LCG multiply on this path.
+                            train_chunk_seed_xin <= train_gen_lcg_state;
                             train_chunk_state <= TCK_GEN_XEXC_START;
                         end
                     end
@@ -3142,7 +3272,8 @@ module top_level(
                     end
                     TCK_GEN_XEXC_WAIT: begin
                         if (!train_gen_active) begin
-                            train_chunk_seed_xexc <= ($unsigned(train_chunk_seed_xexc) * LCG_A) + LCG_C;
+                            // Use generator terminal state directly to avoid extra LCG multiply on this path.
+                            train_chunk_seed_xexc <= train_gen_lcg_state;
                             train_chunk_state <= TCK_PRELIST_BUILD_INIT;
                         end
                     end
@@ -3528,6 +3659,7 @@ module top_level(
                         end else if (
                             ((req_opcode == OP_DDR_READ32) || (req_opcode == OP_SD_SECTORS_TO_DDR) || (req_opcode == OP_LOAD_IMAGE_FROM_DDR) ||
                              (req_opcode == OP_RUN_SAMPLE_INFER) || (req_opcode == OP_READ_SPIKE_COUNT) || (req_opcode == OP_READ_RAW_U8) ||
+                             (req_opcode == OP_READ_INFER_DEBUG) ||
                              (req_opcode == OP_TRAIN_QUERY_CAPS) ||
                              (req_opcode == OP_TRAIN_RUN_SAMPLE_PHASE3))
                             && (rx_byte != 8'd2)
@@ -3695,6 +3827,34 @@ module top_level(
                                         imgload_start_addr_word <= IMG_STAGING_BASE_WORD + {2'b00, arg0[31:2]};
                                         imgload_start_lane <= arg0[1:0];
                                         imgload_start_total_bytes <= arg1[9:0];
+                                        imgdbg_req_base_byte <= arg0[31:0];
+                                        imgdbg_req_nbytes <= arg1[31:0];
+                                        imgdbg_start_addr_word <= IMG_STAGING_BASE_WORD + {2'b00, arg0[31:2]};
+                                        imgdbg_start_lane <= arg0[1:0];
+                                        imgdbg_first_rsp_seen <= 1'b0;
+                                        imgdbg_first_rsp_word <= 32'd0;
+                                        imgdbg_first_rsp_lane <= 2'd0;
+                                        imgdbg_first_wr_seen <= 1'b0;
+                                        imgdbg_first_wr_addr <= 10'd0;
+                                        imgdbg_first_wr_byte <= 8'd0;
+                                        imgdbg_head_word <= 32'd0;
+                                        imgdbg_wr_count <= 32'd0;
+                                        imgdbg_rsp_count <= 32'd0;
+                                        imgdbg_first_nonzero_rsp_seen <= 1'b0;
+                                        imgdbg_first_nonzero_rsp_idx <= 32'd0;
+                                        imgdbg_first_nonzero_rsp_word <= 32'd0;
+                                        imgdbg_first_nonzero_rsp_lane <= 2'd0;
+                                        imgdbg_first_nonzero_wr_seen <= 1'b0;
+                                        imgdbg_first_nonzero_wr_addr <= 10'd0;
+                                        imgdbg_first_nonzero_wr_byte <= 8'd0;
+                                        imgdbg_rsp_word_at_byte148 <= 32'd0;
+                                        imgdbg_rsp_word_at_byte152 <= 32'd0;
+                                        imgdbg_rsp_word_at_byte156 <= 32'd0;
+                                        imgdbg_rsp_word_at_byte160 <= 32'd0;
+                                        imgdbg_byte_at_148 <= 8'd0;
+                                        imgdbg_byte_at_152 <= 8'd0;
+                                        imgdbg_byte_at_156 <= 8'd0;
+                                        imgdbg_byte_at_160 <= 8'd0;
                                         imgload_word_valid <= 1'b0;
                                         raw_image0_valid <= 1'b0;
                                         raw_image0_capture_idx <= 10'd0;
@@ -3766,6 +3926,66 @@ module top_level(
                                         memrd_kind    <= MEMRD_RAW_U8;
                                         memrd_wait    <= 1'b1;
                                         memrd_pending <= 1'b1;
+                                    end else begin
+                                        resp_status    <= STATUS_BAD_PACKET;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= 8'h00;
+                                        response_ready <= 1'b1;
+                                    end
+                                end
+                                OP_READ_INFER_DEBUG: begin
+                                    if (req_nargs == 8'd2) begin
+                                        resp_status <= STATUS_OK;
+                                        case (arg0[7:0])
+                                            8'd0: resp_result <= infer_total_spikes;
+                                            8'd1: resp_result <= infer_steps_target;
+                                            8'd2: resp_result <= {16'd0, infer_step_idx};
+                                            8'd3: resp_result <= {25'd0, infer_state};
+                                            8'd4: resp_result <= {22'd0, infer_pre_active_count};
+                                            8'd5: resp_result <= raw_image0_sum_u8;
+                                            8'd6: resp_result <= infer_poisson_num_const_cfg;
+                                            8'd7: resp_result <= {31'd0, infer_active};
+                                            8'd8: resp_result <= {31'd0, imgload_active};
+                                            8'd9: resp_result <= {31'd0, ddr_req_pending_core};
+                                            8'd10: resp_result <= {31'd0, sd_copy_active};
+                                            8'd11: resp_result <= {29'd0, rx_state};
+                                            8'd12: resp_result <= {31'd0, response_ready};
+                                            8'd13: resp_result <= 32'd0;
+                                            8'd14: resp_result <= 32'd0;
+                                            8'd32: resp_result <= imgdbg_req_base_byte;
+                                            8'd33: resp_result <= imgdbg_req_nbytes;
+                                            8'd34: resp_result <= imgdbg_start_addr_word;
+                                            8'd35: resp_result <= {30'd0, imgdbg_start_lane};
+                                            8'd36: resp_result <= imgdbg_first_rsp_word;
+                                            8'd37: resp_result <= {30'd0, imgdbg_first_rsp_lane};
+                                            8'd38: resp_result <= {22'd0, imgdbg_first_wr_addr};
+                                            8'd39: resp_result <= {24'd0, imgdbg_first_wr_byte};
+                                            8'd40: resp_result <= imgdbg_head_word;
+                                            8'd41: resp_result <= imgdbg_wr_count;
+                                            8'd42: resp_result <= imgload_addr_word;
+                                            8'd43: resp_result <= {22'd0, imgload_byte_idx};
+                                            8'd44: resp_result <= {30'd0, imgload_word_lane};
+                                            8'd45: resp_result <= {31'd0, imgload_word_valid};
+                                            8'd46: resp_result <= ddr_resp_rdata_core;
+                                            8'd47: resp_result <= {31'd0, ddr_resp_was_write_core};
+                                            8'd48: resp_result <= imgdbg_rsp_count;
+                                            8'd49: resp_result <= imgdbg_first_nonzero_rsp_idx;
+                                            8'd50: resp_result <= imgdbg_first_nonzero_rsp_word;
+                                            8'd51: resp_result <= {30'd0, imgdbg_first_nonzero_rsp_lane};
+                                            8'd52: resp_result <= {22'd0, imgdbg_first_nonzero_wr_addr};
+                                            8'd53: resp_result <= {24'd0, imgdbg_first_nonzero_wr_byte};
+                                            8'd54: resp_result <= imgdbg_rsp_word_at_byte148;
+                                            8'd55: resp_result <= imgdbg_rsp_word_at_byte152;
+                                            8'd56: resp_result <= imgdbg_rsp_word_at_byte156;
+                                            8'd57: resp_result <= imgdbg_rsp_word_at_byte160;
+                                            8'd58: resp_result <= {24'd0, imgdbg_byte_at_148};
+                                            8'd59: resp_result <= {24'd0, imgdbg_byte_at_152};
+                                            8'd60: resp_result <= {24'd0, imgdbg_byte_at_156};
+                                            8'd61: resp_result <= {24'd0, imgdbg_byte_at_160};
+                                            default: resp_result <= 32'd0;
+                                        endcase
+                                        resp_checksum  <= 8'h00;
+                                        response_ready <= 1'b1;
                                     end else begin
                                         resp_status    <= STATUS_BAD_PACKET;
                                         resp_result    <= 32'sd0;
@@ -4858,3 +5078,7 @@ endmodule // top_level
  
 // reset the default net type to wire, sometimes other code expects this.
 `default_nettype wire
+
+
+
+

@@ -87,6 +87,7 @@ RAW1_TOTAL_BYTES_DEFAULT = RAW1_HEADER_BYTES + RAW1_NUM_IMAGES_DEFAULT + (RAW1_N
 RAW1_TOTAL_SECTORS_DEFAULT = (RAW1_TOTAL_BYTES_DEFAULT + 511) // 512
 IMGLOAD_SRC_BIAS_BYTES = 0
 IMGLOAD_DST_BIAS_BYTES = 0
+RAW_BIN_PATH_RUNTIME: str | None = None
 IMGLOAD_GUARD_SEC = 0.01
 IMG_STAGING_MARGIN_WORDS = 262144  # must match top_level.sv IMG_STAGING_BASE_WORD margin
 
@@ -112,6 +113,7 @@ LCG_A = 1664525
 LCG_C = 1013904223
 
 LAST_IO: dict[str, object] = {}
+_RAW1_RECON_U8_CACHE: dict[int, bytes] = {}
 
 
 @dataclass(frozen=True)
@@ -399,6 +401,19 @@ def require_ok(status: int, context: str) -> None:
     if status == STATUS_UNSUPPORTED_OP:
         raise RuntimeError(f"{context}: FPGA rejected packet (UNSUPPORTED_OP). {debug_msg}")
     raise RuntimeError(f"{context}: FPGA returned unknown status 0x{status:02X}. {debug_msg}")
+
+
+def recover_serial_link(ser: serial.Serial, *, quiet: float = 0.05) -> None:
+    try:
+        ser.reset_input_buffer()
+    except Exception:
+        pass
+    try:
+        ser.reset_output_buffer()
+    except Exception:
+        pass
+    if quiet > 0.0:
+        time.sleep(float(quiet))
 
 
 def fpga_sd_to_ddr_copy(
@@ -873,6 +888,60 @@ def fpga_read_infer_debug(ser: serial.Serial) -> dict[str, int]:
     return out
 
 
+def fpga_read_imgload_debug(ser: serial.Serial) -> dict[str, int]:
+    names = {
+        32: "req_base_byte",
+        33: "req_nbytes",
+        34: "start_addr_word",
+        35: "start_lane",
+        36: "first_rsp_word",
+        37: "first_rsp_lane",
+        38: "first_wr_addr",
+        39: "first_wr_byte",
+        40: "head_word",
+        41: "wr_count",
+        42: "imgload_addr_word",
+        43: "imgload_byte_idx",
+        44: "imgload_word_lane",
+        45: "imgload_word_valid",
+        46: "last_ddr_resp_word",
+        47: "last_ddr_resp_was_write",
+        48: "rsp_count",
+        49: "first_nonzero_rsp_idx",
+        50: "first_nonzero_rsp_word",
+        51: "first_nonzero_rsp_lane",
+        52: "first_nonzero_wr_addr",
+        53: "first_nonzero_wr_byte",
+        54: "rsp_word_at_byte148",
+        55: "rsp_word_at_byte152",
+        56: "rsp_word_at_byte156",
+        57: "rsp_word_at_byte160",
+        58: "byte_at_148",
+        59: "byte_at_152",
+        60: "byte_at_156",
+        61: "byte_at_160",
+        62: "sd_first_buf_word",
+        63: "sd_first_buf_word_idx",
+        64: "sd_first_buf_word_lba",
+        65: "sd_partial_flush_word",
+        66: "sd_partial_flush_pack_idx",
+        67: "sd_partial_flush_lba",
+        68: "sd_first_ddr_issue_addr",
+        69: "sd_first_ddr_issue_word",
+        70: "sd_second_ddr_issue_addr",
+        71: "sd_second_ddr_issue_word",
+        72: "sd_ddr_issue_count",
+    }
+    out: dict[str, int] = {}
+    for idx, name in names.items():
+        status, value = send_request(ser, OP_READ_INFER_DEBUG, [idx, 0])
+        if status != STATUS_OK:
+            out[f"{name}_status"] = int(status) & 0xFF
+            continue
+        out[name] = int(value) & 0xFFFFFFFF
+    return out
+
+
 def fpga_add(ser: serial.Serial, a: int, b: int) -> int:
     print(f"Sending ADD request: {a} + {b}")
     status, result = send_request(ser, OP_ADD_I32, [a, b], response_timeout=TIMEOUT_SEC)
@@ -922,10 +991,19 @@ def fpga_read_ddr_words(
     *,
     base_word: int,
     count: int,
+    response_timeout: float = 2.5,
+    transient_retry_max: int = 12,
 ) -> list[int]:
     out: list[int] = []
     for i in range(max(0, int(count))):
-        out.append(fpga_ddr_read32(ser, int(base_word) + i))
+        out.append(
+            fpga_ddr_read32(
+                ser,
+                int(base_word) + i,
+                response_timeout=response_timeout,
+                transient_retry_max=transient_retry_max,
+            )
+        )
     return out
 
 
@@ -955,11 +1033,39 @@ def _first_nonzero_indices(data: list[int], *, limit: int = 8) -> list[int]:
     return out
 
 
+def _first_mismatch_index(a: list[int], b: list[int]) -> int | None:
+    n = min(len(a), len(b))
+    for i in range(n):
+        if int(a[i]) != int(b[i]):
+            return i
+    if len(a) != len(b):
+        return n
+    return None
+
+
+def _format_byte_window(data: list[int], center: int, *, radius: int = 8) -> str:
+    if not data:
+        return "[]"
+    c = max(0, min(int(center), len(data) - 1))
+    lo = max(0, c - int(radius))
+    hi = min(len(data), c + int(radius) + 1)
+    parts: list[str] = []
+    for i in range(lo, hi):
+        byte_hex = f"{int(data[i]) & 0xFF:02X}"
+        if i == c:
+            parts.append(f"[{i}:{byte_hex}]")
+        else:
+            parts.append(f"{i}:{byte_hex}")
+    return " ".join(parts)
+
+
 def fpga_read_raw_image_span(
     ser: serial.Serial,
     *,
     start_idx: int,
     nbytes: int,
+    response_timeout: float = 2.5,
+    transient_retry_max: int = 12,
 ) -> list[int]:
     s = max(0, min(int(start_idx), int(N_IN)))
     n = max(0, min(int(nbytes), int(N_IN) - s))
@@ -969,8 +1075,8 @@ def fpga_read_raw_image_span(
             ser,
             OP_READ_RAW_U8,
             [s + idx, 0],
-            response_timeout=1.0,
-            transient_retry_max=max(TRANSIENT_RETRY_MAX, 8),
+            response_timeout=response_timeout,
+            transient_retry_max=max(TRANSIENT_RETRY_MAX, transient_retry_max),
         )
         require_ok(status, f"READ_RAW_U8_SPAN[{s + idx}]")
         out.append(int(value) & 0xFF)
@@ -1072,6 +1178,34 @@ def read_mnist_image_u8(sample_idx: int) -> tuple[list[int], int]:
     return img_u8.tolist(), int(labels[sample_idx])
 
 
+def reconstruct_raw1_u8_blob(num_images: int) -> bytes:
+    n = max(1, int(num_images))
+    cached = _RAW1_RECON_U8_CACHE.get(n)
+    if cached is not None:
+        return cached
+
+    images, labels = load_mnist()
+    n = min(n, len(images))
+    x = np.asarray(images[:n], dtype=np.float32)
+    if x.size == 0:
+        raise ValueError("MNIST has no images to reconstruct RAW1")
+    if float(np.max(x)) > 1.0:
+        x = x / 255.0
+    images_payload = np.clip(np.rint(x.reshape(n, N_IN) * 255.0), 0, 255).astype(np.uint8)
+    labels_u8 = np.asarray(labels[:n], dtype=np.uint8)
+    header = struct.pack("<4sIIII", b"RAW1", 1, n, N_IN, N_IN)
+    blob = header + labels_u8.tobytes(order="C") + images_payload.tobytes(order="C")
+    _RAW1_RECON_U8_CACHE[n] = blob
+    return blob
+
+
+def reconstruct_raw1_u8_window(start: int, length: int, *, num_images: int) -> list[int]:
+    blob = reconstruct_raw1_u8_blob(num_images)
+    s = max(0, int(start))
+    n = max(0, int(length))
+    return [int(b) & 0xFF for b in blob[s:s + n]]
+
+
 def resolve_raw_bin_path(raw_bin_arg: str | None) -> Path:
     script_dir = Path(__file__).resolve().parent
     snn_dir = script_dir.parent
@@ -1120,6 +1254,27 @@ def resolve_raw_bin_path(raw_bin_arg: str | None) -> Path:
     )
 
 
+
+def read_raw1_layout(raw_bin_path: str) -> tuple[int, int, int]:
+    p = Path(raw_bin_path)
+    with p.open("rb") as f:
+        header = f.read(20)
+        if len(header) != 20:
+            raise ValueError("RAW1 header is too short")
+        magic, version, num_images, n_features, bytes_per_image = struct.unpack("<4sIIII", header)
+        if magic != b"RAW1":
+            raise ValueError("Invalid RAW1 magic")
+        if version != 1:
+            raise ValueError(f"Unsupported RAW1 version: {version}")
+        if n_features != N_IN:
+            raise ValueError(f"Unexpected n_features: {n_features}")
+        if bytes_per_image != N_IN:
+            raise ValueError(
+                f"RAW1 bytes_per_image must be 784 for FPGA Poisson mode, got {bytes_per_image}"
+            )
+        if num_images <= 0:
+            raise ValueError("RAW1 has no images")
+        return 20, int(num_images), int(bytes_per_image)
 def read_raw1_image_u8(raw_bin_path: str, sample_idx: int = 0) -> tuple[list[int], int]:
     p = Path(raw_bin_path)
     with p.open("rb") as f:
@@ -1151,6 +1306,16 @@ def read_raw1_image_u8(raw_bin_path: str, sample_idx: int = 0) -> tuple[list[int
         if len(img) != bytes_per_image:
             raise ValueError("RAW1 image is truncated")
         return list(img), int(labels[sample_idx])
+
+
+def read_file_byte_window(path: str | Path, start: int, length: int) -> list[int]:
+    p = Path(path)
+    s = max(0, int(start))
+    n = max(0, int(length))
+    with p.open("rb") as f:
+        f.seek(s)
+        data = f.read(n)
+    return [int(b) & 0xFF for b in data]
 
 
 def read_raw1_labels_u8(raw_bin_path: str) -> np.ndarray:
@@ -2345,62 +2510,110 @@ def prepare_fpga_sample_image_via_streamed_load(
     start_lba: int,
     timeout_sec: float,
     verbose: bool = True,
+    raw_bin_path: str | None = None,
 ) -> None:
     if int(sample_idx) < 0:
         raise ValueError(f"sample_idx must be >=0, got {sample_idx}")
 
-    img_byte_off = RAW1_HEADER_BYTES + RAW1_NUM_IMAGES_DEFAULT + (int(sample_idx) * N_IN)
+    raw1_header_bytes = RAW1_HEADER_BYTES
+    raw1_num_images = RAW1_NUM_IMAGES_DEFAULT
+    raw1_bytes_per_image = N_IN
+    raw_layout_src = "reconstructed(import_MNIST_raw.py)"
+
+    if int(sample_idx) >= int(raw1_num_images):
+        raise ValueError(
+            f"sample_idx out of range for RAW1 layout: {sample_idx} (max={int(raw1_num_images)-1})"
+        )
+
+    img_byte_off = int(raw1_header_bytes) + int(raw1_num_images) + (int(sample_idx) * int(raw1_bytes_per_image))
     img_sector_off = img_byte_off // 512
     img_byte_in_sector = img_byte_off % 512
     img_base_addr_byte = int(img_byte_in_sector)
-    sectors_needed = (img_byte_in_sector + IMGLOAD_SRC_BIAS_BYTES + N_IN + 511) // 512
+    sectors_needed = (img_byte_in_sector + IMGLOAD_SRC_BIAS_BYTES + int(raw1_bytes_per_image) + 511) // 512
 
     if verbose:
         print(
             "Preparing input image via streamed FPGA image load path: "
             f"sample_idx={int(sample_idx)}, sector_off={img_sector_off}, sectors={sectors_needed}, "
-            f"byte_in_sector={img_byte_in_sector}, src_bias_bytes={IMGLOAD_SRC_BIAS_BYTES}"
+            f"byte_in_sector={img_byte_in_sector}, src_bias_bytes={IMGLOAD_SRC_BIAS_BYTES}, "
+            f"raw1_num_images={int(raw1_num_images)}, raw_layout_src={raw_layout_src}"
         )
 
-    fpga_sd_sectors_to_ddr(
-        ser=ser,
-        start_lba=int(start_lba) + img_sector_off,
-        num_sectors=sectors_needed,
-        timeout_sec=timeout_sec,
-        verbose=verbose,
-    )
+    try:
+        fpga_sd_sectors_to_ddr(
+            ser=ser,
+            start_lba=int(start_lba) + img_sector_off,
+            num_sectors=sectors_needed,
+            timeout_sec=timeout_sec,
+            verbose=verbose,
+        )
+    except TimeoutError as exc:
+        raise TimeoutError(
+            f"SD sectors->DDR timeout: sample_idx={int(sample_idx)}, "
+            f"start_lba={int(start_lba) + img_sector_off}, sectors={sectors_needed}"
+        ) from exc
 
-    # Host-side guard to avoid first-word mis-association on older RTL builds.
     if IMGLOAD_GUARD_SEC > 0.0:
         time.sleep(IMGLOAD_GUARD_SEC)
 
-    fpga_load_image_from_ddr(
-        ser=ser,
-        base_addr_byte=img_base_addr_byte,
-        n_bytes=N_IN,
-        timeout_sec=timeout_sec,
-        verbose=verbose,
-    )
+    try:
+        fpga_load_image_from_ddr(
+            ser=ser,
+            base_addr_byte=img_base_addr_byte,
+            n_bytes=N_IN,
+            timeout_sec=timeout_sec,
+            verbose=verbose,
+        )
+    except TimeoutError as exc:
+        raise TimeoutError(
+            f"DDR->raw_image0 timeout: sample_idx={int(sample_idx)}, "
+            f"base_addr_byte=0x{int(img_base_addr_byte):08X}, n_bytes={N_IN}"
+        ) from exc
 
-    # Verify against the same MNIST source/quantization path used by import_MNIST_raw.py.
-    expected_img_u8, _ = read_mnist_image_u8(int(sample_idx))
+    imgload_dbg: dict[str, int] = {}
+    try:
+        imgload_dbg = fpga_read_imgload_debug(ser)
+    except Exception as e:
+        if verbose:
+            print(f"Imgload debug read failed: {e}")
+    if verbose and imgload_dbg:
+        print("Imgload debug: " + ", ".join(f"{k}={v}" for k, v in imgload_dbg.items()))
+        print(
+            "Imgload debug focus: "
+            f"rsp_count={int(imgload_dbg.get('rsp_count', 0))}, "
+            f"first_nonzero_rsp_idx={int(imgload_dbg.get('first_nonzero_rsp_idx', 0))}, "
+            f"first_nonzero_rsp_word=0x{int(imgload_dbg.get('first_nonzero_rsp_word', 0)) & 0xFFFFFFFF:08X}, "
+            f"first_nonzero_wr_addr={int(imgload_dbg.get('first_nonzero_wr_addr', 0))}, "
+            f"first_nonzero_wr_byte=0x{int(imgload_dbg.get('first_nonzero_wr_byte', 0)) & 0xFF:02X}, "
+            f"rsp@148=0x{int(imgload_dbg.get('rsp_word_at_byte148', 0)) & 0xFFFFFFFF:08X}, "
+            f"rsp@152=0x{int(imgload_dbg.get('rsp_word_at_byte152', 0)) & 0xFFFFFFFF:08X}, "
+            f"rsp@156=0x{int(imgload_dbg.get('rsp_word_at_byte156', 0)) & 0xFFFFFFFF:08X}, "
+            f"rsp@160=0x{int(imgload_dbg.get('rsp_word_at_byte160', 0)) & 0xFFFFFFFF:08X}, "
+            f"byte148=0x{int(imgload_dbg.get('byte_at_148', 0)) & 0xFF:02X}, "
+            f"byte152=0x{int(imgload_dbg.get('byte_at_152', 0)) & 0xFF:02X}, "
+            f"byte156=0x{int(imgload_dbg.get('byte_at_156', 0)) & 0xFF:02X}, "
+            f"byte160=0x{int(imgload_dbg.get('byte_at_160', 0)) & 0xFF:02X}"
+        )
+        print(
+            "SD->DDR debug focus: "
+            f"first_buf_word=0x{int(imgload_dbg.get('sd_first_buf_word', 0)) & 0xFFFFFFFF:08X}, "
+            f"first_buf_word_idx={int(imgload_dbg.get('sd_first_buf_word_idx', 0))}, "
+            f"first_buf_word_lba={int(imgload_dbg.get('sd_first_buf_word_lba', 0))}, "
+            f"partial_flush_word=0x{int(imgload_dbg.get('sd_partial_flush_word', 0)) & 0xFFFFFFFF:08X}, "
+            f"partial_flush_pack_idx={int(imgload_dbg.get('sd_partial_flush_pack_idx', 0))}, "
+            f"partial_flush_lba={int(imgload_dbg.get('sd_partial_flush_lba', 0))}, "
+            f"first_ddr_issue_addr=0x{int(imgload_dbg.get('sd_first_ddr_issue_addr', 0)) & 0xFFFFFFFF:08X}, "
+            f"first_ddr_issue_word=0x{int(imgload_dbg.get('sd_first_ddr_issue_word', 0)) & 0xFFFFFFFF:08X}, "
+            f"second_ddr_issue_addr=0x{int(imgload_dbg.get('sd_second_ddr_issue_addr', 0)) & 0xFFFFFFFF:08X}, "
+            f"second_ddr_issue_word=0x{int(imgload_dbg.get('sd_second_ddr_issue_word', 0)) & 0xFFFFFFFF:08X}, "
+            f"ddr_issue_count={int(imgload_dbg.get('sd_ddr_issue_count', 0))}"
+        )
     raw_slice = fpga_read_raw_image_span(
         ser,
         start_idx=IMGLOAD_DST_BIAS_BYTES,
         nbytes=N_IN,
     )
-    expected_verify = expected_img_u8[:len(raw_slice)]
 
-    if len(raw_slice) != len(expected_verify):
-        raise RuntimeError(
-            "MNIST->raw_image0 verify failed to collect enough bytes: "
-            f"raw={len(raw_slice)}, expected={len(expected_verify)}"
-        )
-
-    # DDR source vs raw_image0 diagnostics:
-    # - dump around expected DDR source address
-    # - compare raw against expected and against +/- byte deltas
-    # This makes source-address slips and destination-index slips visible.
     expected_src_base_byte = int(img_base_addr_byte) + int(IMGLOAD_SRC_BIAS_BYTES)
     staging_base_word = img_staging_base_word()
     probe_margin_bytes = 64
@@ -2418,18 +2631,32 @@ def prepare_fpga_sample_image_via_streamed_load(
     ddr_probe_bytes = _ddr_words_to_bytes_le(ddr_probe_words)
     ddr_probe_bytes = ddr_probe_bytes[probe_byte_off_in_word:probe_byte_off_in_word + probe_span_bytes]
     expected_off_in_probe = expected_src_base_byte - probe_base_byte
-    ddr_expected = ddr_probe_bytes[expected_off_in_probe:expected_off_in_probe + N_IN]
+    raw1_probe_abs_start = (img_sector_off * 512) + probe_base_byte
+    recon_probe_bytes = reconstruct_raw1_u8_window(
+        raw1_probe_abs_start,
+        probe_span_bytes,
+        num_images=int(raw1_num_images),
+    )
+    recon_expected = recon_probe_bytes[expected_off_in_probe:expected_off_in_probe + N_IN]
+    expected_verify = recon_expected[:len(raw_slice)]
+    ddr_compare = ddr_probe_bytes[expected_off_in_probe:expected_off_in_probe + len(expected_verify)]
 
-    cmp_len = min(128, len(ddr_expected), len(raw_slice), len(expected_verify))
-    mism_expected = _count_mismatch(ddr_expected[:cmp_len], raw_slice[:cmp_len])
+    if len(raw_slice) != len(expected_verify):
+        raise RuntimeError(
+            "MNIST->raw_image0 verify failed to collect enough bytes: "
+            f"raw={len(raw_slice)}, expected={len(expected_verify)}"
+        )
+
+    cmp_len = min(128, len(ddr_compare), len(raw_slice), len(expected_verify))
+    mism_expected = _count_mismatch(ddr_compare[:cmp_len], raw_slice[:cmp_len])
     best_delta = 0
     best_delta_mism = 10**9
     for delta in range(-64, 65):
         d0 = expected_off_in_probe + delta
         d1 = d0 + cmp_len
-        if d0 < 0 or d1 > len(ddr_probe_bytes):
+        if d0 < 0 or d1 > len(ddr_probe_bytes) or d1 > len(recon_probe_bytes):
             continue
-        m = _count_mismatch(ddr_probe_bytes[d0:d1], raw_slice[:cmp_len])
+        m = _count_mismatch(ddr_probe_bytes[d0:d1], expected_verify[:cmp_len])
         if m < best_delta_mism:
             best_delta_mism = m
             best_delta = delta
@@ -2437,10 +2664,31 @@ def prepare_fpga_sample_image_via_streamed_load(
     best_raw_start = 0
     best_raw_start_mism = 10**9
     for raw_start in range(0, min(257, max(1, len(raw_slice) - cmp_len + 1))):
-        m = _count_mismatch(ddr_expected[:cmp_len], raw_slice[raw_start:raw_start + cmp_len])
+        m = _count_mismatch(expected_verify[:cmp_len], raw_slice[raw_start:raw_start + cmp_len])
         if m < best_raw_start_mism:
             best_raw_start_mism = m
             best_raw_start = raw_start
+
+    mnist_img_u8, _ = read_mnist_image_u8(int(sample_idx))
+    mnist_img_verify = mnist_img_u8[:len(expected_verify)]
+    mnist_vs_recon_i0 = _first_mismatch_index(mnist_img_verify, expected_verify)
+    recon_vs_ddr_i0 = _first_mismatch_index(expected_verify, ddr_compare)
+    ddr_vs_raw_i0 = _first_mismatch_index(ddr_compare, raw_slice)
+    recon_vs_raw_i0 = _first_mismatch_index(expected_verify, raw_slice)
+    debug_centers: list[int] = []
+    for v in (
+        mnist_vs_recon_i0,
+        recon_vs_ddr_i0,
+        ddr_vs_raw_i0,
+        recon_vs_raw_i0,
+        int(imgload_dbg.get("first_nonzero_wr_addr", 0)) if imgload_dbg else None,
+    ):
+        if v is None:
+            continue
+        iv = int(v)
+        if 0 <= iv < len(expected_verify) and iv not in debug_centers:
+            debug_centers.append(iv)
+    debug_centers = debug_centers[:4]
 
     if verbose:
         dump_cols = 32
@@ -2470,6 +2718,28 @@ def prepare_fpga_sample_image_via_streamed_load(
             f"best_raw_start={best_raw_start} (mismatch={best_raw_start_mism}/{cmp_len}), "
             f"raw_first_nonzero={_first_nonzero_indices(raw_slice, limit=8)}"
         )
+        print(
+            "Compare pivots: "
+            f"mnist_vs_recon_i0={mnist_vs_recon_i0}, "
+            f"recon_vs_ddr_i0={recon_vs_ddr_i0}, "
+            f"ddr_vs_raw_i0={ddr_vs_raw_i0}, "
+            f"recon_vs_raw_i0={recon_vs_raw_i0}, "
+            f"recon_first_nonzero={_first_nonzero_indices(expected_verify, limit=8)}, "
+            f"ddr_first_nonzero={_first_nonzero_indices(ddr_compare, limit=8)}, "
+            f"mnist_first_nonzero={_first_nonzero_indices(mnist_img_verify, limit=8)}"
+        )
+        for center in debug_centers:
+            print(
+                f"Compare window @ {center}: "
+                f"mnist={_format_byte_window(mnist_img_verify, center)}, "
+                f"recon={_format_byte_window(expected_verify, center)}, "
+                f"ddr={_format_byte_window(ddr_compare, center)}, "
+                f"raw={_format_byte_window(raw_slice, center)}"
+            )
+        print(
+            "Compare note: expected bytes are reconstructed from import_MNIST_raw.py semantics "
+            f"(header={int(raw1_header_bytes)}, num_images={int(raw1_num_images)}, bytes_per_image={int(raw1_bytes_per_image)})."
+        )
 
     mism = [
         i
@@ -2478,19 +2748,36 @@ def prepare_fpga_sample_image_via_streamed_load(
     ]
     if mism:
         i0 = mism[0]
+        dbg_summary = ""
+        if imgload_dbg:
+            dbg_summary = (
+                f", dbg_start_addr_word=0x{int(imgload_dbg.get('start_addr_word', 0)) & 0xFFFFFFFF:08X}"
+                f", dbg_start_lane={int(imgload_dbg.get('start_lane', 0))}"
+                f", dbg_first_rsp_word=0x{int(imgload_dbg.get('first_rsp_word', 0)) & 0xFFFFFFFF:08X}"
+                f", dbg_first_rsp_lane={int(imgload_dbg.get('first_rsp_lane', 0))}"
+                f", dbg_first_wr_addr={int(imgload_dbg.get('first_wr_addr', 0))}"
+                f", dbg_first_wr_byte=0x{int(imgload_dbg.get('first_wr_byte', 0)) & 0xFF:02X}"
+                f", dbg_head_word=0x{int(imgload_dbg.get('head_word', 0)) & 0xFFFFFFFF:08X}"
+                f", dbg_wr_count={int(imgload_dbg.get('wr_count', 0))}"
+                f", dbg_first_nonzero_rsp_idx={int(imgload_dbg.get('first_nonzero_rsp_idx', 0))}"
+                f", dbg_first_nonzero_rsp_word=0x{int(imgload_dbg.get('first_nonzero_rsp_word', 0)) & 0xFFFFFFFF:08X}"
+                f", dbg_first_nonzero_wr_addr={int(imgload_dbg.get('first_nonzero_wr_addr', 0))}"
+                f", dbg_first_nonzero_wr_byte=0x{int(imgload_dbg.get('first_nonzero_wr_byte', 0)) & 0xFF:02X}"
+                f", dbg_byte148=0x{int(imgload_dbg.get('byte_at_148', 0)) & 0xFF:02X}"
+                f", dbg_byte152=0x{int(imgload_dbg.get('byte_at_152', 0)) & 0xFF:02X}"
+                f", dbg_byte156=0x{int(imgload_dbg.get('byte_at_156', 0)) & 0xFF:02X}"
+                f", dbg_byte160=0x{int(imgload_dbg.get('byte_at_160', 0)) & 0xFF:02X}"
+            )
         raise RuntimeError(
             "MNIST->raw_image0 verify: FAIL "
             f"(sample_idx={int(sample_idx)}, mismatch_count={len(mism)}, "
-            f"first_mismatch=i={i0}, expected=0x{int(expected_verify[i0]):02X}, raw=0x{int(raw_slice[i0]):02X})"
+            f"first_mismatch=i={i0}, expected=0x{int(expected_verify[i0]):02X}, raw=0x{int(raw_slice[i0]):02X}{dbg_summary})"
         )
-
     if verbose:
         print(
             "MNIST->raw_image0 verify: PASS "
             f"(sample_idx={int(sample_idx)}, compared_bytes={len(expected_verify)}, raw_start={IMGLOAD_DST_BIAS_BYTES})"
         )
-
-
 def lcg_next_u32(state: int) -> int:
     return (state * LCG_A + LCG_C) & 0xFFFFFFFF
 
@@ -3159,11 +3446,12 @@ def fpga_phase3_verify_one_shot(ser: serial.Serial, args: argparse.Namespace) ->
         curr_sample_idx = sample_idx + k
         print(f"  [run {k + 1}/{verify_count}] sample_idx={curr_sample_idx}")
         try:
+            recover_serial_link(ser, quiet=0.02)
             prepare_fpga_sample_image_via_streamed_load(
                 ser,
                 sample_idx=curr_sample_idx,
                 start_lba=int(args.start_lba),
-                timeout_sec=float(args.timeout),
+                timeout_sec=min(float(args.timeout), 30.0),
             )
             ret = fpga_train_run_sample_phase3(
                 ser,
@@ -3215,6 +3503,7 @@ def fpga_phase3_verify_one_shot(ser: serial.Serial, args: argparse.Namespace) ->
                 }
             )
             print(f"  run failed: {exc}")
+            recover_serial_link(ser, quiet=0.10)
 
     print("Phase3 verify summary (5 samples):")
     for r in run_results:
@@ -3250,6 +3539,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sample-idx", type=int, default=0, help="sample index for one-sample phase4 command")
     parser.add_argument("--port", type=str, default=SERIAL_PORTNAME)
     parser.add_argument("--start-lba", type=int, default=2048)
+    parser.add_argument("--raw-bin", type=str, default=None, help="optional RAW1 file path used to derive exact image byte offsets")
     parser.add_argument("--seed", type=lambda x: int(x, 0), default=0x12345678)
     parser.add_argument("--timeout", type=float, default=600.0)
     parser.add_argument(
@@ -3330,6 +3620,7 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = parse_args()
+    RAW_BIN_PATH_RUNTIME = args.raw_bin
     if serial is None:
         raise RuntimeError(
             "pyserial is not installed. Install it to use FPGA communication paths."
@@ -3454,3 +3745,4 @@ if __name__ == "__main__":
             "No mode selected. Use one of: --phase1-verify, --phase2-verify, --phase3-verify, --train-run-sample-phase4, "
             "--train-phase4-build-assignments, --train-infer-e2e-compare, --train-then-infer-compare"
         )
+
