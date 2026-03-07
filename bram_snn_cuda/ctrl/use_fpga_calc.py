@@ -50,6 +50,7 @@ OP_BATCH_STATUS = 0x43
 OP_BATCH_READ_SUMMARY = 0x44
 OP_BATCH_CONFIG2 = 0x45
 OP_BATCH_LABEL_WRITE = 0x46
+OP_BATCH_ASSIGN_WRITE = 0x47
 
 STATUS_OK = 0x00
 STATUS_BAD_PACKET = 0xE1
@@ -695,6 +696,19 @@ def fpga_batch_preload_labels(
         fpga_batch_label_write(ser, sample_idx=sample_idx, label=int(labels[sample_idx]))
 
 
+def fpga_batch_assign_write(ser: serial.Serial, neuron_idx: int, label: int) -> None:
+    status, value = send_request(ser, OP_BATCH_ASSIGN_WRITE, [int(neuron_idx), int(label)])
+    require_ok(status, f"BATCH_ASSIGN_WRITE[idx={int(neuron_idx)}]")
+
+
+def fpga_batch_preload_assignments(ser: serial.Serial, assignments: np.ndarray) -> None:
+    arr = np.asarray(assignments, dtype=np.int64).reshape(-1)
+    if arr.shape[0] != N_NEURONS:
+        raise ValueError(f"assignments must have length {N_NEURONS}, got {arr.shape}")
+    for neuron_idx in range(N_NEURONS):
+        fpga_batch_assign_write(ser, neuron_idx=neuron_idx, label=int(arr[neuron_idx]))
+
+
 def fpga_batch_wait_done(
     ser: serial.Serial,
     *,
@@ -887,8 +901,8 @@ def fpga_batch_single_smoke(
     seed: int,
     mode_train: bool,
 ) -> None:
+    _, labels_all = load_mnist()
     if mode_train:
-        _, labels_all = load_mnist()
         fpga_train_label_stats_reset(ser)
         fpga_batch_preload_labels(
             ser,
@@ -896,6 +910,14 @@ def fpga_batch_single_smoke(
             start_idx=int(sample_idx),
             num_samples=int(num_samples),
         )
+    else:
+        fpga_batch_preload_labels(
+            ser,
+            labels_all,
+            start_idx=int(sample_idx),
+            num_samples=int(num_samples),
+        )
+        fpga_batch_preload_assignments(ser, np.zeros((N_NEURONS,), dtype=np.int64))
     fpga_batch_config0(ser, mode_train=mode_train, start_sample_idx=sample_idx)
     fpga_batch_config1(ser, num_samples=num_samples, seed_value=seed)
     fpga_batch_config2(ser, start_lba=start_lba)
@@ -912,6 +934,8 @@ def fpga_batch_single_smoke(
         label_counts = fpga_read_train_label_counts_all(ser)
         nonzero = [(idx, int(cnt)) for idx, cnt in enumerate(label_counts) if int(cnt) > 0]
         print(f"Nonzero label counts: {nonzero}")
+    else:
+        print(f"Batch correct_count = {fpga_batch_read_summary_field(ser, 6)}")
 
 
 def parse_args() -> argparse.Namespace:
