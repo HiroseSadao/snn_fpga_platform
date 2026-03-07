@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 -------------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version     : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date             : Thu Mar  5 21:17:13 2026
-| Host             : eecs-digital-04 running 64-bit Ubuntu 24.04.3 LTS
+| Date             : Fri Mar  6 20:38:31 2026
+| Host             : eecs-digital-05 running 64-bit Ubuntu 24.04.3 LTS
 | Command          : report_power -file obj/post_route_power.rpt
 | Design           : top_level
 | Device           : xc7s50csga324-1
@@ -30,10 +30,10 @@ Table of Contents
 ----------
 
 +--------------------------+--------------+
-| Total On-Chip Power (W)  | 0.670        |
+| Total On-Chip Power (W)  | 0.668        |
 | Design Power Budget (W)  | Unspecified* |
 | Power Budget Margin (W)  | NA           |
-| Dynamic (W)              | 0.594        |
+| Dynamic (W)              | 0.592        |
 | Device Static (W)        | 0.076        |
 | Effective TJA (C/W)      | 4.9          |
 | Max Ambient (C)          | 81.7         |
@@ -53,20 +53,20 @@ Table of Contents
 | On-Chip                  | Power (W) | Used     | Available | Utilization (%) |
 +--------------------------+-----------+----------+-----------+-----------------+
 | Clocks                   |     0.041 |        9 |       --- |             --- |
-| Slice Logic              |     0.016 |    38925 |       --- |             --- |
-|   LUT as Logic           |     0.015 |    16090 |     32600 |           49.36 |
-|   CARRY4                 |    <0.001 |     1211 |      8150 |           14.86 |
-|   Register               |    <0.001 |    16414 |     65200 |           25.17 |
-|   F7/F8 Muxes            |    <0.001 |      959 |     32600 |            2.94 |
-|   Others                 |     0.000 |       75 |       --- |             --- |
-|   LUT as Distributed RAM |     0.000 |      475 |      9600 |            4.95 |
-| Signals                  |     0.018 |    34018 |       --- |             --- |
-| Block RAM                |     0.010 |     31.5 |        75 |           42.00 |
+| Slice Logic              |     0.017 |    38078 |       --- |             --- |
+|   LUT as Logic           |     0.015 |    15880 |     32600 |           48.71 |
+|   CARRY4                 |     0.001 |     1197 |      8150 |           14.69 |
+|   Register               |    <0.001 |    16027 |     65200 |           24.58 |
+|   F7/F8 Muxes            |    <0.001 |     1105 |     32600 |            3.39 |
+|   LUT as Distributed RAM |    <0.001 |      606 |      9600 |            6.31 |
+|   Others                 |     0.000 |       77 |       --- |             --- |
+| Signals                  |     0.020 |    32624 |       --- |             --- |
+| Block RAM                |     0.001 |       31 |        75 |           41.33 |
 | MMCM                     |     0.109 |        1 |         5 |           20.00 |
-| DSPs                     |     0.008 |       59 |       120 |           49.17 |
+| DSPs                     |     0.012 |       57 |       120 |           47.50 |
 | I/O                      |     0.392 |       83 |       210 |           39.52 |
 | Static Power             |     0.076 |          |           |                 |
-| Total                    |     0.670 |          |           |                 |
+| Total                    |     0.668 |          |           |                 |
 +--------------------------+-----------+----------+-----------+-----------------+
 
 
@@ -76,8 +76,8 @@ Table of Contents
 +-----------+-------------+-----------+-------------+------------+-------------+-------------+------------+
 | Source    | Voltage (V) | Total (A) | Dynamic (A) | Static (A) | Powerup (A) | Budget (A)  | Margin (A) |
 +-----------+-------------+-----------+-------------+------------+-------------+-------------+------------+
-| Vccint    |       1.000 |     0.120 |       0.109 |      0.012 |       NA    | Unspecified | NA         |
-| Vccaux    |       1.800 |     0.152 |       0.139 |      0.013 |       NA    | Unspecified | NA         |
+| Vccint    |       1.000 |     0.119 |       0.108 |      0.012 |       NA    | Unspecified | NA         |
+| Vccaux    |       1.800 |     0.151 |       0.139 |      0.013 |       NA    | Unspecified | NA         |
 | Vcco33    |       3.300 |     0.002 |       0.001 |      0.001 |       NA    | Unspecified | NA         |
 | Vcco25    |       2.500 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
 | Vcco18    |       1.800 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
@@ -85,7 +85,7 @@ Table of Contents
 | Vcco135   |       1.350 |     0.173 |       0.172 |      0.001 |       NA    | Unspecified | NA         |
 | Vcco12    |       1.200 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
 | Vccaux_io |       1.800 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
-| Vccbram   |       1.000 |     0.002 |       0.001 |      0.001 |       NA    | Unspecified | NA         |
+| Vccbram   |       1.000 |     0.001 |       0.000 |      0.001 |       NA    | Unspecified | NA         |
 | Vccadc    |       1.800 |     0.020 |       0.000 |      0.020 |       NA    | Unspecified | NA         |
 +-----------+-------------+-----------+-------------+------------+-------------+-------------+------------+
 
@@ -149,11 +149,9 @@ Table of Contents
 +------------------------------+-----------+
 | Name                         | Power (W) |
 +------------------------------+-----------+
-| top_level                    |     0.594 |
-|   u_csr_col_idx_bram         |     0.009 |
-|     xpm_memory_base_inst     |     0.009 |
-|   u_ddr3_top                 |     0.377 |
-|     ddr3_controller_inst     |     0.029 |
+| top_level                    |     0.592 |
+|   u_ddr3_top                 |     0.376 |
+|     ddr3_controller_inst     |     0.027 |
 |     ddr3_phy_inst            |     0.348 |
 |       OBUFDS_inst            |     0.016 |
 |       genblk5[0].IOBUF_data  |     0.012 |

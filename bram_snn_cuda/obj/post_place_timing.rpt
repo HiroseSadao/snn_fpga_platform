@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Thu Mar  5 21:16:19 2026
-| Host         : eecs-digital-04 running 64-bit Ubuntu 24.04.3 LTS
+| Date         : Fri Mar  6 20:37:38 2026
+| Host         : eecs-digital-05 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_timing -file obj/post_place_timing.rpt
 | Design       : top_level
 | Device       : 7s50-csga324
@@ -12,20 +12,20 @@ Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanc
 
 Timing Report
 
-Slack (MET) :             0.506ns  (required time - arrival time)
-  Source:                 sd_ddr_flush_idx_reg[4]/C
+Slack (MET) :             0.384ns  (required time - arrival time)
+  Source:                 infer_pass2_diff_c_inh_reg[1]/C
                             (rising edge-triggered cell FDRE clocked by clk_passthrough_clk_wiz_0  {rise@0.000ns fall@5.000ns period=10.000ns})
-  Destination:            resp_result_reg[2]/D
-                            (rising edge-triggered cell FDRE clocked by clk_passthrough_clk_wiz_0  {rise@0.000ns fall@5.000ns period=10.000ns})
+  Destination:            infer_g_inh_state_reg/DIADI[11]
+                            (rising edge-triggered cell RAMB18E1 clocked by clk_passthrough_clk_wiz_0  {rise@0.000ns fall@5.000ns period=10.000ns})
   Path Group:             clk_passthrough_clk_wiz_0
   Path Type:              Setup (Max at Slow Process Corner)
   Requirement:            10.000ns  (clk_passthrough_clk_wiz_0 rise@10.000ns - clk_passthrough_clk_wiz_0 rise@0.000ns)
-  Data Path Delay:        9.403ns  (logic 1.948ns (20.717%)  route 7.455ns (79.283%))
-  Logic Levels:           8  (CARRY4=1 LUT4=1 LUT6=6)
-  Clock Path Skew:        -0.048ns (DCD - SCD + CPR)
-    Destination Clock Delay (DCD):    -1.641ns = ( 8.359 - 10.000 ) 
-    Source Clock Delay      (SCD):    -1.040ns
-    Clock Pessimism Removal (CPR):    0.554ns
+  Data Path Delay:        9.309ns  (logic 4.555ns (48.931%)  route 4.754ns (51.069%))
+  Logic Levels:           13  (CARRY4=9 LUT1=1 LUT3=1 LUT4=2)
+  Clock Path Skew:        0.007ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    -1.571ns = ( 8.429 - 10.000 ) 
+    Source Clock Delay      (SCD):    -1.026ns
+    Clock Pessimism Removal (CPR):    0.553ns
   Clock Uncertainty:      0.074ns  ((TSJ^2 + DJ^2)^1/2) / 2 + PE
     Total System Jitter     (TSJ):    0.071ns
     Discrete Jitter          (DJ):    0.129ns
@@ -43,29 +43,47 @@ Slack (MET) :             0.506ns  (required time - arrival time)
                                                      -7.025    -4.352 r  u_ddr_clk_wiz/mmcm_adv_inst/CLKOUT5
                          net (fo=1, estimated)        1.666    -2.686    u_ddr_clk_wiz/clk_passthrough_clk_wiz_0
     BUFGCTRL_X0Y4        BUFG (Prop_bufg_I_O)         0.096    -2.590 r  u_ddr_clk_wiz/clkout6_buf/O
-                         net (fo=14115, estimated)    1.550    -1.040    core_clk
-    SLICE_X36Y93         FDRE                                         r  sd_ddr_flush_idx_reg[4]/C
+                         net (fo=13899, estimated)    1.564    -1.026    core_clk
+    SLICE_X14Y15         FDRE                                         r  infer_pass2_diff_c_inh_reg[1]/C
   -------------------------------------------------------------------    -------------------
-    SLICE_X36Y93         FDRE (Prop_fdre_C_Q)         0.456    -0.584 r  sd_ddr_flush_idx_reg[4]/Q
-                         net (fo=136, estimated)      1.347     0.763    u_sd_controller/sd_ddr_flush_idx_reg[7]_0[1]
-    SLICE_X37Y88         LUT6 (Prop_lut6_I0_O)        0.124     0.887 r  u_sd_controller/sd_ddr_flush_idx[7]_i_6/O
-                         net (fo=5, estimated)        0.752     1.639    u_sd_controller/sd_ddr_flush_idx[7]_i_6_n_0
-    SLICE_X38Y87         LUT6 (Prop_lut6_I0_O)        0.124     1.763 r  u_sd_controller/sd_ddr_flush_idx[7]_i_10/O
-                         net (fo=1, estimated)        0.498     2.261    u_sd_controller/sd_ddr_flush_idx[7]_i_10_n_0
-    SLICE_X38Y88         CARRY4 (Prop_carry4_DI[3]_CO[3])
-                                                      0.396     2.657 r  u_sd_controller/sd_ddr_flush_idx_reg[7]_i_7/CO[3]
-                         net (fo=27, estimated)       0.967     3.624    u_uart_rx/sd_ddr_flush_active_reg_1[0]
-    SLICE_X44Y73         LUT6 (Prop_lut6_I3_O)        0.124     3.748 f  u_uart_rx/resp_result[28]_i_14/O
-                         net (fo=8, estimated)        1.310     5.058    u_uart_rx/ddr_rsp_kind_core_reg[2]
-    SLICE_X51Y63         LUT4 (Prop_lut4_I2_O)        0.150     5.208 f  u_uart_rx/resp_result[2]_i_17/O
-                         net (fo=2, estimated)        0.588     5.796    u_uart_rx/resp_result[2]_i_17_n_0
-    SLICE_X51Y64         LUT6 (Prop_lut6_I1_O)        0.326     6.122 f  u_uart_rx/resp_result[2]_i_9/O
-                         net (fo=1, estimated)        0.806     6.928    u_uart_rx/resp_result[2]_i_9_n_0
-    SLICE_X44Y65         LUT6 (Prop_lut6_I1_O)        0.124     7.052 r  u_uart_rx/resp_result[2]_i_3/O
-                         net (fo=1, estimated)        1.187     8.239    u_uart_rx/resp_result[2]_i_3_n_0
-    SLICE_X41Y69         LUT6 (Prop_lut6_I1_O)        0.124     8.363 r  u_uart_rx/resp_result[2]_i_1/O
-                         net (fo=1, routed)           0.000     8.363    u_uart_rx_n_128
-    SLICE_X41Y69         FDRE                                         r  resp_result_reg[2]/D
+    SLICE_X14Y15         FDRE (Prop_fdre_C_Q)         0.518    -0.508 f  infer_pass2_diff_c_inh_reg[1]/Q
+                         net (fo=8, estimated)        0.954     0.446    infer_pass2_diff_c_inh_reg_n_0_[1]
+    SLICE_X7Y8           LUT1 (Prop_lut1_I0_O)        0.124     0.570 r  infer_g_inh_state_reg_i_243/O
+                         net (fo=1, routed)           0.000     0.570    infer_g_inh_state_reg_i_243_n_0
+    SLICE_X7Y8           CARRY4 (Prop_carry4_S[1]_CO[3])
+                                                      0.550     1.120 r  infer_g_inh_state_reg_i_222/CO[3]
+                         net (fo=1, estimated)        0.000     1.120    infer_g_inh_state_reg_i_222_n_0
+    SLICE_X7Y9           CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     1.234 r  infer_g_inh_state_reg_i_232/CO[3]
+                         net (fo=1, estimated)        0.000     1.234    infer_g_inh_state_reg_i_232_n_0
+    SLICE_X7Y10          CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     1.348 r  infer_g_inh_state_reg_i_220/CO[3]
+                         net (fo=1, estimated)        0.000     1.348    infer_g_inh_state_reg_i_220_n_0
+    SLICE_X7Y11          CARRY4 (Prop_carry4_CI_O[1])
+                                                      0.334     1.682 r  infer_g_inh_state_reg_i_170/O[1]
+                         net (fo=2, estimated)        0.786     2.468    infer_g_inh_state_reg_i_170_n_6
+    SLICE_X14Y11         LUT3 (Prop_lut3_I1_O)        0.303     2.771 r  infer_g_inh_state_reg_i_138/O
+                         net (fo=2, estimated)        0.448     3.219    infer_g_inh_state_reg_i_138_n_0
+    SLICE_X12Y10         LUT4 (Prop_lut4_I3_O)        0.124     3.343 r  infer_g_inh_state_reg_i_142/O
+                         net (fo=1, routed)           0.000     3.343    infer_g_inh_state_reg_i_142_n_0
+    SLICE_X12Y10         CARRY4 (Prop_carry4_S[1]_CO[3])
+                                                      0.533     3.876 r  infer_g_inh_state_reg_i_72/CO[3]
+                         net (fo=1, estimated)        0.000     3.876    infer_g_inh_state_reg_i_72_n_0
+    SLICE_X12Y11         CARRY4 (Prop_carry4_CI_O[2])
+                                                      0.239     4.115 r  infer_g_inh_state_reg_i_67/O[2]
+                         net (fo=3, estimated)        0.662     4.777    p_0_in__1[19]
+    SLICE_X13Y10         CARRY4 (Prop_carry4_S[1]_CO[3])
+                                                      0.851     5.628 r  infer_g_inh_state_reg_i_39/CO[3]
+                         net (fo=1, estimated)        0.000     5.628    infer_g_inh_state_reg_i_39_n_0
+    SLICE_X13Y11         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     5.742 r  infer_g_inh_state_reg_i_37/CO[3]
+                         net (fo=1, estimated)        0.000     5.742    infer_g_inh_state_reg_i_37_n_0
+    SLICE_X13Y12         CARRY4 (Prop_carry4_CI_O[1])
+                                                      0.334     6.076 r  infer_g_inh_state_reg_i_35/O[1]
+                         net (fo=1, estimated)        1.101     7.177    infer_g_inh_state_reg_i_35_n_6
+    SLICE_X10Y3          LUT4 (Prop_lut4_I0_O)        0.303     7.480 r  infer_g_inh_state_reg_i_7/O
+                         net (fo=1, estimated)        0.803     8.283    infer_g_inh_state_reg_i_7_n_0
+    RAMB18_X0Y5          RAMB18E1                                     r  infer_g_inh_state_reg/DIADI[11]
   -------------------------------------------------------------------    -------------------
 
                          (clock clk_passthrough_clk_wiz_0 rise edge)
@@ -78,16 +96,17 @@ Slack (MET) :             0.506ns  (required time - arrival time)
                                                      -7.279     5.263 r  u_ddr_clk_wiz/mmcm_adv_inst/CLKOUT5
                          net (fo=1, estimated)        1.583     6.846    u_ddr_clk_wiz/clk_passthrough_clk_wiz_0
     BUFGCTRL_X0Y4        BUFG (Prop_bufg_I_O)         0.091     6.937 r  u_ddr_clk_wiz/clkout6_buf/O
-                         net (fo=14115, estimated)    1.422     8.359    core_clk
-    SLICE_X41Y69         FDRE                                         r  resp_result_reg[2]/C
-                         clock pessimism              0.554     8.912    
-                         clock uncertainty           -0.074     8.839    
-    SLICE_X41Y69         FDRE (Setup_fdre_C_D)        0.031     8.870    resp_result_reg[2]
+                         net (fo=13899, estimated)    1.492     8.429    core_clk
+    RAMB18_X0Y5          RAMB18E1                                     r  infer_g_inh_state_reg/CLKBWRCLK
+                         clock pessimism              0.553     8.982    
+                         clock uncertainty           -0.074     8.908    
+    RAMB18_X0Y5          RAMB18E1 (Setup_ramb18e1_CLKBWRCLK_DIADI[11])
+                                                     -0.241     8.667    infer_g_inh_state_reg
   -------------------------------------------------------------------
-                         required time                          8.870    
-                         arrival time                          -8.363    
+                         required time                          8.667    
+                         arrival time                          -8.283    
   -------------------------------------------------------------------
-                         slack                                  0.506    
+                         slack                                  0.384    
 
 
 
