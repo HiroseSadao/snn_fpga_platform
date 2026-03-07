@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Fri Mar  6 20:38:32 2026
-| Host         : eecs-digital-05 running 64-bit Ubuntu 24.04.3 LTS
+| Date         : Sat Mar  7 01:12:44 2026
+| Host         : eecs-digital-09 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_drc -file obj/post_imp_drc.rpt
 | Design       : top_level
 | Device       : xc7s50csga324-1
@@ -24,12 +24,12 @@ Table of Contents
       Design limits: <entire design considered>
            Ruledeck: default
              Max checks: <unlimited>
-             Checks found: 24
+             Checks found: 25
 +----------+----------+-----------------------------------------------------+--------+
 | Rule     | Severity | Description                                         | Checks |
 +----------+----------+-----------------------------------------------------+--------+
 | CFGBVS-1 | Warning  | Missing CFGBVS and CONFIG_VOLTAGE Design Properties | 1      |
-| DPIP-1   | Warning  | Input pipelining                                    | 23     |
+| DPIP-1   | Warning  | Input pipelining                                    | 24     |
 +----------+----------+-----------------------------------------------------+--------+
 
 2. REPORT DETAILS
@@ -139,7 +139,7 @@ Related violations: <none>
 
 DPIP-1#19 Warning
 Input pipelining  
-DSP lcg_state_in0 input lcg_state_in0/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP infer_rng_mul_prod_q32_reg input infer_rng_mul_prod_q32_reg/B[17:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 DPIP-1#20 Warning
@@ -159,7 +159,12 @@ Related violations: <none>
 
 DPIP-1#23 Warning
 Input pipelining  
-DSP train_trace_bt_pre_base0 input train_trace_bt_pre_base0/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
+DSP train_trace_a_row_base0 input train_trace_a_row_base0/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
+Related violations: <none>
+
+DPIP-1#24 Warning
+Input pipelining  
+DSP train_trace_bt_pre_base0__0 input train_trace_bt_pre_base0__0/A[29:0] is not pipelined. Pipelining DSP48 input will improve performance.
 Related violations: <none>
 
 

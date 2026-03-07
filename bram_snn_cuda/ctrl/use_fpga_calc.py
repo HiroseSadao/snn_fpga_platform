@@ -41,6 +41,12 @@ OP_TRAIN_LABEL_STATS_RESET = 0x39
 OP_TRAIN_LABEL_STATS_ACCUM = 0x3A
 OP_READ_TRAIN_LABEL_STAT_SUM = 0x3B
 OP_READ_TRAIN_LABEL_STAT_COUNT = 0x3C
+OP_BATCH_CONFIG0 = 0x40
+OP_BATCH_CONFIG1 = 0x41
+OP_BATCH_START = 0x42
+OP_BATCH_STATUS = 0x43
+OP_BATCH_READ_SUMMARY = 0x44
+OP_BATCH_CONFIG2 = 0x45
 
 STATUS_OK = 0x00
 STATUS_BAD_PACKET = 0xE1
@@ -58,6 +64,17 @@ IMGLOAD_GUARD_SEC = 0.01
 IMG_STAGING_MARGIN_WORDS = 262144  # must match top_level.sv IMG_STAGING_BASE_WORD margin
 
 LAST_IO: dict[str, object] = {}
+
+
+@dataclass(frozen=True)
+class BatchStatus:
+    phase: int
+    error_code: int
+    has_error: bool
+    done: bool
+    active: bool
+    cfg1_valid: bool
+    cfg0_valid: bool
 
 
 @dataclass(frozen=True)
@@ -550,6 +567,90 @@ def fpga_train_query_caps(ser: serial.Serial) -> int:
     return int(result) & 0xFFFFFFFF
 
 
+def fpga_batch_config0(
+    ser: serial.Serial,
+    *,
+    mode_train: bool,
+    start_sample_idx: int,
+) -> None:
+    mode_flags = 1 if mode_train else 0
+    status, result = send_request(
+        ser,
+        OP_BATCH_CONFIG0,
+        [int(mode_flags), int(start_sample_idx)],
+    )
+    require_ok(status, "BATCH_CONFIG0")
+
+
+def fpga_batch_config1(
+    ser: serial.Serial,
+    *,
+    num_samples: int,
+    seed_value: int,
+) -> None:
+    status, result = send_request(
+        ser,
+        OP_BATCH_CONFIG1,
+        [int(num_samples), int(seed_value)],
+    )
+    require_ok(status, "BATCH_CONFIG1")
+
+
+def fpga_batch_start(ser: serial.Serial) -> tuple[int, int]:
+    return send_request(ser, OP_BATCH_START, [0, 0], response_timeout=max(5.0, TRAIN_KERNEL_TIMEOUT_SEC))
+
+
+def fpga_batch_config2(
+    ser: serial.Serial,
+    *,
+    start_lba: int,
+    reserved: int = 0,
+) -> None:
+    status, result = send_request(
+        ser,
+        OP_BATCH_CONFIG2,
+        [int(start_lba), int(reserved)],
+    )
+    require_ok(status, "BATCH_CONFIG2")
+
+
+def fpga_batch_read_status(ser: serial.Serial) -> BatchStatus:
+    status, value = send_request(ser, OP_BATCH_STATUS, [0, 0])
+    require_ok(status, "BATCH_STATUS")
+    u = int(value) & 0xFFFFFFFF
+    return BatchStatus(
+        phase=(u >> 19) & 0xFF,
+        error_code=(u >> 11) & 0xFF,
+        has_error=bool((u >> 10) & 0x1),
+        done=bool((u >> 9) & 0x1),
+        active=bool((u >> 8) & 0x1),
+        cfg1_valid=bool((u >> 7) & 0x1),
+        cfg0_valid=bool((u >> 6) & 0x1),
+    )
+
+
+def fpga_batch_read_summary_field(ser: serial.Serial, field_idx: int) -> int:
+    status, value = send_request(ser, OP_BATCH_READ_SUMMARY, [int(field_idx), 0])
+    require_ok(status, f"BATCH_READ_SUMMARY[{int(field_idx)}]")
+    return int(np.int32(value))
+
+
+def fpga_batch_wait_done(
+    ser: serial.Serial,
+    *,
+    timeout_sec: float,
+    poll_interval_sec: float = 0.05,
+) -> BatchStatus:
+    t0 = time.time()
+    while True:
+        st = fpga_batch_read_status(ser)
+        if st.done:
+            return st
+        if (time.time() - t0) > float(timeout_sec):
+            raise TimeoutError(f"BATCH_STATUS timeout after {float(timeout_sec):.1f}s")
+        time.sleep(poll_interval_sec)
+
+
 def fpga_train_run_sample_phase4(ser: serial.Serial, *, inj_steps: int) -> int:
     timeout_s = max(TRAIN_KERNEL_TIMEOUT_SEC, 300.0)
     status, result = send_request(
@@ -716,6 +817,30 @@ def prepare_fpga_sample_image_via_streamed_load(
         ) from exc
 
 
+def fpga_batch_single_smoke(
+    ser: serial.Serial,
+    *,
+    sample_idx: int,
+    num_samples: int,
+    start_lba: int,
+    timeout_sec: float,
+    seed: int,
+    mode_train: bool,
+) -> None:
+    fpga_batch_config0(ser, mode_train=mode_train, start_sample_idx=sample_idx)
+    fpga_batch_config1(ser, num_samples=num_samples, seed_value=seed)
+    fpga_batch_config2(ser, start_lba=start_lba)
+    before = fpga_batch_read_status(ser)
+    print(f"Batch status before start: {before}")
+    start_status, start_result = fpga_batch_start(ser)
+    require_ok(start_status, "BATCH_START")
+    print(f"Batch start accepted: result=0x{int(start_result) & 0xFFFFFFFF:08X}")
+    after = fpga_batch_wait_done(ser, timeout_sec=max(30.0, timeout_sec))
+    print(f"Batch status after done: {after}")
+    for idx in range(8):
+        print(f"Batch summary[{idx}] = {fpga_batch_read_summary_field(ser, idx)}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Train 500 MNIST samples on FPGA, infer 100 samples, and report accuracy."
@@ -731,6 +856,33 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--train-e2e-mine-timing",
         action="store_true",
+    )
+    parser.add_argument(
+        "--batch-control-smoke",
+        action="store_true",
+        help="Exercise the new batch control-plane opcodes without changing the legacy flow.",
+    )
+    parser.add_argument(
+        "--batch-single-infer-smoke",
+        action="store_true",
+        help="Load one image, then run one-sample batch infer through the new batch start path.",
+    )
+    parser.add_argument(
+        "--batch-single-train-smoke",
+        action="store_true",
+        help="Load one image, then run one-sample batch train through the new batch start path.",
+    )
+    parser.add_argument(
+        "--sample-idx",
+        type=int,
+        default=0,
+        help="Sample index used by the batch single-sample smoke modes.",
+    )
+    parser.add_argument(
+        "--batch-num-samples",
+        type=int,
+        default=1,
+        help="Number of samples for the batch smoke modes.",
     )
     return parser.parse_args()
 
@@ -761,6 +913,46 @@ if __name__ == "__main__":
             print(f"Train kernel caps: 0x{caps:08X}")
         except Exception as exc:
             raise RuntimeError(f"TRAIN_QUERY_CAPS failed: {exc}") from exc
+
+        if args.batch_control_smoke:
+            fpga_batch_config0(ser, mode_train=True, start_sample_idx=0)
+            fpga_batch_config1(ser, num_samples=1, seed_value=int(args.seed))
+            batch_status = fpga_batch_read_status(ser)
+            print(f"Batch status before start: {batch_status}")
+            start_status, start_result = fpga_batch_start(ser)
+            print(
+                "Batch start response: "
+                f"status=0x{int(start_status):02X}, result=0x{int(start_result) & 0xFFFFFFFF:08X}"
+            )
+            batch_status = fpga_batch_read_status(ser)
+            print(f"Batch status after start: {batch_status}")
+            for idx in range(4):
+                print(f"Batch summary[{idx}] = {fpga_batch_read_summary_field(ser, idx)}")
+            sys.exit(0)
+
+        if args.batch_single_infer_smoke:
+            fpga_batch_single_smoke(
+                ser,
+                sample_idx=int(args.sample_idx),
+                num_samples=int(args.batch_num_samples),
+                start_lba=int(args.start_lba),
+                timeout_sec=float(args.timeout),
+                seed=int(args.seed),
+                mode_train=False,
+            )
+            sys.exit(0)
+
+        if args.batch_single_train_smoke:
+            fpga_batch_single_smoke(
+                ser,
+                sample_idx=int(args.sample_idx),
+                num_samples=int(args.batch_num_samples),
+                start_lba=int(args.start_lba),
+                timeout_sec=float(args.timeout),
+                seed=int(args.seed),
+                mode_train=True,
+            )
+            sys.exit(0)
 
         fpga_train_then_infer_compare_500_100(ser, args)
 
