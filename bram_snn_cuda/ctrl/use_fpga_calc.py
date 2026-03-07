@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import struct
 import sys
 import time
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -47,6 +49,7 @@ OP_BATCH_START = 0x42
 OP_BATCH_STATUS = 0x43
 OP_BATCH_READ_SUMMARY = 0x44
 OP_BATCH_CONFIG2 = 0x45
+OP_BATCH_LABEL_WRITE = 0x46
 
 STATUS_OK = 0x00
 STATUS_BAD_PACKET = 0xE1
@@ -62,6 +65,10 @@ RAW1_NUM_IMAGES_DEFAULT = 10_000
 IMGLOAD_SRC_BIAS_BYTES = 0
 IMGLOAD_GUARD_SEC = 0.01
 IMG_STAGING_MARGIN_WORDS = 262144  # must match top_level.sv IMG_STAGING_BASE_WORD margin
+MNIST_MIRRORS = (
+    "https://storage.googleapis.com/cvdf-datasets/mnist/",
+    "https://ossci-datasets.s3.amazonaws.com/mnist/",
+)
 
 LAST_IO: dict[str, object] = {}
 
@@ -492,6 +499,13 @@ def fpga_read_train_label_stats_all(ser: serial.Serial) -> tuple[np.ndarray, np.
     return sums, counts
 
 
+def fpga_read_train_label_counts_all(ser: serial.Serial) -> np.ndarray:
+    counts = np.zeros((10,), dtype=np.int64)
+    for lbl in range(10):
+        counts[lbl] = np.int64(fpga_read_train_label_stat_count(ser, lbl))
+    return counts
+
+
 def assign_labels_from_aggregated_stats(
     label_spike_sums: np.ndarray,
     label_counts: np.ndarray,
@@ -541,24 +555,53 @@ def predict_label_from_counts(counts: np.ndarray, assignments: np.ndarray) -> in
     return int(np.argmax(rates))
 
 
-def load_mnist() -> tuple[np.ndarray, np.ndarray]:
-    """Load MNIST through the exact same loader used by import_MNIST_raw.py."""
-    script_dir = Path(__file__).resolve().parent
-    snn_dir = script_dir.parent
-    repo_dir = snn_dir.parent
-    if str(snn_dir) not in sys.path:
-        sys.path.insert(0, str(snn_dir))
-    if str(repo_dir) not in sys.path:
-        sys.path.insert(0, str(repo_dir))
-    try:
-        from import_MNIST_raw import load_mnist as raw_loader_local
-        images, labels = raw_loader_local()
-        return np.asarray(images), np.asarray(labels, dtype=np.int64)
-    except Exception as exc:
-        raise RuntimeError(
-            "MNIST loading failed via import_MNIST_raw.py::load_mnist(). "
-            "Ensure snn_cuda/import_MNIST_raw.py and its dependencies are available."
-        ) from exc
+def _download_mnist_file(filename: str, cache_dir: Path) -> Path:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    out_path = cache_dir / filename
+    if out_path.exists():
+        return out_path
+    last_error: Exception | None = None
+    for base_url in MNIST_MIRRORS:
+        try:
+            urllib.request.urlretrieve(base_url + filename, out_path)
+            return out_path
+        except Exception as exc:
+            last_error = exc
+    raise RuntimeError(f"Failed to download MNIST file: {filename}") from last_error
+
+
+def _load_idx_images(gz_path: Path) -> np.ndarray:
+    with gzip.open(gz_path, "rb") as f:
+        magic = int.from_bytes(f.read(4), "big")
+        if magic != 2051:
+            raise RuntimeError(f"Invalid MNIST image file magic in {gz_path}: {magic}")
+        n = int.from_bytes(f.read(4), "big")
+        rows = int.from_bytes(f.read(4), "big")
+        cols = int.from_bytes(f.read(4), "big")
+        data = np.frombuffer(f.read(), dtype=np.uint8)
+    return data.reshape(n, rows, cols)
+
+
+def _load_idx_labels(gz_path: Path) -> np.ndarray:
+    with gzip.open(gz_path, "rb") as f:
+        magic = int.from_bytes(f.read(4), "big")
+        if magic != 2049:
+            raise RuntimeError(f"Invalid MNIST label file magic in {gz_path}: {magic}")
+        n = int.from_bytes(f.read(4), "big")
+        data = np.frombuffer(f.read(), dtype=np.uint8)
+    if data.shape[0] != n:
+        raise RuntimeError(f"MNIST label length mismatch in {gz_path}: header={n}, actual={data.shape[0]}")
+    return data.astype(np.int64)
+
+
+def load_mnist(cache_dir: str | Path = "bram_snn_cuda/mnist_data") -> tuple[np.ndarray, np.ndarray]:
+    """Load MNIST train split via raw IDX gzip files, matching simp.py semantics."""
+    cache_path = Path(cache_dir)
+    images_path = _download_mnist_file("train-images-idx3-ubyte.gz", cache_path)
+    labels_path = _download_mnist_file("train-labels-idx1-ubyte.gz", cache_path)
+    images = _load_idx_images(images_path)
+    labels = _load_idx_labels(labels_path)
+    return images, labels
 
 
 def fpga_train_query_caps(ser: serial.Serial) -> int:
@@ -633,6 +676,23 @@ def fpga_batch_read_summary_field(ser: serial.Serial, field_idx: int) -> int:
     status, value = send_request(ser, OP_BATCH_READ_SUMMARY, [int(field_idx), 0])
     require_ok(status, f"BATCH_READ_SUMMARY[{int(field_idx)}]")
     return int(np.int32(value))
+
+
+def fpga_batch_label_write(ser: serial.Serial, sample_idx: int, label: int) -> None:
+    status, value = send_request(ser, OP_BATCH_LABEL_WRITE, [int(sample_idx), int(label)])
+    require_ok(status, f"BATCH_LABEL_WRITE[idx={int(sample_idx)}]")
+
+
+def fpga_batch_preload_labels(
+    ser: serial.Serial,
+    labels: np.ndarray,
+    *,
+    start_idx: int,
+    num_samples: int,
+) -> None:
+    for offs in range(int(num_samples)):
+        sample_idx = int(start_idx) + offs
+        fpga_batch_label_write(ser, sample_idx=sample_idx, label=int(labels[sample_idx]))
 
 
 def fpga_batch_wait_done(
@@ -827,6 +887,15 @@ def fpga_batch_single_smoke(
     seed: int,
     mode_train: bool,
 ) -> None:
+    if mode_train:
+        _, labels_all = load_mnist()
+        fpga_train_label_stats_reset(ser)
+        fpga_batch_preload_labels(
+            ser,
+            labels_all,
+            start_idx=int(sample_idx),
+            num_samples=int(num_samples),
+        )
     fpga_batch_config0(ser, mode_train=mode_train, start_sample_idx=sample_idx)
     fpga_batch_config1(ser, num_samples=num_samples, seed_value=seed)
     fpga_batch_config2(ser, start_lba=start_lba)
@@ -839,6 +908,10 @@ def fpga_batch_single_smoke(
     print(f"Batch status after done: {after}")
     for idx in range(8):
         print(f"Batch summary[{idx}] = {fpga_batch_read_summary_field(ser, idx)}")
+    if mode_train:
+        label_counts = fpga_read_train_label_counts_all(ser)
+        nonzero = [(idx, int(cnt)) for idx, cnt in enumerate(label_counts) if int(cnt) > 0]
+        print(f"Nonzero label counts: {nonzero}")
 
 
 def parse_args() -> argparse.Namespace:

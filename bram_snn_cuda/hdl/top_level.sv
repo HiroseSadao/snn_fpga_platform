@@ -55,6 +55,7 @@ module top_level(
     localparam logic [7:0] OP_BATCH_STATUS = 8'h43;
     localparam logic [7:0] OP_BATCH_READ_SUMMARY = 8'h44;
     localparam logic [7:0] OP_BATCH_CONFIG2 = 8'h45;
+    localparam logic [7:0] OP_BATCH_LABEL_WRITE = 8'h46;
     localparam logic [31:0] DDR_ADDR_WORD_LIMIT = 32'd16777216; // 64MiB / 4
     localparam logic [7:0] MAX_SUPPORTED_NARGS = 8'd2;
     // Increase RX timeout margin to tolerate host-side inter-byte gaps on UART.
@@ -517,6 +518,7 @@ module top_level(
     logic [9:0]  raw_image0_wr_addr;
     logic [7:0]  raw_image0_wr_data;
     (* ram_style = "block" *) logic [7:0] raw_image0_mem [0:N_IN-1];
+    (* ram_style = "block" *) logic [7:0] batch_label_mem [0:RAW1_NUM_IMAGES-1];
     logic        imgload_active;
     logic [31:0] imgload_addr_word;
     logic [1:0]  imgload_lane;
@@ -684,6 +686,11 @@ module top_level(
     logic [31:0] batch_img_sector_off;
     logic [31:0] batch_img_byte_in_sector;
     logic [31:0] batch_img_sectors_needed;
+    logic        batch_label_wr_en;
+    logic [13:0] batch_label_wr_addr;
+    logic [7:0]  batch_label_wr_data;
+    logic [13:0] batch_label_rd_addr;
+    logic [7:0]  batch_label_rd_data;
 
     logic        infer_active;
     infer_state_t infer_state;
@@ -954,6 +961,11 @@ module top_level(
             raw_image0_mem[raw_image0_wr_addr] <= raw_image0_wr_data;
         end
         raw_image0_rd_data <= raw_image0_mem[raw_image0_rd_addr];
+
+        if (batch_label_wr_en) begin
+            batch_label_mem[batch_label_wr_addr] <= batch_label_wr_data;
+        end
+        batch_label_rd_data <= batch_label_mem[batch_label_rd_addr];
 
         if (train_label_sum_wr_en) begin
             train_label_sum_mem[train_label_sum_wr_addr] <= train_label_sum_wr_data;
@@ -1920,6 +1932,10 @@ module top_level(
             batch_img_sector_off <= 32'd0;
             batch_img_byte_in_sector <= 32'd0;
             batch_img_sectors_needed <= 32'd0;
+            batch_label_wr_en <= 1'b0;
+            batch_label_wr_addr <= 14'd0;
+            batch_label_wr_data <= 8'd0;
+            batch_label_rd_addr <= 14'd0;
             train_xin_cache_valid <= 1'b0;
             train_xexc_cache_valid <= 1'b0;
             train_xin_wr_en <= 1'b0;
@@ -2023,6 +2039,7 @@ module top_level(
             train_stdp_div_valid <= 1'b0;
             raw_image0_wr_en <= 1'b0;
             train_label_sum_wr_en <= 1'b0;
+            batch_label_wr_en <= 1'b0;
             infer_poisson_thresh_wr_en <= 1'b0;
             infer_pre_wr_en <= 1'b0;
             infer_pre_spike_wr_en <= 1'b0;
@@ -3406,41 +3423,50 @@ module top_level(
                         train_chunk_samples_left <= 16'd0;
                         train_chunk_retry_continue_infer <= 1'b0;
                         if (batch_active) begin
-                            batch_processed_samples <= batch_processed_samples + 32'd1;
-                            batch_total_spikes <= batch_total_spikes + train_chunk_last_infer_spikes + train_chunk_last_blank_spikes;
-                            if ((batch_processed_samples + 32'd1) >= batch_cfg_num_samples) begin
-                                batch_active <= 1'b0;
-                                batch_done <= 1'b1;
-                                batch_error <= 1'b0;
-                                batch_error_code <= BATCH_ERR_NONE;
-                                batch_phase <= BATCH_PHASE_DONE;
-                                batch_current_sample_idx <= batch_current_sample_idx + 32'd1;
+                            if (batch_cfg_mode_train) begin
+                                train_label_stats_active <= 1'b1;
+                                train_label_stats_state <= TLS_ACCUM_READ;
+                                train_label_stats_label <= batch_label_rd_data[3:0];
+                                train_label_stats_idx <= 10'd0;
+                                train_label_stats_base_idx <= {6'd0, batch_label_rd_data[3:0]} * N_NEURONS;
                             end else begin
-                                batch_phase <= BATCH_PHASE_LOADING;
-                                batch_current_sample_idx <= batch_current_sample_idx + 32'd1;
-                                batch_img_byte_off <= RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE);
-                                batch_img_sector_off <= (RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) / 32'd512;
-                                batch_img_byte_in_sector <= (RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) % 32'd512;
-                                batch_img_sectors_needed <= (((RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) % 32'd512) + RAW1_BYTES_PER_IMAGE + 32'd511) / 32'd512;
-                                sd_copy_active        <= 1'b1;
-                                sd_in_read            <= 1'b0;
-                                sd_copy_lba           <= batch_cfg_start_lba + ((RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) / 32'd512);
-                                sd_copy_sectors_left  <= (((RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) % 32'd512) + RAW1_BYTES_PER_IMAGE + 32'd511) / 32'd512;
-                                sd_byte_count         <= 9'd0;
-                                sd_pack_idx           <= 2'd0;
-                                sd_pack_word          <= 32'd0;
-                                sd_copy_words_written <= 32'd0;
-                                sd_sector_buf_ready   <= 2'b00;
-                                sd_header_done        <= 1'b0;
-                                sd_file_total_bytes   <= 32'd0;
-                                sd_file_bytes_seen    <= 32'd0;
-                                sd_copy_done_pending  <= 1'b0;
-                                sd_use_sector_limit   <= 1'b1;
-                                sd_copy_raw1_mode     <= 1'b0;
-                                sd_copy_dest_base_word <= IMG_STAGING_BASE_WORD;
-                                raw_image0_valid <= 1'b0;
-                                raw_image0_capture_idx <= 10'd0;
-                                raw_image0_sum_u8 <= 32'd0;
+                                batch_processed_samples <= batch_processed_samples + 32'd1;
+                                batch_total_spikes <= batch_total_spikes + train_chunk_last_infer_spikes + train_chunk_last_blank_spikes;
+                                if ((batch_processed_samples + 32'd1) >= batch_cfg_num_samples) begin
+                                    batch_active <= 1'b0;
+                                    batch_done <= 1'b1;
+                                    batch_error <= 1'b0;
+                                    batch_error_code <= BATCH_ERR_NONE;
+                                    batch_phase <= BATCH_PHASE_DONE;
+                                    batch_current_sample_idx <= batch_current_sample_idx + 32'd1;
+                                end else begin
+                                    batch_phase <= BATCH_PHASE_LOADING;
+                                    batch_current_sample_idx <= batch_current_sample_idx + 32'd1;
+                                    batch_img_byte_off <= RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE);
+                                    batch_img_sector_off <= (RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) / 32'd512;
+                                    batch_img_byte_in_sector <= (RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) % 32'd512;
+                                    batch_img_sectors_needed <= (((RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) % 32'd512) + RAW1_BYTES_PER_IMAGE + 32'd511) / 32'd512;
+                                    batch_label_rd_addr <= batch_current_sample_idx + 32'd1;
+                                    sd_copy_active        <= 1'b1;
+                                    sd_in_read            <= 1'b0;
+                                    sd_copy_lba           <= batch_cfg_start_lba + ((RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) / 32'd512);
+                                    sd_copy_sectors_left  <= (((RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) % 32'd512) + RAW1_BYTES_PER_IMAGE + 32'd511) / 32'd512;
+                                    sd_byte_count         <= 9'd0;
+                                    sd_pack_idx           <= 2'd0;
+                                    sd_pack_word          <= 32'd0;
+                                    sd_copy_words_written <= 32'd0;
+                                    sd_sector_buf_ready   <= 2'b00;
+                                    sd_header_done        <= 1'b0;
+                                    sd_file_total_bytes   <= 32'd0;
+                                    sd_file_bytes_seen    <= 32'd0;
+                                    sd_copy_done_pending  <= 1'b0;
+                                    sd_use_sector_limit   <= 1'b1;
+                                    sd_copy_raw1_mode     <= 1'b0;
+                                    sd_copy_dest_base_word <= IMG_STAGING_BASE_WORD;
+                                    raw_image0_valid <= 1'b0;
+                                    raw_image0_capture_idx <= 10'd0;
+                                    raw_image0_sum_u8 <= 32'd0;
+                                end
                             end
                         end else begin
                             // Return inj/blank totals packed as [31:16]=blank, [15:0]=inj (truncated)
@@ -3603,10 +3629,50 @@ module top_level(
                     TLS_DONE: begin
                         train_label_stats_active <= 1'b0;
                         train_label_stats_state <= TLS_IDLE;
-                        resp_status    <= STATUS_OK;
-                        resp_result    <= {28'd0, train_label_stats_label};
-                        resp_checksum  <= 8'h00;
-                        response_ready <= 1'b1;
+                        if (batch_active && batch_cfg_mode_train) begin
+                            batch_processed_samples <= batch_processed_samples + 32'd1;
+                            batch_total_spikes <= batch_total_spikes + train_chunk_last_infer_spikes + train_chunk_last_blank_spikes;
+                            if ((batch_processed_samples + 32'd1) >= batch_cfg_num_samples) begin
+                                batch_active <= 1'b0;
+                                batch_done <= 1'b1;
+                                batch_error <= 1'b0;
+                                batch_error_code <= BATCH_ERR_NONE;
+                                batch_phase <= BATCH_PHASE_DONE;
+                                batch_current_sample_idx <= batch_current_sample_idx + 32'd1;
+                            end else begin
+                                batch_phase <= BATCH_PHASE_LOADING;
+                                batch_current_sample_idx <= batch_current_sample_idx + 32'd1;
+                                batch_img_byte_off <= RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE);
+                                batch_img_sector_off <= (RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) / 32'd512;
+                                batch_img_byte_in_sector <= (RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) % 32'd512;
+                                batch_img_sectors_needed <= (((RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) % 32'd512) + RAW1_BYTES_PER_IMAGE + 32'd511) / 32'd512;
+                                batch_label_rd_addr <= batch_current_sample_idx + 32'd1;
+                                sd_copy_active        <= 1'b1;
+                                sd_in_read            <= 1'b0;
+                                sd_copy_lba           <= batch_cfg_start_lba + ((RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) / 32'd512);
+                                sd_copy_sectors_left  <= (((RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) % 32'd512) + RAW1_BYTES_PER_IMAGE + 32'd511) / 32'd512;
+                                sd_byte_count         <= 9'd0;
+                                sd_pack_idx           <= 2'd0;
+                                sd_pack_word          <= 32'd0;
+                                sd_copy_words_written <= 32'd0;
+                                sd_sector_buf_ready   <= 2'b00;
+                                sd_header_done        <= 1'b0;
+                                sd_file_total_bytes   <= 32'd0;
+                                sd_file_bytes_seen    <= 32'd0;
+                                sd_copy_done_pending  <= 1'b0;
+                                sd_use_sector_limit   <= 1'b1;
+                                sd_copy_raw1_mode     <= 1'b0;
+                                sd_copy_dest_base_word <= IMG_STAGING_BASE_WORD;
+                                raw_image0_valid <= 1'b0;
+                                raw_image0_capture_idx <= 10'd0;
+                                raw_image0_sum_u8 <= 32'd0;
+                            end
+                        end else begin
+                            resp_status    <= STATUS_OK;
+                            resp_result    <= {28'd0, train_label_stats_label};
+                            resp_checksum  <= 8'h00;
+                            response_ready <= 1'b1;
+                        end
                     end
                     default: begin
                         train_label_stats_active <= 1'b0;
@@ -3672,7 +3738,8 @@ module top_level(
                              (req_opcode == OP_BATCH_START) ||
                              (req_opcode == OP_BATCH_STATUS) ||
                              (req_opcode == OP_BATCH_READ_SUMMARY) ||
-                             (req_opcode == OP_BATCH_CONFIG2))
+                             (req_opcode == OP_BATCH_CONFIG2) ||
+                             (req_opcode == OP_BATCH_LABEL_WRITE))
                             && (rx_byte != 8'd2)
                         ) begin
                             rx_state        <= RX_WAIT_SYNC;
@@ -3738,7 +3805,9 @@ module top_level(
                             resp_checksum  <= 8'h00;
                             response_ready <= 1'b1;
                         end else if (TRAIN_ENABLE &&
-                                     (train_trace_active || train_stdp_active || train_gen_active || train_label_stats_active || train_stdp_batch_active || train_chunk_active)) begin
+                                     (train_trace_active || train_stdp_active || train_gen_active || train_label_stats_active || train_stdp_batch_active || train_chunk_active) &&
+                                     (req_opcode != OP_BATCH_STATUS) &&
+                                     (req_opcode != OP_BATCH_READ_SUMMARY)) begin
                             resp_status    <= STATUS_BAD_PACKET;
                             resp_result    <= {8'h31, req_opcode, 16'h0000}; // TRAIN_BUSY debug tag
                             resp_checksum  <= 8'h00;
@@ -3943,6 +4012,26 @@ module top_level(
                                         response_ready <= 1'b1;
                                     end
                                 end
+                                OP_BATCH_LABEL_WRITE: begin
+                                    if ((req_nargs == 8'd2) &&
+                                        !batch_active &&
+                                        (arg0 >= 0) && (arg0 < RAW1_NUM_IMAGES) &&
+                                        (arg1 >= 0) && (arg1 < 10)) begin
+                                        batch_label_wr_en <= 1'b1;
+                                        batch_label_wr_addr <= arg0[13:0];
+                                        batch_label_wr_data <= arg1[7:0];
+                                        batch_label_rd_addr <= arg0[13:0];
+                                        resp_status    <= STATUS_OK;
+                                        resp_result    <= arg0;
+                                        resp_checksum  <= 8'h00;
+                                        response_ready <= 1'b1;
+                                    end else begin
+                                        resp_status    <= STATUS_BAD_PACKET;
+                                        resp_result    <= 32'sd0;
+                                        resp_checksum  <= 8'h00;
+                                        response_ready <= 1'b1;
+                                    end
+                                end
                                 OP_BATCH_START: begin
                                     if ((req_nargs == 8'd2) && !batch_active) begin
                                         batch_processed_samples <= 32'd0;
@@ -3954,6 +4043,7 @@ module top_level(
                                         batch_img_sector_off <= (RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + (batch_cfg_start_sample_idx * RAW1_BYTES_PER_IMAGE)) / 32'd512;
                                         batch_img_byte_in_sector <= (RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + (batch_cfg_start_sample_idx * RAW1_BYTES_PER_IMAGE)) % 32'd512;
                                         batch_img_sectors_needed <= (((RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + (batch_cfg_start_sample_idx * RAW1_BYTES_PER_IMAGE)) % 32'd512) + RAW1_BYTES_PER_IMAGE + 32'd511) / 32'd512;
+                                        batch_label_rd_addr <= batch_cfg_start_sample_idx[13:0];
                                         if (!(batch_cfg0_valid && batch_cfg1_valid)) begin
                                             batch_done <= 1'b1;
                                             batch_error <= 1'b1;
