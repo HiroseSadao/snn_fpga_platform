@@ -1,0 +1,7 @@
+#ifndef _INCLUDED_inh_exc_synapses_create_generator_codeobject
+#define _INCLUDED_inh_exc_synapses_create_generator_codeobject
+
+void _run_inh_exc_synapses_create_generator_codeobject();
+
+
+#endif

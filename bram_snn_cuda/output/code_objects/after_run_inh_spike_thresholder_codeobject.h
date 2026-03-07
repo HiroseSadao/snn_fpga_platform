@@ -1,0 +1,6 @@
+#ifndef _INCLUDED_inh_spike_thresholder_codeobject_after
+#define _INCLUDED_inh_spike_thresholder_codeobject_after
+
+void _after_run_inh_spike_thresholder_codeobject();
+
+#endif

@@ -1,0 +1,6 @@
+#ifndef _INCLUDED_inp_exc_pre_push_spikes_before
+#define _INCLUDED_inp_exc_pre_push_spikes_before
+
+void _before_run_inp_exc_pre_push_spikes();
+
+#endif

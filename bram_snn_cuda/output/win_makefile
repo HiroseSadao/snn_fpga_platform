@@ -1,0 +1,106 @@
+all: main.exe
+
+clean:
+    del *.obj /s
+    del *.exe /s
+    del sourcefiles.txt
+
+code_objects\after_run_exc_spike_thresholder_codeobject.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/after_run_exc_spike_thresholder_codeobject.cpp /Focode_objects\after_run_exc_spike_thresholder_codeobject.obj 
+    
+code_objects\after_run_inh_spike_thresholder_codeobject.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/after_run_inh_spike_thresholder_codeobject.cpp /Focode_objects\after_run_inh_spike_thresholder_codeobject.obj 
+    
+code_objects\after_run_inp_spike_thresholder_codeobject.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/after_run_inp_spike_thresholder_codeobject.cpp /Focode_objects\after_run_inp_spike_thresholder_codeobject.obj 
+    
+code_objects\before_run_exc_inh_pre_push_spikes.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/before_run_exc_inh_pre_push_spikes.cpp /Focode_objects\before_run_exc_inh_pre_push_spikes.obj 
+    
+code_objects\before_run_inh_exc_pre_push_spikes.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/before_run_inh_exc_pre_push_spikes.cpp /Focode_objects\before_run_inh_exc_pre_push_spikes.obj 
+    
+code_objects\before_run_inp_exc_post_push_spikes.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/before_run_inp_exc_post_push_spikes.cpp /Focode_objects\before_run_inp_exc_post_push_spikes.obj 
+    
+code_objects\before_run_inp_exc_pre_push_spikes.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/before_run_inp_exc_pre_push_spikes.cpp /Focode_objects\before_run_inp_exc_pre_push_spikes.obj 
+    
+code_objects\exc_inh_pre_codeobject.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/exc_inh_pre_codeobject.cpp /Focode_objects\exc_inh_pre_codeobject.obj 
+    
+code_objects\exc_inh_pre_push_spikes.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/exc_inh_pre_push_spikes.cpp /Focode_objects\exc_inh_pre_push_spikes.obj 
+    
+code_objects\exc_inh_synapses_create_generator_codeobject.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/exc_inh_synapses_create_generator_codeobject.cpp /Focode_objects\exc_inh_synapses_create_generator_codeobject.obj 
+    
+code_objects\exc_spike_resetter_codeobject.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/exc_spike_resetter_codeobject.cpp /Focode_objects\exc_spike_resetter_codeobject.obj 
+    
+code_objects\exc_spike_thresholder_codeobject.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/exc_spike_thresholder_codeobject.cpp /Focode_objects\exc_spike_thresholder_codeobject.obj 
+    
+code_objects\exc_stateupdater_codeobject.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/exc_stateupdater_codeobject.cpp /Focode_objects\exc_stateupdater_codeobject.obj 
+    
+code_objects\inh_exc_pre_codeobject.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inh_exc_pre_codeobject.cpp /Focode_objects\inh_exc_pre_codeobject.obj 
+    
+code_objects\inh_exc_pre_push_spikes.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inh_exc_pre_push_spikes.cpp /Focode_objects\inh_exc_pre_push_spikes.obj 
+    
+code_objects\inh_exc_synapses_create_generator_codeobject.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inh_exc_synapses_create_generator_codeobject.cpp /Focode_objects\inh_exc_synapses_create_generator_codeobject.obj 
+    
+code_objects\inh_spike_resetter_codeobject.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inh_spike_resetter_codeobject.cpp /Focode_objects\inh_spike_resetter_codeobject.obj 
+    
+code_objects\inh_spike_thresholder_codeobject.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inh_spike_thresholder_codeobject.cpp /Focode_objects\inh_spike_thresholder_codeobject.obj 
+    
+code_objects\inh_stateupdater_codeobject.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inh_stateupdater_codeobject.cpp /Focode_objects\inh_stateupdater_codeobject.obj 
+    
+code_objects\inp_exc_post_codeobject.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inp_exc_post_codeobject.cpp /Focode_objects\inp_exc_post_codeobject.obj 
+    
+code_objects\inp_exc_post_push_spikes.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inp_exc_post_push_spikes.cpp /Focode_objects\inp_exc_post_push_spikes.obj 
+    
+code_objects\inp_exc_pre_codeobject.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inp_exc_pre_codeobject.cpp /Focode_objects\inp_exc_pre_codeobject.obj 
+    
+code_objects\inp_exc_pre_group_variable_set_conditional_codeobject.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inp_exc_pre_group_variable_set_conditional_codeobject.cpp /Focode_objects\inp_exc_pre_group_variable_set_conditional_codeobject.obj 
+    
+code_objects\inp_exc_pre_push_spikes.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inp_exc_pre_push_spikes.cpp /Focode_objects\inp_exc_pre_push_spikes.obj 
+    
+code_objects\inp_exc_synapses_create_generator_codeobject.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inp_exc_synapses_create_generator_codeobject.cpp /Focode_objects\inp_exc_synapses_create_generator_codeobject.obj 
+    
+code_objects\inp_spike_thresholder_codeobject.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inp_spike_thresholder_codeobject.cpp /Focode_objects\inp_spike_thresholder_codeobject.obj 
+    
+code_objects\spikes_codeobject.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/spikes_codeobject.cpp /Focode_objects\spikes_codeobject.obj 
+    
+main.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  main.cpp /Fomain.obj 
+    
+network.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  network.cpp /Fonetwork.obj 
+    
+objects.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  objects.cpp /Foobjects.obj 
+    
+run.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  run.cpp /Forun.obj 
+    
+synapses_classes.obj: win_makefile
+    cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  synapses_classes.cpp /Fosynapses_classes.obj 
+    
+
+main.exe: code_objects\after_run_exc_spike_thresholder_codeobject.obj code_objects\after_run_inh_spike_thresholder_codeobject.obj code_objects\after_run_inp_spike_thresholder_codeobject.obj code_objects\before_run_exc_inh_pre_push_spikes.obj code_objects\before_run_inh_exc_pre_push_spikes.obj code_objects\before_run_inp_exc_post_push_spikes.obj code_objects\before_run_inp_exc_pre_push_spikes.obj code_objects\exc_inh_pre_codeobject.obj code_objects\exc_inh_pre_push_spikes.obj code_objects\exc_inh_synapses_create_generator_codeobject.obj code_objects\exc_spike_resetter_codeobject.obj code_objects\exc_spike_thresholder_codeobject.obj code_objects\exc_stateupdater_codeobject.obj code_objects\inh_exc_pre_codeobject.obj code_objects\inh_exc_pre_push_spikes.obj code_objects\inh_exc_synapses_create_generator_codeobject.obj code_objects\inh_spike_resetter_codeobject.obj code_objects\inh_spike_thresholder_codeobject.obj code_objects\inh_stateupdater_codeobject.obj code_objects\inp_exc_post_codeobject.obj code_objects\inp_exc_post_push_spikes.obj code_objects\inp_exc_pre_codeobject.obj code_objects\inp_exc_pre_group_variable_set_conditional_codeobject.obj code_objects\inp_exc_pre_push_spikes.obj code_objects\inp_exc_synapses_create_generator_codeobject.obj code_objects\inp_spike_thresholder_codeobject.obj code_objects\spikes_codeobject.obj main.obj network.obj objects.obj run.obj synapses_classes.obj  win_makefile sourcefiles.txt
+    link @sourcefiles.txt /LIBPATH:"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\lib" advapi32.lib /LIBPATH:. /OUT:main.exe 

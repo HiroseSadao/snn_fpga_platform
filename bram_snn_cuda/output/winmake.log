@@ -1,0 +1,274 @@
+MSVC environment: 
+allusersprofile=C:\ProgramData
+appdata=C:\Users\kamer\AppData\Roaming
+chrome_crashpad_pipe_name=\\.\pipe\crashpad_20272_SQRWSSEUZJGOHBKE
+commandprompttype=Cross
+commonprogramfiles=C:\Program Files\Common Files
+commonprogramfiles(x86)=C:\Program Files (x86)\Common Files
+commonprogramw6432=C:\Program Files\Common Files
+computername=LAPTOP_3
+comspec=C:\WINDOWS\system32\cmd.exe
+cursor_trace_id=c5dd706450864cc580848af883a6e1b3
+devenvdir=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\
+driverdata=C:\Windows\System32\Drivers\DriverData
+efc_6568_1592913036=1
+extensionsdkdir=C:\Program Files (x86)\Microsoft SDKs\Windows Kits\10\ExtensionSDKs
+external_include=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.42.34433\include;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\VS\include;C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\ucrt;C:\Program Files (x86)\Windows Kits\10\\include\10.0.22621.0\\um;C:\Program Files (x86)\Windows Kits\10\\include\10.0.22621.0\\shared;C:\Program Files (x86)\Windows Kits\10\\include\10.0.22621.0\\winrt;C:\Program Files (x86)\Windows Kits\10\\include\10.0.22621.0\\cppwinrt
+framework40version=v4.0
+frameworkdir=C:\Windows\Microsoft.NET\Framework\
+frameworkdir32=C:\Windows\Microsoft.NET\Framework\
+frameworkdir64=C:\Windows\Microsoft.NET\Framework64\
+frameworkversion=v4.0.30319
+frameworkversion32=v4.0.30319
+frameworkversion64=v4.0.30319
+homedrive=C:
+homepath=\Users\kamer
+include=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.42.34433\include;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\VS\include;C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\ucrt;C:\Program Files (x86)\Windows Kits\10\\include\10.0.22621.0\\um;C:\Program Files (x86)\Windows Kits\10\\include\10.0.22621.0\\shared;C:\Program Files (x86)\Windows Kits\10\\include\10.0.22621.0\\winrt;C:\Program Files (x86)\Windows Kits\10\\include\10.0.22621.0\\cppwinrt
+lib=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.42.34433\lib\x64;C:\Program Files (x86)\Windows Kits\10\lib\10.0.22621.0\ucrt\x64;C:\Program Files (x86)\Windows Kits\10\\lib\10.0.22621.0\\um\x64
+libpath=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.42.34433\lib\x64;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.42.34433\lib\x86\store\references;C:\Program Files (x86)\Windows Kits\10\UnionMetadata\10.0.22621.0;C:\Program Files (x86)\Windows Kits\10\References\10.0.22621.0;C:\Windows\Microsoft.NET\Framework\v4.0.30319
+localappdata=C:\Users\kamer\AppData\Local
+logonserver=\\LAPTOP_3
+number_of_processors=22
+onedrive=C:\Users\kamer\OneDrive
+onedriveconsumer=C:\Users\kamer\OneDrive
+onlineservices=Online Services
+os=Windows_NT
+path=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.42.34433\bin\HostX86\x64;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.42.34433\bin\HostX86\x86;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\VC\VCPackages;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\TestWindow;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\bin\Roslyn;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\Extensions\Microsoft\CodeCoverage.Console;C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\\x86;C:\Program Files (x86)\Windows Kits\10\bin\\x86;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\\MSBuild\Current\Bin\amd64;C:\Windows\Microsoft.NET\Framework\v4.0.30319;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\;C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Scripts;C:\Program Files\NVIDIA\CUDNN\v9.3\bin;C:\windows\system32;C:\windows;C:\windows\System32\Wbem;C:\windows\System32\WindowsPowerShell\v1.0\;C:\windows\System32\OpenSSH\;C:\Program Files\Git\cmd;C:\Users\kamer\AppData\Local\Programs\Python\Launcher;C:\Users\kamer\Documents\ffmpeg-master-latest-win64-gpl\bin;C:\Program Files\HP\HP One Agent;C:\Users\kamer\Documents\brain_tech_academy\ffmpeg-master-latest-win64-gpl\bin;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.41.34120\bin\Hostx86\x86\;;C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\Wbem;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;C:\WINDOWS\System32\OpenSSH\;C:\Program Files\Docker\Docker\resources\bin;C:\Program Files (x86)\cloudflared\;C:\Program Files\dotnet\;C:\Program Files\usbipd-win\;C:\Program Files\cursor\resources\app\bin;C:\Users\kamer\.local\bin;C:\Users\kamer\AppData\Local\Programs\Python\Python310\Scripts\;C:\Users\kamer\AppData\Local\Programs\Python\Python310\;C:\Users\kamer\AppData\Local\Programs\Python\Python311\Scripts\;C:\Users\kamer\AppData\Local\Programs\Python\Python311\;C:\Users\kamer\AppData\Local\Programs\Quarto\bin;C:\Users\kamer\anaconda3;C:\Users\kamer\anaconda3\Library\mingw-w64\bin;C:\Users\kamer\anaconda3\Library\usr\bin;C:\Users\kamer\anaconda3\Library\bin;C:\Users\kamer\anaconda3\Scripts;C:\Users\kamer\AppData\Local\Programs\Python\Python312;C:\Users\kamer\AppData\Local\Microsoft\WindowsApps;C:\Users\kamer\AppData\Local\Programs\Microsoft VS Code\bin;C:\Users\kamer\AppData\Roaming\Python\Scripts;C:\Users\kamer\AppData\Local\Programs\cursor\resources\app\bin;C:\iverilog\bin;C:\iverilog\gtkwave\bin;c:\Users\kamer\.cursor\extensions\ms-python.debugpy-2025.18.0-win32-x64\bundled\scripts\noConfigScripts;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\VC\Linux\bin\ConnectionManagerExe
+pathext=.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.CPL
+platform=x64
+platformcode=M8
+processor_architecture=AMD64
+processor_identifier=Intel64 Family 6 Model 170 Stepping 4, GenuineIntel
+processor_level=6
+processor_revision=aa04
+programdata=C:\ProgramData
+programfiles=C:\Program Files
+programfiles(x86)=C:\Program Files (x86)
+programw6432=C:\Program Files
+prompt=$P$G
+psmodulepath=C:\Users\kamer\OneDrive\ÉhÉLÉÖÉÅÉìÉg\WindowsPowerShell\Modules;C:\Program Files\WindowsPowerShell\Modules;C:\WINDOWS\system32\WindowsPowerShell\v1.0\Modules
+public=C:\Users\Public
+python_home=C:\Users\kamer\AppData\Local\Programs\Python\Python312
+regioncode=APJ
+sessionname=Console
+systemdrive=C:
+systemroot=C:\WINDOWS
+temp=C:\Users\kamer\AppData\Local\Temp
+tessdata_prefix=C:\Users\kamer\AppData\Local\Programs\Tesseract-OCR\tessdata
+tmp=C:\Users\kamer\AppData\Local\Temp
+ucrtversion=10.0.22621.0
+universalcrtsdkdir=C:\Program Files (x86)\Windows Kits\10\
+userdomain=LAPTOP_3
+userdomain_roamingprofile=LAPTOP_3
+username=kamer
+userprofile=C:\Users\kamer
+vcideinstalldir=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\VC\
+vcinstalldir=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\
+vctoolsinstalldir=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.42.34433\
+vctoolsredistdir=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Redist\MSVC\14.42.34433\
+vctoolsversion=14.42.34433
+virtual_env=C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv
+virtual_env_prompt=.venv
+visualstudioversion=17.0
+vs170comntools=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\
+vscmd_arg_app_plat=Desktop
+vscmd_arg_host_arch=x86
+vscmd_arg_tgt_arch=x64
+vscmd_ver=17.12.3
+vsinstalldir=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\
+windir=C:\WINDOWS
+windowslibpath=C:\Program Files (x86)\Windows Kits\10\UnionMetadata\10.0.22621.0;C:\Program Files (x86)\Windows Kits\10\References\10.0.22621.0
+windowssdkbinpath=C:\Program Files (x86)\Windows Kits\10\bin\
+windowssdkdir=C:\Program Files (x86)\Windows Kits\10\
+windowssdklibversion=10.0.22621.0\
+windowssdkverbinpath=C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\
+windowssdkversion=10.0.22621.0\
+zes_enable_sysman=1
+term_program=vscode
+term_program_version=2.6.12
+lang=en_US.UTF-8
+colorterm=truecolor
+pydevd_disable_file_validation=1
+vscode_debugpy_adapter_endpoints=c:\Users\kamer\.cursor\extensions\ms-python.debugpy-2025.18.0-win32-x64\.noConfigDebugAdapterEndpoints\endpoint-a376fde15b3ccd4d.txt
+bundled_debugpy_path=c:\Users\kamer\.cursor\extensions\ms-python.debugpy-2025.18.0-win32-x64\bundled\libs\debugpy
+git_askpass=c:\Program Files\cursor\resources\app\extensions\git\dist\askpass.sh
+vscode_git_askpass_node=C:\Program Files\cursor\Cursor.exe
+vscode_git_askpass_main=c:\Program Files\cursor\resources\app\extensions\git\dist\askpass-main.js
+vscode_git_ipc_handle=\\.\pipe\vscode-git-fa13569982-sock
+vscode_git_ipc_auth_token=9b67f00db055a72dd7de3d77d2afb9c1b5a1fd769f76936fad76dab0499594bc
+vscode_injection=1
+_old_virtual_path=C:\Program Files\NVIDIA\CUDNN\v9.3\bin;C:\windows\system32;C:\windows;C:\windows\System32\Wbem;C:\windows\System32\WindowsPowerShell\v1.0\;C:\windows\System32\OpenSSH\;C:\Program Files\Git\cmd;C:\Users\kamer\AppData\Local\Programs\Python\Launcher;C:\Users\kamer\Documents\ffmpeg-master-latest-win64-gpl\bin;C:\Program Files\HP\HP One Agent;C:\Users\kamer\Documents\brain_tech_academy\ffmpeg-master-latest-win64-gpl\bin;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.41.34120\bin\Hostx86\x86\;;C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\Wbem;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;C:\WINDOWS\System32\OpenSSH\;C:\Program Files\Docker\Docker\resources\bin;C:\Program Files (x86)\cloudflared\;C:\Program Files\dotnet\;C:\Program Files\usbipd-win\;C:\Program Files\cursor\resources\app\bin;C:\Users\kamer\.local\bin;C:\Users\kamer\AppData\Local\Programs\Python\Python310\Scripts\;C:\Users\kamer\AppData\Local\Programs\Python\Python310\;C:\Users\kamer\AppData\Local\Programs\Python\Python311\Scripts\;C:\Users\kamer\AppData\Local\Programs\Python\Python311\;C:\Users\kamer\AppData\Local\Programs\Quarto\bin;C:\Users\kamer\anaconda3;C:\Users\kamer\anaconda3\Library\mingw-w64\bin;C:\Users\kamer\anaconda3\Library\usr\bin;C:\Users\kamer\anaconda3\Library\bin;C:\Users\kamer\anaconda3\Scripts;C:\Users\kamer\AppData\Local\Programs\Python\Python312;C:\Users\kamer\AppData\Local\Microsoft\WindowsApps;C:\Users\kamer\AppData\Local\Programs\Microsoft VS Code\bin;C:\Users\kamer\AppData\Roaming\Python\Scripts;C:\Users\kamer\AppData\Local\Programs\cursor\resources\app\bin;C:\iverilog\bin;C:\iverilog\gtkwave\bin;c:\Users\kamer\.cursor\extensions\ms-python.debugpy-2025.18.0-win32-x64\bundled\scripts\noConfigScripts
+__dotnet_add_32bit=1
+__dotnet_add_64bit=1
+__dotnet_preferred_bitness=32
+__vscmd_preinit_path=C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Scripts;C:\Program Files\NVIDIA\CUDNN\v9.3\bin;C:\windows\system32;C:\windows;C:\windows\System32\Wbem;C:\windows\System32\WindowsPowerShell\v1.0\;C:\windows\System32\OpenSSH\;C:\Program Files\Git\cmd;C:\Users\kamer\AppData\Local\Programs\Python\Launcher;C:\Users\kamer\Documents\ffmpeg-master-latest-win64-gpl\bin;C:\Program Files\HP\HP One Agent;C:\Users\kamer\Documents\brain_tech_academy\ffmpeg-master-latest-win64-gpl\bin;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.41.34120\bin\Hostx86\x86\;;C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\Wbem;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;C:\WINDOWS\System32\OpenSSH\;C:\Program Files\Docker\Docker\resources\bin;C:\Program Files (x86)\cloudflared\;C:\Program Files\dotnet\;C:\Program Files\usbipd-win\;C:\Program Files\cursor\resources\app\bin;C:\Users\kamer\.local\bin;C:\Users\kamer\AppData\Local\Programs\Python\Python310\Scripts\;C:\Users\kamer\AppData\Local\Programs\Python\Python310\;C:\Users\kamer\AppData\Local\Programs\Python\Python311\Scripts\;C:\Users\kamer\AppData\Local\Programs\Python\Python311\;C:\Users\kamer\AppData\Local\Programs\Quarto\bin;C:\Users\kamer\anaconda3;C:\Users\kamer\anaconda3\Library\mingw-w64\bin;C:\Users\kamer\anaconda3\Library\usr\bin;C:\Users\kamer\anaconda3\Library\bin;C:\Users\kamer\anaconda3\Scripts;C:\Users\kamer\AppData\Local\Programs\Python\Python312;C:\Users\kamer\AppData\Local\Microsoft\WindowsApps;C:\Users\kamer\AppData\Local\Programs\Microsoft VS Code\bin;C:\Users\kamer\AppData\Roaming\Python\Scripts;C:\Users\kamer\AppData\Local\Programs\cursor\resources\app\bin;C:\iverilog\bin;C:\iverilog\gtkwave\bin;c:\Users\kamer\.cursor\extensions\ms-python.debugpy-2025.18.0-win32-x64\bundled\scripts\noConfigScripts
+py_vcruntime_redist=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\..\..\redist\MSVC\14.42.34433\onecore\x64\Microsoft.VC143.CRT\vcruntime140.dll
+
+Microsoft(R) Program Maintenance Utility Version 14.42.34435.0
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/after_run_exc_spike_thresholder_codeobject.cpp /Focode_objects\after_run_exc_spike_thresholder_codeobject.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+after_run_exc_spike_thresholder_codeobject.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/after_run_inh_spike_thresholder_codeobject.cpp /Focode_objects\after_run_inh_spike_thresholder_codeobject.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+after_run_inh_spike_thresholder_codeobject.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/after_run_inp_spike_thresholder_codeobject.cpp /Focode_objects\after_run_inp_spike_thresholder_codeobject.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+after_run_inp_spike_thresholder_codeobject.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/before_run_exc_inh_pre_push_spikes.cpp /Focode_objects\before_run_exc_inh_pre_push_spikes.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+before_run_exc_inh_pre_push_spikes.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/before_run_inh_exc_pre_push_spikes.cpp /Focode_objects\before_run_inh_exc_pre_push_spikes.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+before_run_inh_exc_pre_push_spikes.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/before_run_inp_exc_post_push_spikes.cpp /Focode_objects\before_run_inp_exc_post_push_spikes.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+before_run_inp_exc_post_push_spikes.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/before_run_inp_exc_pre_push_spikes.cpp /Focode_objects\before_run_inp_exc_pre_push_spikes.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+before_run_inp_exc_pre_push_spikes.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/exc_inh_pre_codeobject.cpp /Focode_objects\exc_inh_pre_codeobject.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+exc_inh_pre_codeobject.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/exc_inh_pre_push_spikes.cpp /Focode_objects\exc_inh_pre_push_spikes.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+exc_inh_pre_push_spikes.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/exc_inh_synapses_create_generator_codeobject.cpp /Focode_objects\exc_inh_synapses_create_generator_codeobject.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+exc_inh_synapses_create_generator_codeobject.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/exc_spike_resetter_codeobject.cpp /Focode_objects\exc_spike_resetter_codeobject.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+exc_spike_resetter_codeobject.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/exc_spike_thresholder_codeobject.cpp /Focode_objects\exc_spike_thresholder_codeobject.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+exc_spike_thresholder_codeobject.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/exc_stateupdater_codeobject.cpp /Focode_objects\exc_stateupdater_codeobject.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+exc_stateupdater_codeobject.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inh_exc_pre_codeobject.cpp /Focode_objects\inh_exc_pre_codeobject.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+inh_exc_pre_codeobject.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inh_exc_pre_push_spikes.cpp /Focode_objects\inh_exc_pre_push_spikes.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+inh_exc_pre_push_spikes.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inh_exc_synapses_create_generator_codeobject.cpp /Focode_objects\inh_exc_synapses_create_generator_codeobject.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+inh_exc_synapses_create_generator_codeobject.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inh_spike_resetter_codeobject.cpp /Focode_objects\inh_spike_resetter_codeobject.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+inh_spike_resetter_codeobject.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inh_spike_thresholder_codeobject.cpp /Focode_objects\inh_spike_thresholder_codeobject.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+inh_spike_thresholder_codeobject.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inh_stateupdater_codeobject.cpp /Focode_objects\inh_stateupdater_codeobject.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+inh_stateupdater_codeobject.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inp_exc_post_codeobject.cpp /Focode_objects\inp_exc_post_codeobject.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+inp_exc_post_codeobject.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inp_exc_post_push_spikes.cpp /Focode_objects\inp_exc_post_push_spikes.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+inp_exc_post_push_spikes.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inp_exc_pre_codeobject.cpp /Focode_objects\inp_exc_pre_codeobject.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+inp_exc_pre_codeobject.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inp_exc_pre_group_variable_set_conditional_codeobject.cpp /Focode_objects\inp_exc_pre_group_variable_set_conditional_codeobject.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+inp_exc_pre_group_variable_set_conditional_codeobject.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inp_exc_pre_push_spikes.cpp /Focode_objects\inp_exc_pre_push_spikes.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+inp_exc_pre_push_spikes.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inp_exc_synapses_create_generator_codeobject.cpp /Focode_objects\inp_exc_synapses_create_generator_codeobject.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+inp_exc_synapses_create_generator_codeobject.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/inp_spike_thresholder_codeobject.cpp /Focode_objects\inp_spike_thresholder_codeobject.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+inp_spike_thresholder_codeobject.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  code_objects/spikes_codeobject.cpp /Focode_objects\spikes_codeobject.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+spikes_codeobject.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  main.cpp /Fomain.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+main.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  network.cpp /Fonetwork.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+network.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  objects.cpp /Foobjects.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+objects.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  run.cpp /Forun.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+run.cpp
+	cl /c /EHsc /I. -I"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\include" /Ox /w /arch:AVX2 /MP  synapses_classes.cpp /Fosynapses_classes.obj
+Microsoft(R) C/C++ Optimizing Compiler Version 19.42.34435 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+synapses_classes.cpp
+	link @sourcefiles.txt /LIBPATH:"C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\.venv\Library\lib" advapi32.lib /LIBPATH:. /OUT:main.exe
+Microsoft (R) Incremental Linker Version 14.42.34435.0
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+code_objects\after_run_exc_spike_thresholder_codeobject code_objects\after_run_inh_spike_thresholder_codeobject code_objects\after_run_inp_spike_thresholder_codeobject code_objects\before_run_exc_inh_pre_push_spikes code_objects\before_run_inh_exc_pre_push_spikes code_objects\before_run_inp_exc_post_push_spikes code_objects\before_run_inp_exc_pre_push_spikes code_objects\exc_inh_pre_codeobject code_objects\exc_inh_pre_push_spikes code_objects\exc_inh_synapses_create_generator_codeobject code_objects\exc_spike_resetter_codeobject code_objects\exc_spike_thresholder_codeobject code_objects\exc_stateupdater_codeobject code_objects\inh_exc_pre_codeobject code_objects\inh_exc_pre_push_spikes code_objects\inh_exc_synapses_create_generator_codeobject code_objects\inh_spike_resetter_codeobject code_objects\inh_spike_thresholder_codeobject code_objects\inh_stateupdater_codeobject code_objects\inp_exc_post_codeobject code_objects\inp_exc_post_push_spikes code_objects\inp_exc_pre_codeobject code_objects\inp_exc_pre_group_variable_set_conditional_codeobject code_objects\inp_exc_pre_push_spikes code_objects\inp_exc_synapses_create_generator_codeobject code_objects\inp_spike_thresholder_codeobject code_objects\spikes_codeobject main network objects run synapses_classes 
