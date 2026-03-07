@@ -151,6 +151,8 @@ module top_level(
     localparam logic [31:0] TRAIN_BASE_PRELIST_WORK_WORDS= TRAIN_BASE_XEXC_WORK_WORDS + N_NEURONS;
     // Dedicated SD image staging base in DDR (must not overlap training logical map).
     localparam logic [31:0] IMG_STAGING_BASE_WORD = TRAIN_BASE_PRELIST_WORK_WORDS + 32'd262144; // +1MiB bytes margin
+    // Dedicated infer-image cache region in DDR. Batch infer preloads the requested range here once.
+    localparam logic [31:0] IMG_CACHE_BASE_WORD   = IMG_STAGING_BASE_WORD + 32'd262144; // +1MiB bytes margin
     // STDP tile kernel (phase1) fixed-point params, q16.16.
     localparam logic signed [31:0] TRAIN_WMAX_Q16    = 32'sd3277; // 0.05
     localparam logic signed [31:0] TRAIN_WMIN_Q16    = 32'sd0;
@@ -321,6 +323,8 @@ module top_level(
         TSK_DIV_DW_ABS,
         TSK_DIV_DW_START,
         TSK_DIV_DW_WAIT,
+        TSK_DIV_DW_CLIP,
+        TSK_DIV_DW_WNEXT,
         TSK_WRITE_W_REQ,
         TSK_WRITE_W_WAIT,
         TSK_CLR_A_REQ,
@@ -519,16 +523,35 @@ module top_level(
     logic        sd_copy_raw1_mode;
     logic [31:0] sd_copy_dest_base_word;
     logic        raw_image0_valid;
+    logic        raw_image1_valid;
     logic [31:0] raw_num_images;
     logic [31:0] raw_bytes_per_image;
     logic [9:0]  raw_image0_capture_idx;
+    logic [9:0]  raw_image1_capture_idx;
     logic [31:0] raw_image0_sum_u8;
+    logic [31:0] raw_image1_sum_u8;
     logic [9:0]  raw_image0_rd_addr;
     logic [7:0]  raw_image0_rd_data;
+    logic [7:0]  raw_image1_rd_data;
     logic        raw_image0_wr_en;
     logic [9:0]  raw_image0_wr_addr;
     logic [7:0]  raw_image0_wr_data;
     (* ram_style = "block" *) logic [7:0] raw_image0_mem [0:N_IN-1];
+    (* ram_style = "block" *) logic [7:0] raw_image1_mem [0:N_IN-1];
+    logic        batch_compute_buf_sel;
+    logic        batch_fill_buf_sel;
+    logic        imgload_target_buf_sel;
+    logic        batch_prefetch_active;
+    logic        batch_prefetch_ready;
+    logic [31:0] batch_prefetch_sample_idx;
+    logic [31:0] batch_prefetch_img_byte_off;
+    logic [31:0] batch_prefetch_img_sector_off;
+    logic [31:0] batch_prefetch_img_byte_in_sector;
+    logic [31:0] batch_prefetch_img_sectors_needed;
+    logic        raw_image_compute_valid;
+    logic [31:0] raw_image_compute_sum_u8;
+    logic [7:0]  raw_image_compute_rd_data;
+    logic        raw_image_fill_valid;
     (* ram_style = "block" *) logic [7:0] batch_label_mem [0:RAW1_NUM_IMAGES-1];
     logic        imgload_active;
     logic [31:0] imgload_addr_word;
@@ -693,10 +716,18 @@ module top_level(
     logic [31:0] batch_total_spikes;
     logic [31:0] batch_correct_count;
     logic [31:0] batch_elapsed_cycles;
+    logic [31:0] batch_load_cycles;
+    logic [31:0] batch_train_core_cycles;
+    logic [31:0] batch_infer_core_cycles;
+    logic [31:0] batch_label_stats_cycles;
+    logic [31:0] batch_infer_eval_cycles;
+    logic [31:0] batch_other_cycles;
     logic [31:0] batch_img_byte_off;
     logic [31:0] batch_img_sector_off;
     logic [31:0] batch_img_byte_in_sector;
     logic [31:0] batch_img_sectors_needed;
+    logic        batch_use_cached_images;
+    logic [31:0] batch_cache_img_byte_off;
     logic        batch_label_wr_en;
     logic [13:0] batch_label_wr_addr;
     logic [7:0]  batch_label_wr_data;
@@ -989,10 +1020,14 @@ module top_level(
     always_ff @(posedge core_clk) begin
         infer_w_rd_data_q <= infer_w_rd_data;
 
-        if (raw_image0_wr_en) begin
+        if (raw_image0_wr_en && !imgload_target_buf_sel) begin
             raw_image0_mem[raw_image0_wr_addr] <= raw_image0_wr_data;
         end
+        if (raw_image0_wr_en && imgload_target_buf_sel) begin
+            raw_image1_mem[raw_image0_wr_addr] <= raw_image0_wr_data;
+        end
         raw_image0_rd_data <= raw_image0_mem[raw_image0_rd_addr];
+        raw_image1_rd_data <= raw_image1_mem[raw_image0_rd_addr];
 
         if (batch_label_wr_en) begin
             batch_label_mem[batch_label_wr_addr] <= batch_label_wr_data;
@@ -1033,6 +1068,20 @@ module top_level(
         train_xexc_rd_data <= train_xexc_mem[train_xexc_rd_addr];
 
         train_label_count_rd_data <= train_label_count[train_label_count_rd_addr];
+    end
+
+    always_comb begin
+        if (batch_active) begin
+            raw_image_compute_valid = batch_compute_buf_sel ? raw_image1_valid : raw_image0_valid;
+            raw_image_compute_sum_u8 = batch_compute_buf_sel ? raw_image1_sum_u8 : raw_image0_sum_u8;
+            raw_image_compute_rd_data = batch_compute_buf_sel ? raw_image1_rd_data : raw_image0_rd_data;
+            raw_image_fill_valid = batch_fill_buf_sel ? raw_image1_valid : raw_image0_valid;
+        end else begin
+            raw_image_compute_valid = raw_image0_valid;
+            raw_image_compute_sum_u8 = raw_image0_sum_u8;
+            raw_image_compute_rd_data = raw_image0_rd_data;
+            raw_image_fill_valid = raw_image0_valid;
+        end
     end
 
     assign infer_spike_rd_data = spike_count_rdata;
@@ -1842,14 +1891,27 @@ module top_level(
             sd_copy_raw1_mode <= 1'b1;
             sd_copy_dest_base_word <= IMG_STAGING_BASE_WORD;
             raw_image0_valid    <= 1'b0;
+            raw_image1_valid    <= 1'b0;
             raw_num_images      <= 32'd0;
             raw_bytes_per_image <= 32'd0;
             raw_image0_capture_idx <= 10'd0;
+            raw_image1_capture_idx <= 10'd0;
             raw_image0_sum_u8   <= 32'd0;
+            raw_image1_sum_u8   <= 32'd0;
             raw_image0_rd_addr  <= 10'd0;
             raw_image0_wr_en    <= 1'b0;
             raw_image0_wr_addr  <= 10'd0;
             raw_image0_wr_data  <= 8'd0;
+            batch_compute_buf_sel <= 1'b0;
+            batch_fill_buf_sel <= 1'b1;
+            imgload_target_buf_sel <= 1'b0;
+            batch_prefetch_active <= 1'b0;
+            batch_prefetch_ready <= 1'b0;
+            batch_prefetch_sample_idx <= 32'd0;
+            batch_prefetch_img_byte_off <= 32'd0;
+            batch_prefetch_img_sector_off <= 32'd0;
+            batch_prefetch_img_byte_in_sector <= 32'd0;
+            batch_prefetch_img_sectors_needed <= 32'd0;
             imgload_active      <= 1'b0;
             imgload_addr_word    <= 32'd0;
             imgload_lane        <= 2'd0;
@@ -1964,10 +2026,18 @@ module top_level(
             batch_total_spikes <= 32'd0;
             batch_correct_count <= 32'd0;
             batch_elapsed_cycles <= 32'd0;
+            batch_load_cycles <= 32'd0;
+            batch_train_core_cycles <= 32'd0;
+            batch_infer_core_cycles <= 32'd0;
+            batch_label_stats_cycles <= 32'd0;
+            batch_infer_eval_cycles <= 32'd0;
+            batch_other_cycles <= 32'd0;
             batch_img_byte_off <= 32'd0;
             batch_img_sector_off <= 32'd0;
             batch_img_byte_in_sector <= 32'd0;
             batch_img_sectors_needed <= 32'd0;
+            batch_use_cached_images <= 1'b0;
+            batch_cache_img_byte_off <= 32'd0;
             batch_label_wr_en <= 1'b0;
             batch_label_wr_addr <= 14'd0;
             batch_label_wr_data <= 8'd0;
@@ -2114,6 +2184,22 @@ module top_level(
             ddr_req_pending_core_prev <= ddr_req_pending_core;
             if (batch_active) begin
                 batch_elapsed_cycles <= batch_elapsed_cycles + 32'd1;
+                if ((batch_phase == BATCH_PHASE_LOADING) ||
+                    sd_copy_active || imgload_active || imgload_start_pending ||
+                    ddr_req_pending_core || ddr_rsp_drain_active_core) begin
+                    batch_load_cycles <= batch_load_cycles + 32'd1;
+                end else if (train_chunk_active || train_trace_active || train_stdp_active ||
+                             train_stdp_batch_active || train_gen_active) begin
+                    batch_train_core_cycles <= batch_train_core_cycles + 32'd1;
+                end else if (infer_active) begin
+                    batch_infer_core_cycles <= batch_infer_core_cycles + 32'd1;
+                end else if (train_label_stats_active) begin
+                    batch_label_stats_cycles <= batch_label_stats_cycles + 32'd1;
+                end else if (batch_infer_eval_active) begin
+                    batch_infer_eval_cycles <= batch_infer_eval_cycles + 32'd1;
+                end else begin
+                    batch_other_cycles <= batch_other_cycles + 32'd1;
+                end
             end
             if (ddr_rsp_drain_active_core && !ddr_req_pending_core) begin
                 if (ddr_rsp_toggle_core_sync2 != ddr_rsp_toggle_core_seen) begin
@@ -2138,27 +2224,45 @@ module top_level(
                 imgload_word_data <= 32'd0;
                 imgload_word_lane <= 2'd0;
                 imgload_ddr_wait_counter <= 32'd0;
-                raw_image0_valid <= 1'b0;
-                raw_image0_capture_idx <= 10'd0;
-                raw_image0_sum_u8 <= 32'd0;
+                if (!imgload_target_buf_sel) begin
+                    raw_image0_valid <= 1'b0;
+                    raw_image0_capture_idx <= 10'd0;
+                    raw_image0_sum_u8 <= 32'd0;
+                end else begin
+                    raw_image1_valid <= 1'b0;
+                    raw_image1_capture_idx <= 10'd0;
+                    raw_image1_sum_u8 <= 32'd0;
+                end
                 raw_bytes_per_image <= {22'd0, imgload_start_total_bytes};
             end
 
             if (batch_active && (batch_phase == BATCH_PHASE_LOADING) &&
                 !response_ready && !sd_copy_active && !imgload_active && !imgload_start_pending &&
-                !raw_image0_valid && !ddr_req_pending_core && !ddr_rsp_drain_active_core) begin
+                !raw_image_compute_valid && !ddr_req_pending_core && !ddr_rsp_drain_active_core) begin
                 imgload_start_pending <= 1'b1;
-                imgload_start_addr_word <= IMG_STAGING_BASE_WORD + {2'b00, batch_img_byte_in_sector[31:2]};
-                imgload_start_lane <= batch_img_byte_in_sector[1:0];
+                if (batch_use_cached_images) begin
+                    imgload_start_addr_word <= IMG_CACHE_BASE_WORD + {2'b00, batch_cache_img_byte_off[31:2]};
+                    imgload_start_lane <= batch_cache_img_byte_off[1:0];
+                end else begin
+                    imgload_start_addr_word <= IMG_STAGING_BASE_WORD + {2'b00, batch_img_byte_in_sector[31:2]};
+                    imgload_start_lane <= batch_img_byte_in_sector[1:0];
+                end
                 imgload_start_total_bytes <= RAW1_BYTES_PER_IMAGE[9:0];
+                imgload_target_buf_sel <= batch_compute_buf_sel;
                 imgload_word_valid <= 1'b0;
-                raw_image0_valid <= 1'b0;
-                raw_image0_capture_idx <= 10'd0;
-                raw_image0_sum_u8 <= 32'd0;
+                if (!batch_compute_buf_sel) begin
+                    raw_image0_valid <= 1'b0;
+                    raw_image0_capture_idx <= 10'd0;
+                    raw_image0_sum_u8 <= 32'd0;
+                end else begin
+                    raw_image1_valid <= 1'b0;
+                    raw_image1_capture_idx <= 10'd0;
+                    raw_image1_sum_u8 <= 32'd0;
+                end
             end
 
             if (batch_active && (batch_phase == BATCH_PHASE_LOADING) &&
-                raw_image0_valid && !imgload_active && !imgload_start_pending &&
+                raw_image_compute_valid && !imgload_active && !imgload_start_pending &&
                 !train_chunk_active && !infer_active && !response_ready) begin
                 batch_phase <= BATCH_PHASE_RUNNING;
                 if (batch_cfg_mode_train) begin
@@ -2199,6 +2303,77 @@ module top_level(
                     raw_image0_rd_addr <= 10'd0;
                     infer_poisson_thresh_rd_addr <= 10'd0;
                     infer_model_state_valid <= 1'b0;
+                end
+            end
+
+            if (batch_active && !batch_cfg_mode_train && !batch_use_cached_images && (batch_phase == BATCH_PHASE_RUNNING) &&
+                infer_active && !batch_prefetch_active && !batch_prefetch_ready &&
+                ((batch_processed_samples + 32'd1) < batch_cfg_num_samples) &&
+                !sd_copy_active && !imgload_active && !imgload_start_pending &&
+                !ddr_req_pending_core && !ddr_rsp_drain_active_core && !response_ready) begin
+                logic [31:0] next_img_byte_off_tmp;
+                logic [31:0] next_img_byte_in_sector_tmp;
+                logic [31:0] next_img_byte_in_sector_norm_tmp;
+                logic [31:0] next_img_sector_carry_tmp;
+                logic [31:0] next_img_sector_off_tmp;
+                logic [31:0] next_img_sectors_needed_tmp;
+                next_img_byte_off_tmp = batch_img_byte_off + RAW1_BYTES_PER_IMAGE;
+                next_img_byte_in_sector_tmp = batch_img_byte_in_sector + RAW1_BYTES_PER_IMAGE;
+                if (next_img_byte_in_sector_tmp >= 32'd1024) begin
+                    next_img_sector_carry_tmp = 32'd2;
+                    next_img_byte_in_sector_norm_tmp = next_img_byte_in_sector_tmp - 32'd1024;
+                end else if (next_img_byte_in_sector_tmp >= 32'd512) begin
+                    next_img_sector_carry_tmp = 32'd1;
+                    next_img_byte_in_sector_norm_tmp = next_img_byte_in_sector_tmp - 32'd512;
+                end else begin
+                    next_img_sector_carry_tmp = 32'd0;
+                    next_img_byte_in_sector_norm_tmp = next_img_byte_in_sector_tmp;
+                end
+                next_img_sector_off_tmp = batch_img_sector_off + next_img_sector_carry_tmp;
+                next_img_sectors_needed_tmp = (next_img_byte_in_sector_norm_tmp <= 32'd240) ? 32'd2 : 32'd3;
+                batch_prefetch_active <= 1'b1;
+                batch_prefetch_ready <= 1'b0;
+                batch_prefetch_sample_idx <= batch_current_sample_idx + 32'd1;
+                batch_prefetch_img_byte_off <= next_img_byte_off_tmp;
+                batch_prefetch_img_sector_off <= next_img_sector_off_tmp;
+                batch_prefetch_img_byte_in_sector <= next_img_byte_in_sector_norm_tmp;
+                batch_prefetch_img_sectors_needed <= next_img_sectors_needed_tmp;
+                imgload_target_buf_sel <= batch_fill_buf_sel;
+                sd_copy_active        <= 1'b1;
+                sd_in_read            <= 1'b0;
+                sd_copy_lba           <= batch_cfg_start_lba + next_img_sector_off_tmp;
+                sd_copy_sectors_left  <= next_img_sectors_needed_tmp;
+                sd_byte_count         <= 9'd0;
+                sd_pack_idx           <= 2'd0;
+                sd_pack_word          <= 32'd0;
+                sd_copy_words_written <= 32'd0;
+                sd_sector_buf_ready   <= 2'b00;
+                sd_header_done        <= 1'b0;
+                sd_file_total_bytes   <= 32'd0;
+                sd_file_bytes_seen    <= 32'd0;
+                sd_copy_done_pending  <= 1'b0;
+                sd_use_sector_limit   <= 1'b1;
+                sd_copy_raw1_mode     <= 1'b0;
+                sd_copy_dest_base_word <= IMG_STAGING_BASE_WORD;
+            end
+
+            if (batch_prefetch_active && !batch_prefetch_ready &&
+                !response_ready && !sd_copy_active && !imgload_active && !imgload_start_pending &&
+                !raw_image_fill_valid && !ddr_req_pending_core && !ddr_rsp_drain_active_core) begin
+                imgload_start_pending <= 1'b1;
+                imgload_start_addr_word <= IMG_STAGING_BASE_WORD + {2'b00, batch_prefetch_img_byte_in_sector[31:2]};
+                imgload_start_lane <= batch_prefetch_img_byte_in_sector[1:0];
+                imgload_start_total_bytes <= RAW1_BYTES_PER_IMAGE[9:0];
+                imgload_target_buf_sel <= batch_fill_buf_sel;
+                imgload_word_valid <= 1'b0;
+                if (!batch_fill_buf_sel) begin
+                    raw_image0_valid <= 1'b0;
+                    raw_image0_capture_idx <= 10'd0;
+                    raw_image0_sum_u8 <= 32'd0;
+                end else begin
+                    raw_image1_valid <= 1'b0;
+                    raw_image1_capture_idx <= 10'd0;
+                    raw_image1_sum_u8 <= 32'd0;
                 end
             end
 
@@ -2596,9 +2771,19 @@ module top_level(
                         imgload_active <= 1'b0;
                         imgload_word_valid <= 1'b0;
                         imgload_byte_idx <= imgload_byte_idx + 10'd1;
-                        raw_image0_valid <= 1'b1;
-                        raw_image0_capture_idx <= imgload_byte_idx + 10'd1;
-                        raw_image0_sum_u8 <= imgload_sum_u8_accum + {24'd0, imgload_curr_byte};
+                        if (!imgload_target_buf_sel) begin
+                            raw_image0_valid <= 1'b1;
+                            raw_image0_capture_idx <= imgload_byte_idx + 10'd1;
+                            raw_image0_sum_u8 <= imgload_sum_u8_accum + {24'd0, imgload_curr_byte};
+                        end else begin
+                            raw_image1_valid <= 1'b1;
+                            raw_image1_capture_idx <= imgload_byte_idx + 10'd1;
+                            raw_image1_sum_u8 <= imgload_sum_u8_accum + {24'd0, imgload_curr_byte};
+                        end
+                        if (batch_prefetch_active && (imgload_target_buf_sel == batch_fill_buf_sel)) begin
+                            batch_prefetch_active <= 1'b0;
+                            batch_prefetch_ready <= 1'b1;
+                        end
                         if (!batch_active) begin
                             resp_status    <= STATUS_OK;
                             resp_result    <= imgload_byte_idx + 10'd1;
@@ -2986,7 +3171,6 @@ module top_level(
                     TSK_DIV_DW_WAIT: begin
                         if (train_stdp_div_out_valid) begin
                             logic signed [31:0] dW_step_q16_tmp;
-                            logic signed [31:0] w_next_q16_tmp;
                             if (train_stdp_div_err) begin
                                 train_stdp_active <= 1'b0;
                                 train_stdp_state  <= TSK_IDLE;
@@ -3001,19 +3185,30 @@ module top_level(
                                 dW_step_q16_tmp = $signed(train_stdp_div_q);
                                 if (train_stdp_dW_q16 < 0)
                                     dW_step_q16_tmp = -dW_step_q16_tmp;
-                                if (dW_step_q16_tmp > TRAIN_CLIP_DW_Q16)
-                                    dW_step_q16_tmp = TRAIN_CLIP_DW_Q16;
-                                else if (dW_step_q16_tmp < -TRAIN_CLIP_DW_Q16)
-                                    dW_step_q16_tmp = -TRAIN_CLIP_DW_Q16;
-                                w_next_q16_tmp = train_stdp_w_norm_q16 + dW_step_q16_tmp;
-                                if (w_next_q16_tmp > TRAIN_WMAX_Q16)
-                                    w_next_q16_tmp = TRAIN_WMAX_Q16;
-                                else if (w_next_q16_tmp < TRAIN_WMIN_Q16)
-                                    w_next_q16_tmp = TRAIN_WMIN_Q16;
-                                train_stdp_w_new <= w_next_q16_tmp;
-                                train_stdp_state <= TSK_WRITE_W_REQ;
+                                train_stdp_dW_q16 <= dW_step_q16_tmp;
+                                train_stdp_state <= TSK_DIV_DW_CLIP;
                             end
                         end
+                    end
+                    TSK_DIV_DW_CLIP: begin
+                        logic signed [31:0] dW_clip_q16_tmp;
+                        dW_clip_q16_tmp = train_stdp_dW_q16;
+                        if (dW_clip_q16_tmp > TRAIN_CLIP_DW_Q16)
+                            dW_clip_q16_tmp = TRAIN_CLIP_DW_Q16;
+                        else if (dW_clip_q16_tmp < -TRAIN_CLIP_DW_Q16)
+                            dW_clip_q16_tmp = -TRAIN_CLIP_DW_Q16;
+                        train_stdp_dW_q16 <= dW_clip_q16_tmp;
+                        train_stdp_state <= TSK_DIV_DW_WNEXT;
+                    end
+                    TSK_DIV_DW_WNEXT: begin
+                        logic signed [31:0] w_next_q16_tmp;
+                        w_next_q16_tmp = train_stdp_w_norm_q16 + train_stdp_dW_q16;
+                        if (w_next_q16_tmp > TRAIN_WMAX_Q16)
+                            w_next_q16_tmp = TRAIN_WMAX_Q16;
+                        else if (w_next_q16_tmp < TRAIN_WMIN_Q16)
+                            w_next_q16_tmp = TRAIN_WMIN_Q16;
+                        train_stdp_w_new <= w_next_q16_tmp;
+                        train_stdp_state <= TSK_WRITE_W_REQ;
                     end
                     TSK_WRITE_W_REQ: begin
                         infer_w_wr_en             <= 1'b1;
@@ -3113,7 +3308,7 @@ module top_level(
                                 train_mem_init_state  <= TMI_A_WRITE_REQ;
                                 train_mem_init_idx    <= '0;
                             end
-                        end else if (raw_image0_valid && (raw_bytes_per_image == 32'd784) && (raw_image0_sum_u8 != 32'd0)) begin
+                        end else if (raw_image_compute_valid && (raw_bytes_per_image == 32'd784) && (raw_image_compute_sum_u8 != 32'd0)) begin
                             infer_active       <= 1'b1;
                             if (train_chunk_retry_continue_infer) begin
                                 // mine.py retry keeps neuron/synapse/RNG state and only reruns an inj window.
@@ -3237,7 +3432,7 @@ module top_level(
                         end
                     end
                     TCK_BLANK_INFER_START: begin
-                        if (raw_image0_valid && (raw_bytes_per_image == 32'd784) && (raw_image0_sum_u8 != 32'd0)) begin
+                        if (raw_image_compute_valid && (raw_bytes_per_image == 32'd784) && (raw_image_compute_sum_u8 != 32'd0)) begin
                             infer_active       <= 1'b1;
                             infer_state        <= INFER_GEN_INPUT_SPIKES; // blank: continue existing state, skip clear/threshold prep
                             // Keep infer_step_idx continuous across inj->blank, so blank duration
@@ -3497,17 +3692,37 @@ module top_level(
                                     batch_phase <= BATCH_PHASE_DONE;
                                     batch_current_sample_idx <= batch_current_sample_idx + 32'd1;
                                 end else begin
+                                    logic [31:0] next_img_byte_off_tmp;
+                                    logic [31:0] next_img_byte_in_sector_tmp;
+                                    logic [31:0] next_img_byte_in_sector_norm_tmp;
+                                    logic [31:0] next_img_sector_carry_tmp;
+                                    logic [31:0] next_img_sector_off_tmp;
+                                    logic [31:0] next_img_sectors_needed_tmp;
+                                    next_img_byte_off_tmp = batch_img_byte_off + RAW1_BYTES_PER_IMAGE;
+                                    next_img_byte_in_sector_tmp = batch_img_byte_in_sector + RAW1_BYTES_PER_IMAGE;
+                                    if (next_img_byte_in_sector_tmp >= 32'd1024) begin
+                                        next_img_sector_carry_tmp = 32'd2;
+                                        next_img_byte_in_sector_norm_tmp = next_img_byte_in_sector_tmp - 32'd1024;
+                                    end else if (next_img_byte_in_sector_tmp >= 32'd512) begin
+                                        next_img_sector_carry_tmp = 32'd1;
+                                        next_img_byte_in_sector_norm_tmp = next_img_byte_in_sector_tmp - 32'd512;
+                                    end else begin
+                                        next_img_sector_carry_tmp = 32'd0;
+                                        next_img_byte_in_sector_norm_tmp = next_img_byte_in_sector_tmp;
+                                    end
+                                    next_img_sector_off_tmp = batch_img_sector_off + next_img_sector_carry_tmp;
+                                    next_img_sectors_needed_tmp = (next_img_byte_in_sector_norm_tmp <= 32'd240) ? 32'd2 : 32'd3;
                                     batch_phase <= BATCH_PHASE_LOADING;
                                     batch_current_sample_idx <= batch_current_sample_idx + 32'd1;
-                                    batch_img_byte_off <= RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE);
-                                    batch_img_sector_off <= (RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) / 32'd512;
-                                    batch_img_byte_in_sector <= (RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) % 32'd512;
-                                    batch_img_sectors_needed <= (((RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) % 32'd512) + RAW1_BYTES_PER_IMAGE + 32'd511) / 32'd512;
+                                    batch_img_byte_off <= next_img_byte_off_tmp;
+                                    batch_img_sector_off <= next_img_sector_off_tmp;
+                                    batch_img_byte_in_sector <= next_img_byte_in_sector_norm_tmp;
+                                    batch_img_sectors_needed <= next_img_sectors_needed_tmp;
                                     batch_label_rd_addr <= batch_current_sample_idx + 32'd1;
                                     sd_copy_active        <= 1'b1;
                                     sd_in_read            <= 1'b0;
-                                    sd_copy_lba           <= batch_cfg_start_lba + ((RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) / 32'd512);
-                                    sd_copy_sectors_left  <= (((RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) % 32'd512) + RAW1_BYTES_PER_IMAGE + 32'd511) / 32'd512;
+                                    sd_copy_lba           <= batch_cfg_start_lba + next_img_sector_off_tmp;
+                                    sd_copy_sectors_left  <= next_img_sectors_needed_tmp;
                                     sd_byte_count         <= 9'd0;
                                     sd_pack_idx           <= 2'd0;
                                     sd_pack_word          <= 32'd0;
@@ -3697,17 +3912,37 @@ module top_level(
                                 batch_phase <= BATCH_PHASE_DONE;
                                 batch_current_sample_idx <= batch_current_sample_idx + 32'd1;
                             end else begin
+                                logic [31:0] next_img_byte_off_tmp;
+                                logic [31:0] next_img_byte_in_sector_tmp;
+                                logic [31:0] next_img_byte_in_sector_norm_tmp;
+                                logic [31:0] next_img_sector_carry_tmp;
+                                logic [31:0] next_img_sector_off_tmp;
+                                logic [31:0] next_img_sectors_needed_tmp;
+                                next_img_byte_off_tmp = batch_img_byte_off + RAW1_BYTES_PER_IMAGE;
+                                next_img_byte_in_sector_tmp = batch_img_byte_in_sector + RAW1_BYTES_PER_IMAGE;
+                                if (next_img_byte_in_sector_tmp >= 32'd1024) begin
+                                    next_img_sector_carry_tmp = 32'd2;
+                                    next_img_byte_in_sector_norm_tmp = next_img_byte_in_sector_tmp - 32'd1024;
+                                end else if (next_img_byte_in_sector_tmp >= 32'd512) begin
+                                    next_img_sector_carry_tmp = 32'd1;
+                                    next_img_byte_in_sector_norm_tmp = next_img_byte_in_sector_tmp - 32'd512;
+                                end else begin
+                                    next_img_sector_carry_tmp = 32'd0;
+                                    next_img_byte_in_sector_norm_tmp = next_img_byte_in_sector_tmp;
+                                end
+                                next_img_sector_off_tmp = batch_img_sector_off + next_img_sector_carry_tmp;
+                                next_img_sectors_needed_tmp = (next_img_byte_in_sector_norm_tmp <= 32'd240) ? 32'd2 : 32'd3;
                                 batch_phase <= BATCH_PHASE_LOADING;
                                 batch_current_sample_idx <= batch_current_sample_idx + 32'd1;
-                                batch_img_byte_off <= RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE);
-                                batch_img_sector_off <= (RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) / 32'd512;
-                                batch_img_byte_in_sector <= (RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) % 32'd512;
-                                batch_img_sectors_needed <= (((RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) % 32'd512) + RAW1_BYTES_PER_IMAGE + 32'd511) / 32'd512;
+                                batch_img_byte_off <= next_img_byte_off_tmp;
+                                batch_img_sector_off <= next_img_sector_off_tmp;
+                                batch_img_byte_in_sector <= next_img_byte_in_sector_norm_tmp;
+                                batch_img_sectors_needed <= next_img_sectors_needed_tmp;
                                 batch_label_rd_addr <= batch_current_sample_idx + 32'd1;
                                 sd_copy_active        <= 1'b1;
                                 sd_in_read            <= 1'b0;
-                                sd_copy_lba           <= batch_cfg_start_lba + ((RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) / 32'd512);
-                                sd_copy_sectors_left  <= (((RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) % 32'd512) + RAW1_BYTES_PER_IMAGE + 32'd511) / 32'd512;
+                                sd_copy_lba           <= batch_cfg_start_lba + next_img_sector_off_tmp;
+                                sd_copy_sectors_left  <= next_img_sectors_needed_tmp;
                                 sd_byte_count         <= 9'd0;
                                 sd_pack_idx           <= 2'd0;
                                 sd_pack_word          <= 32'd0;
@@ -3937,6 +4172,7 @@ module top_level(
                                         ddr_rsp_payload_ready_core <= 1'b0;
                                         ddr_rsp_drain_active_core <= 1'b1;
                                         ddr_rsp_drain_quiet_core <= 2'd0;
+                                        imgload_target_buf_sel <= 1'b0;
                                         imgload_start_pending <= 1'b1;
                                         imgload_start_addr_word <= IMG_STAGING_BASE_WORD + {2'b00, arg0[31:2]};
                                         imgload_start_lane <= arg0[1:0];
@@ -3957,7 +4193,7 @@ module top_level(
                                     // arg0 = seed, arg1 = steps (>0); no STDP, no label accumulation.
                                     if ((req_nargs == 8'd2) &&
                                         (arg1 > 0) && (arg1 <= 32'sd65535) &&
-                                        raw_image0_valid && (raw_bytes_per_image == 32'd784) && (raw_image0_sum_u8 != 32'd0) &&
+                                        raw_image_compute_valid && (raw_bytes_per_image == 32'd784) && (raw_image_compute_sum_u8 != 32'd0) &&
                                         !ddr_req_pending_core &&
                                         !train_trace_active && !train_stdp_active && !train_gen_active &&
                                         !train_label_stats_active && !train_chunk_active && !infer_active) begin
@@ -4117,11 +4353,25 @@ module top_level(
                                         batch_total_spikes <= 32'd0;
                                         batch_correct_count <= 32'd0;
                                         batch_elapsed_cycles <= 32'd0;
+                                        batch_load_cycles <= 32'd0;
+                                        batch_train_core_cycles <= 32'd0;
+                                        batch_infer_core_cycles <= 32'd0;
+                                        batch_label_stats_cycles <= 32'd0;
+                                        batch_infer_eval_cycles <= 32'd0;
+                                        batch_other_cycles <= 32'd0;
                                         batch_img_byte_off <= RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + (batch_cfg_start_sample_idx * RAW1_BYTES_PER_IMAGE);
                                         batch_img_sector_off <= (RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + (batch_cfg_start_sample_idx * RAW1_BYTES_PER_IMAGE)) / 32'd512;
                                         batch_img_byte_in_sector <= (RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + (batch_cfg_start_sample_idx * RAW1_BYTES_PER_IMAGE)) % 32'd512;
                                         batch_img_sectors_needed <= (((RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + (batch_cfg_start_sample_idx * RAW1_BYTES_PER_IMAGE)) % 32'd512) + RAW1_BYTES_PER_IMAGE + 32'd511) / 32'd512;
+                                        batch_use_cached_images <= 1'b0;
+                                        batch_cache_img_byte_off <= (RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + (batch_cfg_start_sample_idx * RAW1_BYTES_PER_IMAGE)) % 32'd512;
                                         batch_label_rd_addr <= batch_cfg_start_sample_idx[13:0];
+                                        batch_compute_buf_sel <= 1'b0;
+                                        batch_fill_buf_sel <= 1'b1;
+                                        imgload_target_buf_sel <= 1'b0;
+                                        batch_prefetch_active <= 1'b0;
+                                        batch_prefetch_ready <= 1'b0;
+                                        batch_prefetch_sample_idx <= 32'd0;
                                         if (!(batch_cfg0_valid && batch_cfg1_valid)) begin
                                             batch_done <= 1'b1;
                                             batch_error <= 1'b1;
@@ -4134,6 +4384,20 @@ module top_level(
                                                      !ddr_req_pending_core &&
                                                      !train_trace_active && !train_stdp_active && !train_stdp_batch_active &&
                                                      !train_chunk_active && !train_label_stats_active && !infer_active) begin
+                                                logic [31:0] batch_start_byte_off_tmp;
+                                                logic [31:0] batch_start_sector_off_tmp;
+                                                logic [31:0] batch_start_byte_in_sector_tmp;
+                                                logic [31:0] batch_start_sectors_needed_tmp;
+                                                logic [31:0] batch_cache_total_bytes_tmp;
+                                                logic [31:0] batch_cache_total_sectors_tmp;
+                                                logic [31:0] batch_cache_total_words_tmp;
+                                                batch_start_byte_off_tmp = RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + (batch_cfg_start_sample_idx * RAW1_BYTES_PER_IMAGE);
+                                                batch_start_sector_off_tmp = batch_start_byte_off_tmp / 32'd512;
+                                                batch_start_byte_in_sector_tmp = batch_start_byte_off_tmp % 32'd512;
+                                                batch_start_sectors_needed_tmp = (batch_start_byte_in_sector_tmp + RAW1_BYTES_PER_IMAGE + 32'd511) / 32'd512;
+                                                batch_cache_total_bytes_tmp = batch_start_byte_in_sector_tmp + (batch_cfg_num_samples * RAW1_BYTES_PER_IMAGE);
+                                                batch_cache_total_sectors_tmp = (batch_cache_total_bytes_tmp + 32'd511) / 32'd512;
+                                                batch_cache_total_words_tmp = (batch_cache_total_sectors_tmp * 32'd512) >> 2;
                                                 batch_active <= 1'b1;
                                                 batch_done <= 1'b0;
                                                 batch_error <= 1'b0;
@@ -4141,8 +4405,20 @@ module top_level(
                                                 batch_phase <= BATCH_PHASE_LOADING;
                                                 sd_copy_active        <= 1'b1;
                                                 sd_in_read            <= 1'b0;
-                                                sd_copy_lba           <= batch_cfg_start_lba + ((RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + (batch_cfg_start_sample_idx * RAW1_BYTES_PER_IMAGE)) / 32'd512);
-                                                sd_copy_sectors_left  <= (((RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + (batch_cfg_start_sample_idx * RAW1_BYTES_PER_IMAGE)) % 32'd512) + RAW1_BYTES_PER_IMAGE + 32'd511) / 32'd512;
+                                                if (!batch_cfg_mode_train &&
+                                                    ((IMG_CACHE_BASE_WORD + batch_cache_total_words_tmp) < DDR_ADDR_WORD_LIMIT)) begin
+                                                    batch_use_cached_images <= 1'b1;
+                                                    batch_cache_img_byte_off <= batch_start_byte_in_sector_tmp;
+                                                    sd_copy_lba           <= batch_cfg_start_lba + batch_start_sector_off_tmp;
+                                                    sd_copy_sectors_left  <= batch_cache_total_sectors_tmp;
+                                                    sd_copy_dest_base_word <= IMG_CACHE_BASE_WORD;
+                                                end else begin
+                                                    batch_use_cached_images <= 1'b0;
+                                                    batch_cache_img_byte_off <= batch_start_byte_in_sector_tmp;
+                                                    sd_copy_lba           <= batch_cfg_start_lba + batch_start_sector_off_tmp;
+                                                    sd_copy_sectors_left  <= batch_start_sectors_needed_tmp;
+                                                    sd_copy_dest_base_word <= IMG_STAGING_BASE_WORD;
+                                                end
                                                 sd_byte_count         <= 9'd0;
                                                 sd_pack_idx           <= 2'd0;
                                                 sd_pack_word          <= 32'd0;
@@ -4154,7 +4430,6 @@ module top_level(
                                                 sd_copy_done_pending  <= 1'b0;
                                                 sd_use_sector_limit   <= 1'b1;
                                                 sd_copy_raw1_mode     <= 1'b0;
-                                                sd_copy_dest_base_word <= IMG_STAGING_BASE_WORD;
                                                 raw_image0_valid <= 1'b0;
                                                 raw_image0_capture_idx <= 10'd0;
                                                 raw_image0_sum_u8 <= 32'd0;
@@ -4202,6 +4477,12 @@ module top_level(
                                             4'd5: resp_result <= batch_total_spikes;
                                             4'd6: resp_result <= batch_correct_count;
                                             4'd7: resp_result <= batch_elapsed_cycles;
+                                            4'd8: resp_result <= batch_load_cycles;
+                                            4'd9: resp_result <= batch_train_core_cycles;
+                                            4'd10: resp_result <= batch_infer_core_cycles;
+                                            4'd11: resp_result <= batch_label_stats_cycles;
+                                            4'd12: resp_result <= batch_infer_eval_cycles;
+                                            4'd13: resp_result <= batch_other_cycles;
                                             default: resp_result <= 32'd0;
                                         endcase
                                         resp_checksum  <= 8'h00;
@@ -4515,8 +4796,8 @@ module top_level(
                     INFER_PREP_DIV_START: begin
                         if (infer_prep_idx < N_IN) begin
                             if (!infer_div_busy) begin
-                                infer_prep_div_prod_q32 <= $unsigned(infer_poisson_num_const_cfg) * $unsigned({24'd0, raw_image0_rd_data});
-                                infer_divisor  <= raw_image0_sum_u8;
+                                infer_prep_div_prod_q32 <= $unsigned(infer_poisson_num_const_cfg) * $unsigned({24'd0, raw_image_compute_rd_data});
+                                infer_divisor  <= raw_image_compute_sum_u8;
                                 infer_state <= INFER_PREP_DIV_MUL;
                             end
                         end else begin
@@ -5441,32 +5722,110 @@ module top_level(
                             batch_phase <= BATCH_PHASE_DONE;
                             batch_current_sample_idx <= batch_current_sample_idx + 32'd1;
                         end else begin
-                            batch_phase <= BATCH_PHASE_LOADING;
                             batch_current_sample_idx <= batch_current_sample_idx + 32'd1;
-                            batch_img_byte_off <= RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE);
-                            batch_img_sector_off <= (RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) / 32'd512;
-                            batch_img_byte_in_sector <= (RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) % 32'd512;
-                            batch_img_sectors_needed <= (((RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) % 32'd512) + RAW1_BYTES_PER_IMAGE + 32'd511) / 32'd512;
                             batch_label_rd_addr <= batch_current_sample_idx + 32'd1;
-                            sd_copy_active        <= 1'b1;
-                            sd_in_read            <= 1'b0;
-                            sd_copy_lba           <= batch_cfg_start_lba + ((RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) / 32'd512);
-                            sd_copy_sectors_left  <= (((RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + ((batch_current_sample_idx + 32'd1) * RAW1_BYTES_PER_IMAGE)) % 32'd512) + RAW1_BYTES_PER_IMAGE + 32'd511) / 32'd512;
-                            sd_byte_count         <= 9'd0;
-                            sd_pack_idx           <= 2'd0;
-                            sd_pack_word          <= 32'd0;
-                            sd_copy_words_written <= 32'd0;
-                            sd_sector_buf_ready   <= 2'b00;
-                            sd_header_done        <= 1'b0;
-                            sd_file_total_bytes   <= 32'd0;
-                            sd_file_bytes_seen    <= 32'd0;
-                            sd_copy_done_pending  <= 1'b0;
-                            sd_use_sector_limit   <= 1'b1;
-                            sd_copy_raw1_mode     <= 1'b0;
-                            sd_copy_dest_base_word <= IMG_STAGING_BASE_WORD;
-                            raw_image0_valid <= 1'b0;
-                            raw_image0_capture_idx <= 10'd0;
-                            raw_image0_sum_u8 <= 32'd0;
+                            if (batch_use_cached_images) begin
+                                batch_phase <= BATCH_PHASE_LOADING;
+                                batch_cache_img_byte_off <= batch_cache_img_byte_off + RAW1_BYTES_PER_IMAGE;
+                                if (!batch_compute_buf_sel) begin
+                                    raw_image0_valid <= 1'b0;
+                                    raw_image0_capture_idx <= 10'd0;
+                                    raw_image0_sum_u8 <= 32'd0;
+                                end else begin
+                                    raw_image1_valid <= 1'b0;
+                                    raw_image1_capture_idx <= 10'd0;
+                                    raw_image1_sum_u8 <= 32'd0;
+                                end
+                            end else if (batch_prefetch_ready && (batch_prefetch_sample_idx == (batch_current_sample_idx + 32'd1))) begin
+                                batch_phase <= BATCH_PHASE_RUNNING;
+                                batch_img_byte_off <= batch_prefetch_img_byte_off;
+                                batch_img_sector_off <= batch_prefetch_img_sector_off;
+                                batch_img_byte_in_sector <= batch_prefetch_img_byte_in_sector;
+                                batch_img_sectors_needed <= batch_prefetch_img_sectors_needed;
+                                batch_compute_buf_sel <= batch_fill_buf_sel;
+                                batch_fill_buf_sel <= batch_compute_buf_sel;
+                                batch_prefetch_ready <= 1'b0;
+                                if (!batch_compute_buf_sel) begin
+                                    raw_image0_valid <= 1'b0;
+                                    raw_image0_capture_idx <= 10'd0;
+                                    raw_image0_sum_u8 <= 32'd0;
+                                end else begin
+                                    raw_image1_valid <= 1'b0;
+                                    raw_image1_capture_idx <= 10'd0;
+                                    raw_image1_sum_u8 <= 32'd0;
+                                end
+                                infer_active       <= 1'b1;
+                                infer_state        <= INFER_INIT_CLEAR;
+                                infer_steps_target <= 32'd350;
+                                infer_step_idx     <= 16'd0;
+                                infer_neuron_idx   <= 7'd0;
+                                infer_input_idx    <= 10'd0;
+                                infer_prep_idx     <= 10'd0;
+                                infer_accum        <= 32'sd0;
+                                infer_accum_weight_phase <= 3'd0;
+                                infer_apply_idx    <= 7'd0;
+                                infer_trace_phase  <= 2'd0;
+                                infer_total_spikes <= 32'd0;
+                                infer_rng_state    <= batch_cfg_seed;
+                                infer_skip_init_clear <= 1'b0;
+                                infer_force_no_input  <= 1'b0;
+                                infer_poisson_num_const_cfg <= POISSON_NUM_CONST;
+                                infer_pre_active_count <= 10'd0;
+                                raw_image0_rd_addr <= 10'd0;
+                                infer_poisson_thresh_rd_addr <= 10'd0;
+                                infer_model_state_valid <= 1'b0;
+                            end else begin
+                                logic [31:0] next_img_byte_off_tmp;
+                                logic [31:0] next_img_byte_in_sector_tmp;
+                                logic [31:0] next_img_byte_in_sector_norm_tmp;
+                                logic [31:0] next_img_sector_carry_tmp;
+                                logic [31:0] next_img_sector_off_tmp;
+                                logic [31:0] next_img_sectors_needed_tmp;
+                                next_img_byte_off_tmp = batch_img_byte_off + RAW1_BYTES_PER_IMAGE;
+                                next_img_byte_in_sector_tmp = batch_img_byte_in_sector + RAW1_BYTES_PER_IMAGE;
+                                if (next_img_byte_in_sector_tmp >= 32'd1024) begin
+                                    next_img_sector_carry_tmp = 32'd2;
+                                    next_img_byte_in_sector_norm_tmp = next_img_byte_in_sector_tmp - 32'd1024;
+                                end else if (next_img_byte_in_sector_tmp >= 32'd512) begin
+                                    next_img_sector_carry_tmp = 32'd1;
+                                    next_img_byte_in_sector_norm_tmp = next_img_byte_in_sector_tmp - 32'd512;
+                                end else begin
+                                    next_img_sector_carry_tmp = 32'd0;
+                                    next_img_byte_in_sector_norm_tmp = next_img_byte_in_sector_tmp;
+                                end
+                                next_img_sector_off_tmp = batch_img_sector_off + next_img_sector_carry_tmp;
+                                next_img_sectors_needed_tmp = (next_img_byte_in_sector_norm_tmp <= 32'd240) ? 32'd2 : 32'd3;
+                                batch_phase <= BATCH_PHASE_LOADING;
+                                batch_img_byte_off <= next_img_byte_off_tmp;
+                                batch_img_sector_off <= next_img_sector_off_tmp;
+                                batch_img_byte_in_sector <= next_img_byte_in_sector_norm_tmp;
+                                batch_img_sectors_needed <= next_img_sectors_needed_tmp;
+                                sd_copy_active        <= 1'b1;
+                                sd_in_read            <= 1'b0;
+                                sd_copy_lba           <= batch_cfg_start_lba + next_img_sector_off_tmp;
+                                sd_copy_sectors_left  <= next_img_sectors_needed_tmp;
+                                sd_byte_count         <= 9'd0;
+                                sd_pack_idx           <= 2'd0;
+                                sd_pack_word          <= 32'd0;
+                                sd_copy_words_written <= 32'd0;
+                                sd_sector_buf_ready   <= 2'b00;
+                                sd_header_done        <= 1'b0;
+                                sd_file_total_bytes   <= 32'd0;
+                                sd_file_bytes_seen    <= 32'd0;
+                                sd_copy_done_pending  <= 1'b0;
+                                sd_use_sector_limit   <= 1'b1;
+                                sd_copy_raw1_mode     <= 1'b0;
+                                sd_copy_dest_base_word <= IMG_STAGING_BASE_WORD;
+                                if (!batch_compute_buf_sel) begin
+                                    raw_image0_valid <= 1'b0;
+                                    raw_image0_capture_idx <= 10'd0;
+                                    raw_image0_sum_u8 <= 32'd0;
+                                end else begin
+                                    raw_image1_valid <= 1'b0;
+                                    raw_image1_capture_idx <= 10'd0;
+                                    raw_image1_sum_u8 <= 32'd0;
+                                end
+                            end
                         end
                     end
                     default: begin

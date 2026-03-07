@@ -66,6 +66,7 @@ RAW1_NUM_IMAGES_DEFAULT = 10_000
 IMGLOAD_SRC_BIAS_BYTES = 0
 IMGLOAD_GUARD_SEC = 0.01
 IMG_STAGING_MARGIN_WORDS = 262144  # must match top_level.sv IMG_STAGING_BASE_WORD margin
+CORE_CLK_HZ = 100_000_000.0
 MNIST_MIRRORS = (
     "https://storage.googleapis.com/cvdf-datasets/mnist/",
     "https://ossci-datasets.s3.amazonaws.com/mnist/",
@@ -679,6 +680,39 @@ def fpga_batch_read_summary_field(ser: serial.Serial, field_idx: int) -> int:
     return int(np.int32(value))
 
 
+def fpga_batch_read_summary_field_u32(ser: serial.Serial, field_idx: int) -> int:
+    status, value = send_request(ser, OP_BATCH_READ_SUMMARY, [int(field_idx), 0])
+    require_ok(status, f"BATCH_READ_SUMMARY[{int(field_idx)}]")
+    return int(value) & 0xFFFFFFFF
+
+
+def cycles_to_seconds(cycles: int) -> float:
+    return float(int(cycles) & 0xFFFFFFFF) / float(CORE_CLK_HZ)
+
+
+def fpga_batch_read_cycle_breakdown(ser: serial.Serial) -> dict[str, int]:
+    return {
+        "load": fpga_batch_read_summary_field_u32(ser, 8),
+        "train_core": fpga_batch_read_summary_field_u32(ser, 9),
+        "infer_core": fpga_batch_read_summary_field_u32(ser, 10),
+        "label_stats": fpga_batch_read_summary_field_u32(ser, 11),
+        "infer_eval": fpga_batch_read_summary_field_u32(ser, 12),
+        "other": fpga_batch_read_summary_field_u32(ser, 13),
+    }
+
+
+def print_cycle_breakdown(title: str, breakdown: dict[str, int]) -> None:
+    total = sum(int(v) for v in breakdown.values())
+    print(title)
+    for key in ("load", "train_core", "infer_core", "label_stats", "infer_eval", "other"):
+        cycles = int(breakdown[key])
+        frac = (float(cycles) / float(total)) if total > 0 else 0.0
+        print(
+            f"  {key:>11} = {cycles:10d} cycles, "
+            f"{cycles_to_seconds(cycles):9.6f} s, {frac:6.2%}"
+        )
+
+
 def fpga_batch_label_write(ser: serial.Serial, sample_idx: int, label: int) -> None:
     status, value = send_request(ser, OP_BATCH_LABEL_WRITE, [int(sample_idx), int(label)])
     require_ok(status, f"BATCH_LABEL_WRITE[idx={int(sample_idx)}]")
@@ -723,6 +757,25 @@ def fpga_batch_wait_done(
         if (time.time() - t0) > float(timeout_sec):
             raise TimeoutError(f"BATCH_STATUS timeout after {float(timeout_sec):.1f}s")
         time.sleep(poll_interval_sec)
+
+
+def fpga_run_batch(
+    ser: serial.Serial,
+    *,
+    mode_train: bool,
+    start_sample_idx: int,
+    num_samples: int,
+    start_lba: int,
+    seed: int,
+    timeout_sec: float,
+) -> BatchStatus:
+    fpga_batch_config0(ser, mode_train=mode_train, start_sample_idx=int(start_sample_idx))
+    fpga_batch_config1(ser, num_samples=int(num_samples), seed_value=int(seed))
+    fpga_batch_config2(ser, start_lba=int(start_lba))
+    start_status, start_result = fpga_batch_start(ser)
+    require_ok(start_status, "BATCH_START")
+    _ = start_result
+    return fpga_batch_wait_done(ser, timeout_sec=max(30.0, float(timeout_sec)))
 
 
 def fpga_train_run_sample_phase4(ser: serial.Serial, *, inj_steps: int) -> int:
@@ -928,14 +981,92 @@ def fpga_batch_single_smoke(
     print(f"Batch start accepted: result=0x{int(start_result) & 0xFFFFFFFF:08X}")
     after = fpga_batch_wait_done(ser, timeout_sec=max(30.0, timeout_sec))
     print(f"Batch status after done: {after}")
-    for idx in range(8):
-        print(f"Batch summary[{idx}] = {fpga_batch_read_summary_field(ser, idx)}")
+    for idx in range(14):
+        if idx >= 7:
+            value = fpga_batch_read_summary_field_u32(ser, idx)
+        else:
+            value = fpga_batch_read_summary_field(ser, idx)
+        print(f"Batch summary[{idx}] = {value}")
+    elapsed_cycles = fpga_batch_read_summary_field_u32(ser, 7)
+    print(f"Batch elapsed time = {cycles_to_seconds(elapsed_cycles):.6f} s ({elapsed_cycles} cycles)")
+    print_cycle_breakdown("Batch cycle breakdown:", fpga_batch_read_cycle_breakdown(ser))
     if mode_train:
         label_counts = fpga_read_train_label_counts_all(ser)
         nonzero = [(idx, int(cnt)) for idx, cnt in enumerate(label_counts) if int(cnt) > 0]
         print(f"Nonzero label counts: {nonzero}")
     else:
         print(f"Batch correct_count = {fpga_batch_read_summary_field(ser, 6)}")
+
+
+def fpga_batch_train_then_infer(
+    ser: serial.Serial,
+    args: argparse.Namespace,
+) -> None:
+    n_train = max(1, int(getattr(args, "train_then_infer_train_samples", 500)))
+    n_infer = max(1, int(getattr(args, "train_then_infer_infer_samples", 100)))
+    start_lba = int(args.start_lba)
+    timeout_sec = float(args.timeout)
+    seed = int(args.seed)
+
+    _, labels_all = load_mnist()
+    total_need = n_train + n_infer
+    if total_need > int(len(labels_all)):
+        raise ValueError(f"need {total_need} samples but dataset has {int(len(labels_all))}")
+
+    print(f"Batch train start: n_train={n_train}")
+    fpga_train_label_stats_reset(ser)
+    fpga_batch_preload_labels(ser, labels_all, start_idx=0, num_samples=n_train)
+    train_status = fpga_run_batch(
+        ser,
+        mode_train=True,
+        start_sample_idx=0,
+        num_samples=n_train,
+        start_lba=start_lba,
+        seed=seed,
+        timeout_sec=timeout_sec,
+    )
+    print(f"Batch train done: {train_status}")
+    train_processed = fpga_batch_read_summary_field(ser, 4)
+    train_cycles = fpga_batch_read_summary_field_u32(ser, 7)
+    train_seconds = cycles_to_seconds(train_cycles)
+    train_breakdown = fpga_batch_read_cycle_breakdown(ser)
+    print(
+        f"Batch train summary: processed={train_processed}, "
+        f"elapsed_cycles={train_cycles}, elapsed_sec={train_seconds:.6f}"
+    )
+    print_cycle_breakdown("Batch train cycle breakdown:", train_breakdown)
+
+    fpga_sums, fpga_counts = fpga_read_train_label_stats_all(ser)
+    fpga_assign, _ = assign_labels_from_aggregated_stats(fpga_sums, fpga_counts, rates_prev=None, alpha=1.0)
+
+    print(f"Batch infer start: n_infer={n_infer}")
+    fpga_batch_preload_assignments(ser, fpga_assign)
+    fpga_batch_preload_labels(ser, labels_all, start_idx=n_train, num_samples=n_infer)
+    infer_status = fpga_run_batch(
+        ser,
+        mode_train=False,
+        start_sample_idx=n_train,
+        num_samples=n_infer,
+        start_lba=start_lba,
+        seed=seed,
+        timeout_sec=timeout_sec,
+    )
+    print(f"Batch infer done: {infer_status}")
+    infer_processed = fpga_batch_read_summary_field(ser, 4)
+    infer_correct = fpga_batch_read_summary_field(ser, 6)
+    infer_cycles = fpga_batch_read_summary_field_u32(ser, 7)
+    infer_seconds = cycles_to_seconds(infer_cycles)
+    infer_breakdown = fpga_batch_read_cycle_breakdown(ser)
+    infer_acc = float(infer_correct) / float(n_infer)
+    print("Batch train/infer summary:")
+    print(f"  trained samples = {n_train}")
+    print(f"  inferred samples = {n_infer}")
+    print(f"  infer processed = {infer_processed}")
+    print(f"  correct = {infer_correct}")
+    print(f"  accuracy = {infer_acc:.4f}")
+    print(f"  infer elapsed_cycles = {infer_cycles}")
+    print(f"  infer elapsed_sec = {infer_seconds:.6f}")
+    print_cycle_breakdown("Batch infer cycle breakdown:", infer_breakdown)
 
 
 def parse_args() -> argparse.Namespace:
@@ -980,6 +1111,11 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=1,
         help="Number of samples for the batch smoke modes.",
+    )
+    parser.add_argument(
+        "--batch-train-then-infer",
+        action="store_true",
+        help="Run batch train, derive assignments, then run batch infer using only coarse-grain batch commands.",
     )
     return parser.parse_args()
 
@@ -1049,6 +1185,10 @@ if __name__ == "__main__":
                 seed=int(args.seed),
                 mode_train=True,
             )
+            sys.exit(0)
+
+        if args.batch_train_then_infer:
+            fpga_batch_train_then_infer(ser, args)
             sys.exit(0)
 
         fpga_train_then_infer_compare_500_100(ser, args)
