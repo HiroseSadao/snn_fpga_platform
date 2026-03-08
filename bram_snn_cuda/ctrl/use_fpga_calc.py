@@ -102,6 +102,16 @@ class TrainDDRLayout:
     total_words: int
 
 
+@dataclass(frozen=True)
+class PreloadedImageRange:
+    start_sample_idx: int
+    num_samples: int
+    start_lba: int
+    start_sector_off: int
+    start_byte_in_sector: int
+    num_sectors: int
+
+
 def build_train_ddr_layout() -> TrainDDRLayout:
     """Step1: fix the logical DDR layout used by training kernels.
 
@@ -750,12 +760,20 @@ def fpga_batch_wait_done(
     poll_interval_sec: float = 0.05,
 ) -> BatchStatus:
     t0 = time.time()
+    last_status: BatchStatus | None = None
     while True:
         st = fpga_batch_read_status(ser)
-        if st.done:
+        last_status = st
+        # Treat completion as stable only after the batch engine has actually gone idle.
+        if st.done and not st.active:
+            return st
+        if st.has_error and not st.active:
             return st
         if (time.time() - t0) > float(timeout_sec):
-            raise TimeoutError(f"BATCH_STATUS timeout after {float(timeout_sec):.1f}s")
+            raise TimeoutError(
+                f"BATCH_STATUS timeout after {float(timeout_sec):.1f}s"
+                + (f", last_status={last_status}" if last_status is not None else "")
+            )
         time.sleep(poll_interval_sec)
 
 
@@ -775,7 +793,10 @@ def fpga_run_batch(
     start_status, start_result = fpga_batch_start(ser)
     require_ok(start_status, "BATCH_START")
     _ = start_result
-    return fpga_batch_wait_done(ser, timeout_sec=max(30.0, float(timeout_sec)))
+    done_status = fpga_batch_wait_done(ser, timeout_sec=max(30.0, float(timeout_sec)))
+    if done_status.has_error:
+        raise RuntimeError(f"BATCH engine reported error: {done_status}")
+    return done_status
 
 
 def fpga_train_run_sample_phase4(ser: serial.Serial, *, inj_steps: int) -> int:
@@ -825,15 +846,23 @@ def fpga_train_then_infer_compare_500_100(
     )
     if mine_timing_mode:
         print("Train->Infer mode: mine timing override enabled (train inj=350/blank=150, infer steps=350).")
+    preload = fpga_preload_image_range_to_ddr(
+        ser,
+        start_sample_idx=0,
+        num_samples=total_need,
+        start_lba=start_lba,
+        timeout_sec=timeout_sec,
+        verbose=True,
+    )
 
     fpga_train_label_stats_reset(ser)
     pbar_train = tqdm(total=n_train, desc=f"train {n_train}", unit="img", miniters=1, leave=True)
     for sample_idx in range(n_train):
         label = int(labels_all[sample_idx])
-        prepare_fpga_sample_image_via_streamed_load(
+        prepare_fpga_sample_image_from_preloaded_ddr(
             ser,
+            preload=preload,
             sample_idx=sample_idx,
-            start_lba=start_lba,
             timeout_sec=timeout_sec,
             verbose=False,
         )
@@ -853,10 +882,10 @@ def fpga_train_then_infer_compare_500_100(
         sample_idx = n_train + k
         label = int(labels_all[sample_idx])
 
-        prepare_fpga_sample_image_via_streamed_load(
+        prepare_fpga_sample_image_from_preloaded_ddr(
             ser,
+            preload=preload,
             sample_idx=sample_idx,
-            start_lba=start_lba,
             timeout_sec=timeout_sec,
             verbose=False,
         )
@@ -944,6 +973,89 @@ def prepare_fpga_sample_image_via_streamed_load(
         ) from exc
 
 
+def fpga_preload_image_range_to_ddr(
+    ser: serial.Serial,
+    *,
+    start_sample_idx: int,
+    num_samples: int,
+    start_lba: int,
+    timeout_sec: float,
+    verbose: bool = True,
+) -> PreloadedImageRange:
+    if int(start_sample_idx) < 0:
+        raise ValueError(f"start_sample_idx must be >=0, got {start_sample_idx}")
+    if int(num_samples) <= 0:
+        raise ValueError(f"num_samples must be >0, got {num_samples}")
+    end_sample_idx = int(start_sample_idx) + int(num_samples) - 1
+    if end_sample_idx >= RAW1_NUM_IMAGES_DEFAULT:
+        raise ValueError(
+            f"sample range out of RAW1 bounds: start={int(start_sample_idx)}, "
+            f"num_samples={int(num_samples)}, max={RAW1_NUM_IMAGES_DEFAULT}"
+        )
+
+    start_byte_off = RAW1_HEADER_BYTES + RAW1_NUM_IMAGES_DEFAULT + (int(start_sample_idx) * N_IN)
+    start_sector_off = start_byte_off // 512
+    start_byte_in_sector = start_byte_off % 512
+    total_bytes = int(start_byte_in_sector) + (int(num_samples) * N_IN)
+    num_sectors = (total_bytes + 511) // 512
+
+    if verbose:
+        print(
+            "Preloading image range to DDR staging: "
+            f"start_sample={int(start_sample_idx)}, num_samples={int(num_samples)}, "
+            f"sector_off={int(start_sector_off)}, sectors={int(num_sectors)}, "
+            f"byte_in_sector={int(start_byte_in_sector)}"
+        )
+
+    fpga_sd_sectors_to_ddr(
+        ser=ser,
+        start_lba=int(start_lba) + int(start_sector_off),
+        num_sectors=int(num_sectors),
+        timeout_sec=timeout_sec,
+        verbose=verbose,
+    )
+    if IMGLOAD_GUARD_SEC > 0.0:
+        time.sleep(IMGLOAD_GUARD_SEC)
+    return PreloadedImageRange(
+        start_sample_idx=int(start_sample_idx),
+        num_samples=int(num_samples),
+        start_lba=int(start_lba),
+        start_sector_off=int(start_sector_off),
+        start_byte_in_sector=int(start_byte_in_sector),
+        num_sectors=int(num_sectors),
+    )
+
+
+def prepare_fpga_sample_image_from_preloaded_ddr(
+    ser: serial.Serial,
+    *,
+    preload: PreloadedImageRange,
+    sample_idx: int,
+    timeout_sec: float,
+    verbose: bool = True,
+) -> None:
+    rel_idx = int(sample_idx) - int(preload.start_sample_idx)
+    if rel_idx < 0 or rel_idx >= int(preload.num_samples):
+        raise ValueError(
+            f"sample_idx {int(sample_idx)} is outside preloaded range "
+            f"[{int(preload.start_sample_idx)}, {int(preload.start_sample_idx) + int(preload.num_samples) - 1}]"
+        )
+    base_addr_byte = int(preload.start_byte_in_sector) + (rel_idx * N_IN)
+    if verbose:
+        print(
+            "Preparing input image from preloaded DDR range: "
+            f"sample_idx={int(sample_idx)}, rel_idx={int(rel_idx)}, "
+            f"base_addr_byte=0x{int(base_addr_byte):08X}"
+        )
+    fpga_load_image_from_ddr(
+        ser=ser,
+        base_addr_byte=int(base_addr_byte),
+        n_bytes=N_IN,
+        timeout_sec=timeout_sec,
+        verbose=verbose,
+    )
+
+
 def fpga_batch_single_smoke(
     ser: serial.Serial,
     *,
@@ -1002,71 +1114,11 @@ def fpga_batch_train_then_infer(
     ser: serial.Serial,
     args: argparse.Namespace,
 ) -> None:
-    n_train = max(1, int(getattr(args, "train_then_infer_train_samples", 500)))
-    n_infer = max(1, int(getattr(args, "train_then_infer_infer_samples", 100)))
-    start_lba = int(args.start_lba)
-    timeout_sec = float(args.timeout)
-    seed = int(args.seed)
-
-    _, labels_all = load_mnist()
-    total_need = n_train + n_infer
-    if total_need > int(len(labels_all)):
-        raise ValueError(f"need {total_need} samples but dataset has {int(len(labels_all))}")
-
-    print(f"Batch train start: n_train={n_train}")
-    fpga_train_label_stats_reset(ser)
-    fpga_batch_preload_labels(ser, labels_all, start_idx=0, num_samples=n_train)
-    train_status = fpga_run_batch(
-        ser,
-        mode_train=True,
-        start_sample_idx=0,
-        num_samples=n_train,
-        start_lba=start_lba,
-        seed=seed,
-        timeout_sec=timeout_sec,
-    )
-    print(f"Batch train done: {train_status}")
-    train_processed = fpga_batch_read_summary_field(ser, 4)
-    train_cycles = fpga_batch_read_summary_field_u32(ser, 7)
-    train_seconds = cycles_to_seconds(train_cycles)
-    train_breakdown = fpga_batch_read_cycle_breakdown(ser)
     print(
-        f"Batch train summary: processed={train_processed}, "
-        f"elapsed_cycles={train_cycles}, elapsed_sec={train_seconds:.6f}"
+        "Batch train/infer requested. "
+        "Using host-managed bulk SD->DDR preload plus per-sample train/infer path for stability."
     )
-    print_cycle_breakdown("Batch train cycle breakdown:", train_breakdown)
-
-    fpga_sums, fpga_counts = fpga_read_train_label_stats_all(ser)
-    fpga_assign, _ = assign_labels_from_aggregated_stats(fpga_sums, fpga_counts, rates_prev=None, alpha=1.0)
-
-    print(f"Batch infer start: n_infer={n_infer}")
-    fpga_batch_preload_assignments(ser, fpga_assign)
-    fpga_batch_preload_labels(ser, labels_all, start_idx=n_train, num_samples=n_infer)
-    infer_status = fpga_run_batch(
-        ser,
-        mode_train=False,
-        start_sample_idx=n_train,
-        num_samples=n_infer,
-        start_lba=start_lba,
-        seed=seed,
-        timeout_sec=timeout_sec,
-    )
-    print(f"Batch infer done: {infer_status}")
-    infer_processed = fpga_batch_read_summary_field(ser, 4)
-    infer_correct = fpga_batch_read_summary_field(ser, 6)
-    infer_cycles = fpga_batch_read_summary_field_u32(ser, 7)
-    infer_seconds = cycles_to_seconds(infer_cycles)
-    infer_breakdown = fpga_batch_read_cycle_breakdown(ser)
-    infer_acc = float(infer_correct) / float(n_infer)
-    print("Batch train/infer summary:")
-    print(f"  trained samples = {n_train}")
-    print(f"  inferred samples = {n_infer}")
-    print(f"  infer processed = {infer_processed}")
-    print(f"  correct = {infer_correct}")
-    print(f"  accuracy = {infer_acc:.4f}")
-    print(f"  infer elapsed_cycles = {infer_cycles}")
-    print(f"  infer elapsed_sec = {infer_seconds:.6f}")
-    print_cycle_breakdown("Batch infer cycle breakdown:", infer_breakdown)
+    fpga_train_then_infer_compare_500_100(ser, args)
 
 
 def parse_args() -> argparse.Namespace:
