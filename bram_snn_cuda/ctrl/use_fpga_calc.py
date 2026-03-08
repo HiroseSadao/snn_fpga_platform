@@ -777,6 +777,74 @@ def fpga_batch_wait_done(
         time.sleep(poll_interval_sec)
 
 
+def fpga_run_batch_with_progress(
+    ser: serial.Serial,
+    *,
+    mode_train: bool,
+    start_sample_idx: int,
+    num_samples: int,
+    start_lba: int,
+    seed: int,
+    timeout_sec: float,
+    desc: str,
+) -> BatchStatus:
+    fpga_batch_config0(ser, mode_train=mode_train, start_sample_idx=int(start_sample_idx))
+    fpga_batch_config1(ser, num_samples=int(num_samples), seed_value=int(seed))
+    fpga_batch_config2(ser, start_lba=int(start_lba))
+    start_status, start_result = fpga_batch_start(ser)
+    require_ok(start_status, "BATCH_START")
+    _ = start_result
+
+    if tqdm is None:
+        return fpga_batch_wait_done(ser, timeout_sec=max(30.0, float(timeout_sec)))
+
+    pbar = tqdm(total=int(num_samples), desc=desc, unit="img", miniters=1, leave=True)
+    t0 = time.time()
+    last_done = 0
+    last_status: BatchStatus | None = None
+    try:
+        while True:
+            try:
+                st = fpga_batch_read_status(ser)
+            except TimeoutError:
+                if (time.time() - t0) > float(timeout_sec):
+                    raise TimeoutError(
+                        f"BATCH_STATUS timeout after {float(timeout_sec):.1f}s"
+                        + (f", last_status={last_status}" if last_status is not None else "")
+                    )
+                time.sleep(0.2)
+                continue
+            last_status = st
+            if st.done and not st.active:
+                break
+            if st.has_error and not st.active:
+                break
+            if (time.time() - t0) > float(timeout_sec):
+                raise TimeoutError(
+                    f"BATCH_STATUS timeout after {float(timeout_sec):.1f}s"
+                    + (f", last_status={last_status}" if last_status is not None else "")
+                )
+            time.sleep(0.2)
+    finally:
+        if last_status and last_status.done and not last_status.active:
+            try:
+                done_now = fpga_batch_read_summary_field_u32(ser, 4)
+            except TimeoutError:
+                done_now = last_done
+            if done_now > last_done:
+                pbar.update(done_now - last_done)
+                last_done = done_now
+        if last_done < int(num_samples) and last_status and last_status.done and not last_status.active:
+            pbar.update(int(num_samples) - last_done)
+        pbar.close()
+
+    if last_status is None:
+        raise RuntimeError("BATCH run ended without any status readback")
+    if last_status.has_error:
+        raise RuntimeError(f"BATCH engine reported error: {last_status}")
+    return last_status
+
+
 def fpga_run_batch(
     ser: serial.Serial,
     *,
@@ -1110,6 +1178,58 @@ def fpga_batch_single_smoke(
         print(f"Batch correct_count = {fpga_batch_read_summary_field(ser, 6)}")
 
 
+def fpga_batch_train_only(
+    ser: serial.Serial,
+    args: argparse.Namespace,
+) -> None:
+    if str(args.image_source) != "fpga":
+        raise ValueError("--batch-train-only requires --image-source fpga")
+    if tqdm is None:
+        raise RuntimeError("tqdm is required for --batch-train-only (pip install tqdm)")
+
+    caps = fpga_train_query_caps(ser)
+    if (caps & (1 << 14)) == 0:
+        raise RuntimeError(f"batch train-only requires phase4-capable training build, caps=0x{caps:08X}")
+
+    n_train = max(1, int(getattr(args, "train_then_infer_train_samples", 500)))
+    start_lba = int(args.start_lba)
+    timeout_sec = float(args.timeout)
+    seed = int(args.seed)
+
+    _, labels_all = load_mnist()
+    if n_train > int(len(labels_all)):
+        raise ValueError(f"need {n_train} samples but dataset has {int(len(labels_all))}")
+
+    print(f"Batch train start: train={n_train}")
+    fpga_train_label_stats_reset(ser)
+    fpga_batch_preload_labels(
+        ser,
+        labels_all,
+        start_idx=0,
+        num_samples=n_train,
+    )
+    done = fpga_run_batch_with_progress(
+        ser,
+        mode_train=True,
+        start_sample_idx=0,
+        num_samples=n_train,
+        start_lba=start_lba,
+        seed=seed,
+        timeout_sec=max(60.0, timeout_sec),
+        desc=f"batch-train {n_train}",
+    )
+    if done.has_error:
+        raise RuntimeError(f"BATCH train failed: {done}")
+
+    elapsed_cycles = fpga_batch_read_summary_field_u32(ser, 7)
+    print(f"Batch train elapsed time = {cycles_to_seconds(elapsed_cycles):.6f} s ({elapsed_cycles} cycles)")
+    print_cycle_breakdown("Batch train cycle breakdown:", fpga_batch_read_cycle_breakdown(ser))
+    label_counts = fpga_read_train_label_counts_all(ser)
+    nonzero = [(idx, int(cnt)) for idx, cnt in enumerate(label_counts) if int(cnt) > 0]
+    print(f"Nonzero label counts: {nonzero}")
+    print(f"Accumulated label-count sum = {int(np.sum(label_counts))}")
+
+
 def fpga_batch_train_then_infer(
     ser: serial.Serial,
     args: argparse.Namespace,
@@ -1125,8 +1245,6 @@ def fpga_batch_train_then_infer(
 
     n_train = max(1, int(getattr(args, "train_then_infer_train_samples", 500)))
     n_infer = max(1, int(getattr(args, "train_then_infer_infer_samples", 100)))
-    mine_timing_mode = bool(getattr(args, "train_e2e_mine_timing", False))
-    inj_steps = 350 if mine_timing_mode else max(1, int(args.chunk_nsteps))
     start_lba = int(args.start_lba)
     timeout_sec = float(args.timeout)
     seed = int(args.seed)
@@ -1138,32 +1256,28 @@ def fpga_batch_train_then_infer(
 
     print(
         "Batch train/infer start: "
-        f"train={n_train}, infer={n_infer}, inj_steps={inj_steps}"
-    )
-    preload = fpga_preload_image_range_to_ddr(
-        ser,
-        start_sample_idx=0,
-        num_samples=n_train,
-        start_lba=start_lba,
-        timeout_sec=timeout_sec,
-        verbose=True,
+        f"train={n_train}, infer={n_infer}"
     )
 
     fpga_train_label_stats_reset(ser)
-    pbar_train = tqdm(total=n_train, desc=f"train {n_train}", unit="img", miniters=1, leave=True)
-    for sample_idx in range(n_train):
-        label = int(labels_all[sample_idx])
-        prepare_fpga_sample_image_from_preloaded_ddr(
-            ser,
-            preload=preload,
-            sample_idx=sample_idx,
-            timeout_sec=timeout_sec,
-            verbose=False,
-        )
-        fpga_train_run_sample_phase4(ser, inj_steps=inj_steps)
-        fpga_train_label_stats_accum(ser, label)
-        pbar_train.update(1)
-    pbar_train.close()
+    fpga_batch_preload_labels(
+        ser,
+        labels_all,
+        start_idx=0,
+        num_samples=n_train,
+    )
+    done_train = fpga_run_batch_with_progress(
+        ser,
+        mode_train=True,
+        start_sample_idx=0,
+        num_samples=n_train,
+        start_lba=start_lba,
+        seed=seed,
+        timeout_sec=max(60.0, timeout_sec),
+        desc=f"batch-train {n_train}",
+    )
+    if done_train.has_error:
+        raise RuntimeError(f"BATCH train failed: {done_train}")
 
     fpga_sums, fpga_counts = fpga_read_train_label_stats_all(ser)
     fpga_assign, _ = assign_labels_from_aggregated_stats(fpga_sums, fpga_counts, rates_prev=None, alpha=1.0)
@@ -1175,7 +1289,7 @@ def fpga_batch_train_then_infer(
         num_samples=n_infer,
     )
 
-    done = fpga_run_batch(
+    done = fpga_run_batch_with_progress(
         ser,
         mode_train=False,
         start_sample_idx=n_train,
@@ -1183,6 +1297,7 @@ def fpga_batch_train_then_infer(
         start_lba=start_lba,
         seed=seed,
         timeout_sec=max(60.0, timeout_sec),
+        desc=f"batch-infer {n_infer}",
     )
     if done.has_error:
         raise RuntimeError(f"BATCH infer failed: {done}")
@@ -1245,6 +1360,11 @@ def parse_args() -> argparse.Namespace:
         "--batch-train-then-infer",
         action="store_true",
         help="Run batch train, derive assignments, then run batch infer using only coarse-grain batch commands.",
+    )
+    parser.add_argument(
+        "--batch-train-only",
+        action="store_true",
+        help="Run batch train only and report aggregated label-stat counts for a small bring-up test.",
     )
     return parser.parse_args()
 
@@ -1318,6 +1438,10 @@ if __name__ == "__main__":
 
         if args.batch_train_then_infer:
             fpga_batch_train_then_infer(ser, args)
+            sys.exit(0)
+
+        if args.batch_train_only:
+            fpga_batch_train_only(ser, args)
             sys.exit(0)
 
         fpga_train_then_infer_compare_500_100(ser, args)
