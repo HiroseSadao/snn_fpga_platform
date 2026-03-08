@@ -1114,11 +1114,88 @@ def fpga_batch_train_then_infer(
     ser: serial.Serial,
     args: argparse.Namespace,
 ) -> None:
+    if str(args.image_source) != "fpga":
+        raise ValueError("--batch-train-then-infer requires --image-source fpga")
+    if tqdm is None:
+        raise RuntimeError("tqdm is required for --batch-train-then-infer (pip install tqdm)")
+
+    caps = fpga_train_query_caps(ser)
+    if (caps & (1 << 14)) == 0:
+        raise RuntimeError(f"batch train-then-infer requires phase4-capable training build, caps=0x{caps:08X}")
+
+    n_train = max(1, int(getattr(args, "train_then_infer_train_samples", 500)))
+    n_infer = max(1, int(getattr(args, "train_then_infer_infer_samples", 100)))
+    mine_timing_mode = bool(getattr(args, "train_e2e_mine_timing", False))
+    inj_steps = 350 if mine_timing_mode else max(1, int(args.chunk_nsteps))
+    start_lba = int(args.start_lba)
+    timeout_sec = float(args.timeout)
+    seed = int(args.seed)
+
+    _, labels_all = load_mnist()
+    total_need = n_train + n_infer
+    if total_need > int(len(labels_all)):
+        raise ValueError(f"need {total_need} samples but dataset has {int(len(labels_all))}")
+
     print(
-        "Batch train/infer requested. "
-        "Using host-managed bulk SD->DDR preload plus per-sample train/infer path for stability."
+        "Batch train/infer start: "
+        f"train={n_train}, infer={n_infer}, inj_steps={inj_steps}"
     )
-    fpga_train_then_infer_compare_500_100(ser, args)
+    preload = fpga_preload_image_range_to_ddr(
+        ser,
+        start_sample_idx=0,
+        num_samples=n_train,
+        start_lba=start_lba,
+        timeout_sec=timeout_sec,
+        verbose=True,
+    )
+
+    fpga_train_label_stats_reset(ser)
+    pbar_train = tqdm(total=n_train, desc=f"train {n_train}", unit="img", miniters=1, leave=True)
+    for sample_idx in range(n_train):
+        label = int(labels_all[sample_idx])
+        prepare_fpga_sample_image_from_preloaded_ddr(
+            ser,
+            preload=preload,
+            sample_idx=sample_idx,
+            timeout_sec=timeout_sec,
+            verbose=False,
+        )
+        fpga_train_run_sample_phase4(ser, inj_steps=inj_steps)
+        fpga_train_label_stats_accum(ser, label)
+        pbar_train.update(1)
+    pbar_train.close()
+
+    fpga_sums, fpga_counts = fpga_read_train_label_stats_all(ser)
+    fpga_assign, _ = assign_labels_from_aggregated_stats(fpga_sums, fpga_counts, rates_prev=None, alpha=1.0)
+    fpga_batch_preload_assignments(ser, fpga_assign)
+    fpga_batch_preload_labels(
+        ser,
+        labels_all,
+        start_idx=n_train,
+        num_samples=n_infer,
+    )
+
+    done = fpga_run_batch(
+        ser,
+        mode_train=False,
+        start_sample_idx=n_train,
+        num_samples=n_infer,
+        start_lba=start_lba,
+        seed=seed,
+        timeout_sec=max(60.0, timeout_sec),
+    )
+    if done.has_error:
+        raise RuntimeError(f"BATCH infer failed: {done}")
+
+    correct = fpga_batch_read_summary_field(ser, 6)
+    elapsed_cycles = fpga_batch_read_summary_field_u32(ser, 7)
+    print(f"Batch infer elapsed time = {cycles_to_seconds(elapsed_cycles):.6f} s ({elapsed_cycles} cycles)")
+    print_cycle_breakdown("Batch infer cycle breakdown:", fpga_batch_read_cycle_breakdown(ser))
+    print("FPGA train/infer summary:")
+    print(f"  trained samples = {n_train}")
+    print(f"  inferred samples = {n_infer}")
+    print(f"  correct = {correct}")
+    print(f"  accuracy = {float(correct) / float(n_infer):.4f}")
 
 
 def parse_args() -> argparse.Namespace:
