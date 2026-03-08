@@ -35,6 +35,7 @@ PROTO_VER = 0x01
 
 OP_SD_SECTORS_TO_DDR = 0x13
 OP_LOAD_IMAGE_FROM_DDR = 0x14
+OP_LOAD_SPARSE_IMAGE_FROM_DDR = 0x15
 OP_RUN_SAMPLE_INFER = 0x20
 OP_READ_SPIKE_COUNT = 0x21
 OP_TRAIN_QUERY_CAPS = 0x30
@@ -61,8 +62,7 @@ FXP_SHIFT = 16
 N_IN = 784
 N_NEURONS = 50
 N_WEIGHTS = N_NEURONS * N_IN
-RAW1_HEADER_BYTES = 20
-RAW1_NUM_IMAGES_DEFAULT = 10_000
+RAW2_HEADER_BYTES = 24
 IMGLOAD_SRC_BIAS_BYTES = 0
 IMGLOAD_GUARD_SEC = 0.01
 IMG_STAGING_MARGIN_WORDS = 262144  # must match top_level.sv IMG_STAGING_BASE_WORD margin
@@ -110,6 +110,16 @@ class PreloadedImageRange:
     start_sector_off: int
     start_byte_in_sector: int
     num_sectors: int
+
+
+@dataclass(frozen=True)
+class RawDatasetLayout:
+    fmt: str
+    num_images: int
+    n_features: int
+    bytes_per_image: int
+    payload_base_byte: int
+    offsets: np.ndarray | None
 
 
 def build_train_ddr_layout() -> TrainDDRLayout:
@@ -290,6 +300,26 @@ def decode_bad_packet_result(result: int) -> str:
             f"label_stats={label_stats_active}, infer={infer_active}, "
             f"req_nargs={req_nargs_dbg}"
         )
+    if reason == 0x36:
+        raw_valid = (u >> 22) & 0x1
+        bytes_ok = (u >> 21) & 0x1
+        sum_ok = (u >> 20) & 0x1
+        sparse_mode = (u >> 19) & 0x1
+        parse_state = (u >> 16) & 0x7
+        raw0_valid = (u >> 15) & 0x1
+        raw1_valid = (u >> 14) & 0x1
+        target_buf = (u >> 13) & 0x1
+        batch_active = (u >> 12) & 0x1
+        batch_compute_buf = (u >> 11) & 0x1
+        sum_lo8 = u & 0xFF
+        return (
+            "reason=TRAIN_CHUNK_IMAGE_NOT_READY(0x36), "
+            f"raw_valid={raw_valid}, bytes_ok={bytes_ok}, sum_ok={sum_ok}, "
+            f"sparse_mode={sparse_mode}, parse_state={parse_state}, "
+            f"raw0_valid={raw0_valid}, raw1_valid={raw1_valid}, "
+            f"target_buf={target_buf}, batch_active={batch_active}, "
+            f"batch_compute_buf={batch_compute_buf}, sum_lo8=0x{sum_lo8:02X}"
+        )
     if u == 0:
         return "no debug payload (result=0)"
     return f"reason=0x{reason:02X}, opcode=0x{opcode:02X}, arg0_lo16=0x{arg0_lo16:04X}"
@@ -409,26 +439,38 @@ def fpga_load_image_from_ddr(
     timeout_sec: float = 120.0,
     verbose: bool = True,
 ) -> None:
-    if n_bytes <= 0 or n_bytes > N_IN:
-        raise ValueError(f"n_bytes must be in [1, {N_IN}], got {n_bytes}")
+    raise RuntimeError("Dense RAW1 image loading is unsupported in sparse-only mode")
+
+
+def fpga_load_sparse_image_from_ddr(
+    ser: serial.Serial,
+    base_addr_byte: int,
+    record_bytes: int,
+    timeout_sec: float = 120.0,
+    verbose: bool = True,
+) -> None:
+    if record_bytes < 2 or record_bytes > (2 + (N_IN * 3)):
+        raise ValueError(f"record_bytes out of range for sparse_u8: {record_bytes}")
     if verbose:
-        print(f"Requesting DDR->raw_image0 load: base_byte=0x{base_addr_byte:08X}, n_bytes={n_bytes}")
-    try:
-        status, result = send_request(
-            ser=ser,
-            opcode=OP_LOAD_IMAGE_FROM_DDR,
-            args=[base_addr_byte, n_bytes],
-            response_timeout=min(float(timeout_sec), 5.0),
-        )
-    except TimeoutError as exc:
         print(
-            "DDR->raw_image0 load timeout: "
-            f"base_byte=0x{int(base_addr_byte):08X}, n_bytes={int(n_bytes)}"
+            "Requesting DDR->raw_image0 sparse load: "
+            f"base_byte=0x{base_addr_byte:08X}, record_bytes={record_bytes}"
         )
-        raise exc
-    require_ok(status, "LOAD_IMAGE_FROM_DDR")
-    if int(result) != n_bytes:
-        raise RuntimeError(f"LOAD_IMAGE_FROM_DDR returned unexpected byte count: {result} (expected {n_bytes})")
+    wait_fpga_command_ready(ser, timeout_sec=min(2.0, float(timeout_sec)))
+    status, result = send_request(
+        ser=ser,
+        opcode=OP_LOAD_SPARSE_IMAGE_FROM_DDR,
+        args=[base_addr_byte, record_bytes],
+        response_timeout=min(float(timeout_sec), 1.0),
+        transient_retry_max=24,
+        clear_input_buffer=False,
+    )
+    require_ok(status, "LOAD_SPARSE_IMAGE_FROM_DDR")
+    if int(result) != record_bytes:
+        raise RuntimeError(
+            f"LOAD_SPARSE_IMAGE_FROM_DDR returned unexpected byte count: {result} "
+            f"(expected {record_bytes})"
+        )
 
 
 def fpga_run_sample_infer(
@@ -606,6 +648,34 @@ def _load_idx_labels(gz_path: Path) -> np.ndarray:
     return data.astype(np.int64)
 
 
+def inspect_raw_dataset_layout(raw_bin_path: str | Path) -> RawDatasetLayout:
+    path = Path(raw_bin_path)
+    with path.open("rb") as f:
+        magic = f.read(4)
+        f.seek(0)
+        if magic == b"RAW2":
+            header = f.read(RAW2_HEADER_BYTES)
+            _, version, num_images, n_features, entry_bytes, offset_tag = struct.unpack("<4sIIIII", header)
+            if version != 1:
+                raise RuntimeError(f"Unsupported RAW2 version in {path}: {version}")
+            if int(entry_bytes) != 3 or int(offset_tag) != 2:
+                raise RuntimeError(
+                    f"Unsupported RAW2 sparse_u8 parameters in {path}: "
+                    f"entry_bytes={entry_bytes}, offset_tag={offset_tag}"
+                )
+            f.seek(RAW2_HEADER_BYTES + int(num_images))
+            offsets = np.frombuffer(f.read((int(num_images) + 1) * 4), dtype=np.uint32).copy()
+            return RawDatasetLayout(
+                fmt="raw2_sparse_u8",
+                num_images=int(num_images),
+                n_features=int(n_features),
+                bytes_per_image=-1,
+                payload_base_byte=RAW2_HEADER_BYTES + int(num_images) + ((int(num_images) + 1) * 4),
+                offsets=offsets,
+            )
+    raise RuntimeError(f"Only RAW2 sparse_u8 datasets are supported, but found unsupported magic in {path}")
+
+
 def load_mnist(cache_dir: str | Path = "bram_snn_cuda/mnist_data") -> tuple[np.ndarray, np.ndarray]:
     """Load MNIST train split via raw IDX gzip files, matching simp.py semantics."""
     cache_path = Path(cache_dir)
@@ -620,6 +690,27 @@ def fpga_train_query_caps(ser: serial.Serial) -> int:
     status, result = send_request(ser, OP_TRAIN_QUERY_CAPS, [0, 0])
     require_ok(status, "TRAIN_QUERY_CAPS")
     return int(result) & 0xFFFFFFFF
+
+
+def wait_fpga_command_ready(
+    ser: serial.Serial,
+    *,
+    timeout_sec: float = 2.0,
+    poll_interval_sec: float = 0.01,
+) -> int:
+    t0 = time.time()
+    last_exc: Exception | None = None
+    while True:
+        try:
+            return fpga_train_query_caps(ser)
+        except Exception as exc:
+            last_exc = exc
+            if (time.time() - t0) > float(timeout_sec):
+                raise TimeoutError(
+                    f"FPGA command-ready wait timed out after {float(timeout_sec):.2f}s"
+                    + (f": {last_exc}" if last_exc is not None else "")
+                ) from exc
+            time.sleep(poll_interval_sec)
 
 
 def fpga_batch_config0(
@@ -902,11 +993,14 @@ def fpga_train_then_infer_compare_500_100(
     start_lba = int(args.start_lba)
     timeout_sec = float(args.timeout)
     seed = int(args.seed)
+    raw_layout = inspect_raw_dataset_layout(args.raw_bin_path) if getattr(args, "raw_bin_path", None) else None
 
     _, labels_all = load_mnist()
     total_need = n_train + n_infer
     if total_need > int(len(labels_all)):
         raise ValueError(f"need {total_need} samples but dataset has {int(len(labels_all))}")
+    if raw_layout is not None and total_need > int(raw_layout.num_images):
+        raise ValueError(f"need {total_need} samples but raw dataset has {int(raw_layout.num_images)}")
 
     print(
         "FPGA train/infer start: "
@@ -914,23 +1008,21 @@ def fpga_train_then_infer_compare_500_100(
     )
     if mine_timing_mode:
         print("Train->Infer mode: mine timing override enabled (train inj=350/blank=150, infer steps=350).")
-    preload = fpga_preload_image_range_to_ddr(
-        ser,
-        start_sample_idx=0,
-        num_samples=total_need,
-        start_lba=start_lba,
-        timeout_sec=timeout_sec,
-        verbose=True,
-    )
+    if raw_layout is None:
+        raise RuntimeError("Sparse-only mode requires --raw-bin-path pointing to a RAW2 sparse_u8 dataset")
+    if raw_layout.fmt != "raw2_sparse_u8":
+        raise RuntimeError(f"Sparse-only mode requires RAW2 sparse_u8, got {raw_layout.fmt}")
+    print(f"Using RAW2 sparse_u8 dataset layout from {args.raw_bin_path}")
 
     fpga_train_label_stats_reset(ser)
     pbar_train = tqdm(total=n_train, desc=f"train {n_train}", unit="img", miniters=1, leave=True)
     for sample_idx in range(n_train):
         label = int(labels_all[sample_idx])
-        prepare_fpga_sample_image_from_preloaded_ddr(
+        prepare_fpga_sample_image_from_sparse_sd(
             ser,
-            preload=preload,
+            raw_layout=raw_layout,
             sample_idx=sample_idx,
+            start_lba=start_lba,
             timeout_sec=timeout_sec,
             verbose=False,
         )
@@ -950,10 +1042,11 @@ def fpga_train_then_infer_compare_500_100(
         sample_idx = n_train + k
         label = int(labels_all[sample_idx])
 
-        prepare_fpga_sample_image_from_preloaded_ddr(
+        prepare_fpga_sample_image_from_sparse_sd(
             ser,
-            preload=preload,
+            raw_layout=raw_layout,
             sample_idx=sample_idx,
+            start_lba=start_lba,
             timeout_sec=timeout_sec,
             verbose=False,
         )
@@ -982,63 +1075,7 @@ def prepare_fpga_sample_image_via_streamed_load(
     verbose: bool = True,
     raw_bin_path: str | None = None,
 ) -> None:
-    if int(sample_idx) < 0:
-        raise ValueError(f"sample_idx must be >=0, got {sample_idx}")
-
-    raw1_header_bytes = RAW1_HEADER_BYTES
-    raw1_num_images = RAW1_NUM_IMAGES_DEFAULT
-    raw1_bytes_per_image = N_IN
-    raw_layout_src = "reconstructed(import_MNIST_raw.py)"
-
-    if int(sample_idx) >= int(raw1_num_images):
-        raise ValueError(
-            f"sample_idx out of range for RAW1 layout: {sample_idx} (max={int(raw1_num_images)-1})"
-        )
-
-    img_byte_off = int(raw1_header_bytes) + int(raw1_num_images) + (int(sample_idx) * int(raw1_bytes_per_image))
-    img_sector_off = img_byte_off // 512
-    img_byte_in_sector = img_byte_off % 512
-    img_base_addr_byte = int(img_byte_in_sector)
-    sectors_needed = (img_byte_in_sector + IMGLOAD_SRC_BIAS_BYTES + int(raw1_bytes_per_image) + 511) // 512
-
-    if verbose:
-        print(
-            "Preparing input image via streamed FPGA image load path: "
-            f"sample_idx={int(sample_idx)}, sector_off={img_sector_off}, sectors={sectors_needed}, "
-            f"byte_in_sector={img_byte_in_sector}, src_bias_bytes={IMGLOAD_SRC_BIAS_BYTES}, "
-            f"raw1_num_images={int(raw1_num_images)}, raw_layout_src={raw_layout_src}"
-        )
-
-    try:
-        fpga_sd_sectors_to_ddr(
-            ser=ser,
-            start_lba=int(start_lba) + img_sector_off,
-            num_sectors=sectors_needed,
-            timeout_sec=timeout_sec,
-            verbose=verbose,
-        )
-    except TimeoutError as exc:
-        raise TimeoutError(
-            f"SD sectors->DDR timeout: sample_idx={int(sample_idx)}, "
-            f"start_lba={int(start_lba) + img_sector_off}, sectors={sectors_needed}"
-        ) from exc
-
-    if IMGLOAD_GUARD_SEC > 0.0:
-        time.sleep(IMGLOAD_GUARD_SEC)
-
-    try:
-        fpga_load_image_from_ddr(
-            ser=ser,
-            base_addr_byte=img_base_addr_byte,
-            n_bytes=N_IN,
-            timeout_sec=timeout_sec,
-            verbose=verbose,
-        )
-    except TimeoutError as exc:
-        raise TimeoutError(
-            f"DDR->raw_image0 timeout: sample_idx={int(sample_idx)}, "
-            f"base_addr_byte=0x{int(img_base_addr_byte):08X}, n_bytes={N_IN}"
-        ) from exc
+    raise RuntimeError("Dense streamed image loading is unsupported in sparse-only mode")
 
 
 def fpga_preload_image_range_to_ddr(
@@ -1050,48 +1087,7 @@ def fpga_preload_image_range_to_ddr(
     timeout_sec: float,
     verbose: bool = True,
 ) -> PreloadedImageRange:
-    if int(start_sample_idx) < 0:
-        raise ValueError(f"start_sample_idx must be >=0, got {start_sample_idx}")
-    if int(num_samples) <= 0:
-        raise ValueError(f"num_samples must be >0, got {num_samples}")
-    end_sample_idx = int(start_sample_idx) + int(num_samples) - 1
-    if end_sample_idx >= RAW1_NUM_IMAGES_DEFAULT:
-        raise ValueError(
-            f"sample range out of RAW1 bounds: start={int(start_sample_idx)}, "
-            f"num_samples={int(num_samples)}, max={RAW1_NUM_IMAGES_DEFAULT}"
-        )
-
-    start_byte_off = RAW1_HEADER_BYTES + RAW1_NUM_IMAGES_DEFAULT + (int(start_sample_idx) * N_IN)
-    start_sector_off = start_byte_off // 512
-    start_byte_in_sector = start_byte_off % 512
-    total_bytes = int(start_byte_in_sector) + (int(num_samples) * N_IN)
-    num_sectors = (total_bytes + 511) // 512
-
-    if verbose:
-        print(
-            "Preloading image range to DDR staging: "
-            f"start_sample={int(start_sample_idx)}, num_samples={int(num_samples)}, "
-            f"sector_off={int(start_sector_off)}, sectors={int(num_sectors)}, "
-            f"byte_in_sector={int(start_byte_in_sector)}"
-        )
-
-    fpga_sd_sectors_to_ddr(
-        ser=ser,
-        start_lba=int(start_lba) + int(start_sector_off),
-        num_sectors=int(num_sectors),
-        timeout_sec=timeout_sec,
-        verbose=verbose,
-    )
-    if IMGLOAD_GUARD_SEC > 0.0:
-        time.sleep(IMGLOAD_GUARD_SEC)
-    return PreloadedImageRange(
-        start_sample_idx=int(start_sample_idx),
-        num_samples=int(num_samples),
-        start_lba=int(start_lba),
-        start_sector_off=int(start_sector_off),
-        start_byte_in_sector=int(start_byte_in_sector),
-        num_sectors=int(num_sectors),
-    )
+    raise RuntimeError("Dense preload is unsupported in sparse-only mode")
 
 
 def prepare_fpga_sample_image_from_preloaded_ddr(
@@ -1102,23 +1098,55 @@ def prepare_fpga_sample_image_from_preloaded_ddr(
     timeout_sec: float,
     verbose: bool = True,
 ) -> None:
-    rel_idx = int(sample_idx) - int(preload.start_sample_idx)
-    if rel_idx < 0 or rel_idx >= int(preload.num_samples):
-        raise ValueError(
-            f"sample_idx {int(sample_idx)} is outside preloaded range "
-            f"[{int(preload.start_sample_idx)}, {int(preload.start_sample_idx) + int(preload.num_samples) - 1}]"
-        )
-    base_addr_byte = int(preload.start_byte_in_sector) + (rel_idx * N_IN)
+    raise RuntimeError("Dense preloaded image access is unsupported in sparse-only mode")
+
+
+def prepare_fpga_sample_image_from_sparse_sd(
+    ser: serial.Serial,
+    *,
+    raw_layout: RawDatasetLayout,
+    sample_idx: int,
+    start_lba: int,
+    timeout_sec: float,
+    verbose: bool = True,
+) -> None:
+    if raw_layout.fmt != "raw2_sparse_u8" or raw_layout.offsets is None:
+        raise ValueError("prepare_fpga_sample_image_from_sparse_sd requires a RAW2 sparse_u8 layout")
+    if sample_idx < 0 or sample_idx >= raw_layout.num_images:
+        raise ValueError(f"sample_idx out of range: {sample_idx}")
+
+    offsets = raw_layout.offsets
+    rec_start = int(raw_layout.payload_base_byte) + int(offsets[sample_idx])
+    rec_end = int(raw_layout.payload_base_byte) + int(offsets[sample_idx + 1])
+    record_bytes = rec_end - rec_start
+    if record_bytes < 2:
+        raise RuntimeError(f"Invalid sparse record length for sample {sample_idx}: {record_bytes}")
+
+    sector_off = rec_start // 512
+    byte_in_sector = rec_start % 512
+    sectors_needed = (byte_in_sector + record_bytes + 511) // 512
     if verbose:
         print(
-            "Preparing input image from preloaded DDR range: "
-            f"sample_idx={int(sample_idx)}, rel_idx={int(rel_idx)}, "
-            f"base_addr_byte=0x{int(base_addr_byte):08X}"
+            "Preparing sparse input image from SD: "
+            f"sample_idx={int(sample_idx)}, sector_off={int(sector_off)}, "
+            f"byte_in_sector={int(byte_in_sector)}, record_bytes={int(record_bytes)}, "
+            f"sectors={int(sectors_needed)}"
         )
-    fpga_load_image_from_ddr(
+
+    fpga_sd_sectors_to_ddr(
         ser=ser,
-        base_addr_byte=int(base_addr_byte),
-        n_bytes=N_IN,
+        start_lba=int(start_lba) + int(sector_off),
+        num_sectors=int(sectors_needed),
+        timeout_sec=timeout_sec,
+        verbose=verbose,
+    )
+    if IMGLOAD_GUARD_SEC > 0.0:
+        time.sleep(IMGLOAD_GUARD_SEC)
+    wait_fpga_command_ready(ser, timeout_sec=min(3.0, float(timeout_sec)))
+    fpga_load_sparse_image_from_ddr(
+        ser=ser,
+        base_addr_byte=int(byte_in_sector),
+        record_bytes=int(record_bytes),
         timeout_sec=timeout_sec,
         verbose=verbose,
     )
@@ -1134,183 +1162,21 @@ def fpga_batch_single_smoke(
     seed: int,
     mode_train: bool,
 ) -> None:
-    _, labels_all = load_mnist()
-    if mode_train:
-        fpga_train_label_stats_reset(ser)
-        fpga_batch_preload_labels(
-            ser,
-            labels_all,
-            start_idx=int(sample_idx),
-            num_samples=int(num_samples),
-        )
-    else:
-        fpga_batch_preload_labels(
-            ser,
-            labels_all,
-            start_idx=int(sample_idx),
-            num_samples=int(num_samples),
-        )
-        fpga_batch_preload_assignments(ser, np.zeros((N_NEURONS,), dtype=np.int64))
-    fpga_batch_config0(ser, mode_train=mode_train, start_sample_idx=sample_idx)
-    fpga_batch_config1(ser, num_samples=num_samples, seed_value=seed)
-    fpga_batch_config2(ser, start_lba=start_lba)
-    before = fpga_batch_read_status(ser)
-    print(f"Batch status before start: {before}")
-    start_status, start_result = fpga_batch_start(ser)
-    require_ok(start_status, "BATCH_START")
-    print(f"Batch start accepted: result=0x{int(start_result) & 0xFFFFFFFF:08X}")
-    after = fpga_batch_wait_done(ser, timeout_sec=max(30.0, timeout_sec))
-    print(f"Batch status after done: {after}")
-    for idx in range(14):
-        if idx >= 7:
-            value = fpga_batch_read_summary_field_u32(ser, idx)
-        else:
-            value = fpga_batch_read_summary_field(ser, idx)
-        print(f"Batch summary[{idx}] = {value}")
-    elapsed_cycles = fpga_batch_read_summary_field_u32(ser, 7)
-    print(f"Batch elapsed time = {cycles_to_seconds(elapsed_cycles):.6f} s ({elapsed_cycles} cycles)")
-    print_cycle_breakdown("Batch cycle breakdown:", fpga_batch_read_cycle_breakdown(ser))
-    if mode_train:
-        label_counts = fpga_read_train_label_counts_all(ser)
-        nonzero = [(idx, int(cnt)) for idx, cnt in enumerate(label_counts) if int(cnt) > 0]
-        print(f"Nonzero label counts: {nonzero}")
-    else:
-        print(f"Batch correct_count = {fpga_batch_read_summary_field(ser, 6)}")
+    raise RuntimeError("Batch smoke modes are disabled in sparse-only mode")
 
 
 def fpga_batch_train_only(
     ser: serial.Serial,
     args: argparse.Namespace,
 ) -> None:
-    if str(args.image_source) != "fpga":
-        raise ValueError("--batch-train-only requires --image-source fpga")
-    if tqdm is None:
-        raise RuntimeError("tqdm is required for --batch-train-only (pip install tqdm)")
-
-    caps = fpga_train_query_caps(ser)
-    if (caps & (1 << 14)) == 0:
-        raise RuntimeError(f"batch train-only requires phase4-capable training build, caps=0x{caps:08X}")
-
-    n_train = max(1, int(getattr(args, "train_then_infer_train_samples", 500)))
-    start_lba = int(args.start_lba)
-    timeout_sec = float(args.timeout)
-    seed = int(args.seed)
-
-    _, labels_all = load_mnist()
-    if n_train > int(len(labels_all)):
-        raise ValueError(f"need {n_train} samples but dataset has {int(len(labels_all))}")
-
-    print(f"Batch train start: train={n_train}")
-    fpga_train_label_stats_reset(ser)
-    fpga_batch_preload_labels(
-        ser,
-        labels_all,
-        start_idx=0,
-        num_samples=n_train,
-    )
-    done = fpga_run_batch_with_progress(
-        ser,
-        mode_train=True,
-        start_sample_idx=0,
-        num_samples=n_train,
-        start_lba=start_lba,
-        seed=seed,
-        timeout_sec=max(60.0, timeout_sec),
-        desc=f"batch-train {n_train}",
-    )
-    if done.has_error:
-        raise RuntimeError(f"BATCH train failed: {done}")
-
-    elapsed_cycles = fpga_batch_read_summary_field_u32(ser, 7)
-    print(f"Batch train elapsed time = {cycles_to_seconds(elapsed_cycles):.6f} s ({elapsed_cycles} cycles)")
-    print_cycle_breakdown("Batch train cycle breakdown:", fpga_batch_read_cycle_breakdown(ser))
-    label_counts = fpga_read_train_label_counts_all(ser)
-    nonzero = [(idx, int(cnt)) for idx, cnt in enumerate(label_counts) if int(cnt) > 0]
-    print(f"Nonzero label counts: {nonzero}")
-    print(f"Accumulated label-count sum = {int(np.sum(label_counts))}")
+    raise RuntimeError("Batch modes are disabled in sparse-only mode")
 
 
 def fpga_batch_train_then_infer(
     ser: serial.Serial,
     args: argparse.Namespace,
 ) -> None:
-    if str(args.image_source) != "fpga":
-        raise ValueError("--batch-train-then-infer requires --image-source fpga")
-    if tqdm is None:
-        raise RuntimeError("tqdm is required for --batch-train-then-infer (pip install tqdm)")
-
-    caps = fpga_train_query_caps(ser)
-    if (caps & (1 << 14)) == 0:
-        raise RuntimeError(f"batch train-then-infer requires phase4-capable training build, caps=0x{caps:08X}")
-
-    n_train = max(1, int(getattr(args, "train_then_infer_train_samples", 500)))
-    n_infer = max(1, int(getattr(args, "train_then_infer_infer_samples", 100)))
-    start_lba = int(args.start_lba)
-    timeout_sec = float(args.timeout)
-    seed = int(args.seed)
-
-    _, labels_all = load_mnist()
-    total_need = n_train + n_infer
-    if total_need > int(len(labels_all)):
-        raise ValueError(f"need {total_need} samples but dataset has {int(len(labels_all))}")
-
-    print(
-        "Batch train/infer start: "
-        f"train={n_train}, infer={n_infer}"
-    )
-
-    fpga_train_label_stats_reset(ser)
-    fpga_batch_preload_labels(
-        ser,
-        labels_all,
-        start_idx=0,
-        num_samples=n_train,
-    )
-    done_train = fpga_run_batch_with_progress(
-        ser,
-        mode_train=True,
-        start_sample_idx=0,
-        num_samples=n_train,
-        start_lba=start_lba,
-        seed=seed,
-        timeout_sec=max(60.0, timeout_sec),
-        desc=f"batch-train {n_train}",
-    )
-    if done_train.has_error:
-        raise RuntimeError(f"BATCH train failed: {done_train}")
-
-    fpga_sums, fpga_counts = fpga_read_train_label_stats_all(ser)
-    fpga_assign, _ = assign_labels_from_aggregated_stats(fpga_sums, fpga_counts, rates_prev=None, alpha=1.0)
-    fpga_batch_preload_assignments(ser, fpga_assign)
-    fpga_batch_preload_labels(
-        ser,
-        labels_all,
-        start_idx=n_train,
-        num_samples=n_infer,
-    )
-
-    done = fpga_run_batch_with_progress(
-        ser,
-        mode_train=False,
-        start_sample_idx=n_train,
-        num_samples=n_infer,
-        start_lba=start_lba,
-        seed=seed,
-        timeout_sec=max(60.0, timeout_sec),
-        desc=f"batch-infer {n_infer}",
-    )
-    if done.has_error:
-        raise RuntimeError(f"BATCH infer failed: {done}")
-
-    correct = fpga_batch_read_summary_field(ser, 6)
-    elapsed_cycles = fpga_batch_read_summary_field_u32(ser, 7)
-    print(f"Batch infer elapsed time = {cycles_to_seconds(elapsed_cycles):.6f} s ({elapsed_cycles} cycles)")
-    print_cycle_breakdown("Batch infer cycle breakdown:", fpga_batch_read_cycle_breakdown(ser))
-    print("FPGA train/infer summary:")
-    print(f"  trained samples = {n_train}")
-    print(f"  inferred samples = {n_infer}")
-    print(f"  correct = {correct}")
-    print(f"  accuracy = {float(correct) / float(n_infer):.4f}")
+    raise RuntimeError("Batch modes are disabled in sparse-only mode")
 
 
 def parse_args() -> argparse.Namespace:
@@ -1320,6 +1186,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image-source", type=str, choices=["fpga"], default="fpga")
     parser.add_argument("--port", type=str, default=SERIAL_PORTNAME)
     parser.add_argument("--start-lba", type=int, default=2048)
+    parser.add_argument(
+        "--raw-bin-path",
+        type=str,
+        default="sparse_samples.bin",
+        help="Path to the RAW2 sparse_u8 dataset written to the SD card.",
+    )
     parser.add_argument("--seed", type=lambda x: int(x, 0), default=0x12345678)
     parser.add_argument("--timeout", type=float, default=600.0)
     parser.add_argument("--train-then-infer-train-samples", type=int, default=500)
@@ -1397,20 +1269,7 @@ if __name__ == "__main__":
             raise RuntimeError(f"TRAIN_QUERY_CAPS failed: {exc}") from exc
 
         if args.batch_control_smoke:
-            fpga_batch_config0(ser, mode_train=True, start_sample_idx=0)
-            fpga_batch_config1(ser, num_samples=1, seed_value=int(args.seed))
-            batch_status = fpga_batch_read_status(ser)
-            print(f"Batch status before start: {batch_status}")
-            start_status, start_result = fpga_batch_start(ser)
-            print(
-                "Batch start response: "
-                f"status=0x{int(start_status):02X}, result=0x{int(start_result) & 0xFFFFFFFF:08X}"
-            )
-            batch_status = fpga_batch_read_status(ser)
-            print(f"Batch status after start: {batch_status}")
-            for idx in range(4):
-                print(f"Batch summary[{idx}] = {fpga_batch_read_summary_field(ser, idx)}")
-            sys.exit(0)
+            raise RuntimeError("Batch control smoke is disabled in sparse-only mode")
 
         if args.batch_single_infer_smoke:
             fpga_batch_single_smoke(

@@ -91,6 +91,10 @@ def _prepare_sparse_u8(images: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
             entries = bytes(interleaved)
             payload_chunks.append(entries)
             payload_size += len(entries)
+        pad_len = (-payload_size) % 4
+        if pad_len:
+            payload_chunks.append(b"\x00" * pad_len)
+            payload_size += pad_len
         offsets.append(payload_size)
 
     payload = b"".join(payload_chunks)
