@@ -85,8 +85,10 @@ module top_level(
     localparam logic signed [31:0] FXP_INH_THRESH = -32'sd2621440; // -40.0 in S16.16
     localparam logic signed [31:0] FXP_SCALE_1000 = 32'sd65536000;   // 1000.0 in S16.16 (1/1ms)
     localparam logic signed [31:0] FXP_SCALE_500  = 32'sd32768000;   // 500.0 in S16.16 (1/2ms)
-    localparam logic signed [31:0] FXP_TRACE_DECAY = 32'sd62259;     // 0.95 in S16.16 (td=20ms)
-    localparam logic signed [31:0] FXP_TRACE_SPIKE = 32'sd3276800;   // 50.0 in S16.16 (1/td)
+    localparam logic signed [31:0] FXP_TRACE_PRE_DECAY = 32'sd62339;   // exp(-1/20) in S16.16
+    localparam logic signed [31:0] FXP_TRACE_POST1_DECAY = 32'sd62339; // exp(-1/20) in S16.16
+    localparam logic signed [31:0] FXP_TRACE_POST2_DECAY = 32'sd63917; // exp(-1/40) in S16.16
+    localparam logic signed [31:0] FXP_TRACE_EVENT_SET = 32'sd65536;   // 1.0 in S16.16
     localparam logic signed [31:0] FXP_GEXC_SPIKE = 32'sd147456000;  // 2.25 * 1000 in S16.16
     // Step-domain approximations for mine.py neuron dynamics (dt=1ms)
     localparam logic [15:0] EXC_TREF_STEPS = 16'd5;
@@ -420,6 +422,9 @@ module top_level(
     logic signed [31:0] resp_result;
     logic [7:0] resp_checksum;
     logic [2:0] tx_byte_idx;
+    logic [31:0] batch_status_word;
+    logic [31:0] batch_summary_word;
+    logic        train_busy_uart_blocked;
     logic [20:0] rx_timeout_counter;
     logic [1:0]  clk_div;
     wire         clk_25mhz = clk_div[1];
@@ -692,6 +697,12 @@ module top_level(
     logic [6:0]  train_xexc_rd_addr;
     logic [31:0] train_xexc_rd_data;
     (* ram_style = "block" *) logic [31:0] train_xexc_mem [0:N_NEURONS-1];
+    logic        train_xpost2_wr_en;
+    logic [6:0]  train_xpost2_wr_addr;
+    logic [31:0] train_xpost2_wr_data;
+    logic [6:0]  train_xpost2_rd_addr;
+    logic [31:0] train_xpost2_rd_data;
+    (* ram_style = "block" *) logic [31:0] train_xpost2_mem [0:N_NEURONS-1];
     (* ram_style = "block" *) logic [31:0] train_label_count [0:9];
     logic [9:0]  train_label_sum_rd_addr;
     logic [31:0] train_label_sum_rd_data;
@@ -823,9 +834,15 @@ module top_level(
     logic signed [31:0] infer_apply_xin_decay;
     logic signed [31:0] infer_apply_xin_next;
     logic signed [31:0] infer_apply_xexc_trace_q;
+    logic signed [31:0] infer_apply_xpost2_trace_q;
     (* use_dsp = "yes" *) logic signed [63:0] infer_apply_xexc_prod;
+    (* use_dsp = "yes" *) logic signed [63:0] infer_apply_xpost2_prod;
     logic signed [31:0] infer_apply_xexc_decay;
     logic signed [31:0] infer_apply_xexc_next;
+    logic signed [31:0] infer_apply_xpost2_decay;
+    logic signed [31:0] infer_apply_xpost2_next;
+    logic signed [31:0] infer_post1_before [0:N_NEURONS-1];
+    logic signed [31:0] infer_post2_before [0:N_NEURONS-1];
     logic signed [31:0] infer_sum_c_inh;
     logic signed [31:0] infer_pass2_diff_c_inh;
     logic signed [31:0] infer_pass2_g_inh_next;
@@ -859,8 +876,8 @@ module top_level(
     logic        infer_evt_has_winner;
     logic [6:0]  infer_evt_winner_idx;
     logic signed [31:0] infer_evt_trace_val;
+    logic signed [31:0] infer_evt_post2_before_q;
     logic signed [31:0] infer_evt_w_cur;
-    logic signed [31:0] infer_evt_w_gap_q16;
     logic signed [31:0] infer_evt_mid_q16;
     (* use_dsp = "yes" *) logic signed [63:0] infer_evt_term_prod_q32;
     logic signed [31:0] infer_evt_term_q16;
@@ -1074,6 +1091,11 @@ module top_level(
             train_xexc_mem[train_xexc_wr_addr] <= train_xexc_wr_data;
         end
         train_xexc_rd_data <= train_xexc_mem[train_xexc_rd_addr];
+
+        if (train_xpost2_wr_en) begin
+            train_xpost2_mem[train_xpost2_wr_addr] <= train_xpost2_wr_data;
+        end
+        train_xpost2_rd_data <= train_xpost2_mem[train_xpost2_rd_addr];
 
         train_label_count_rd_data <= train_label_count[train_label_count_rd_addr];
     end
@@ -1665,6 +1687,28 @@ module top_level(
         end
     endfunction
 
+    function automatic [31:0] batch_summary_select(input logic [3:0] field_idx);
+        begin
+            case (field_idx)
+                4'd0: batch_summary_select = batch_cfg_start_sample_idx;
+                4'd1: batch_summary_select = batch_cfg_num_samples;
+                4'd2: batch_summary_select = batch_cfg_seed;
+                4'd3: batch_summary_select = batch_current_sample_idx;
+                4'd4: batch_summary_select = batch_processed_samples;
+                4'd5: batch_summary_select = batch_total_spikes;
+                4'd6: batch_summary_select = batch_correct_count;
+                4'd7: batch_summary_select = batch_elapsed_cycles;
+                4'd8: batch_summary_select = batch_load_cycles;
+                4'd9: batch_summary_select = batch_train_core_cycles;
+                4'd10: batch_summary_select = batch_infer_core_cycles;
+                4'd11: batch_summary_select = batch_label_stats_cycles;
+                4'd12: batch_summary_select = batch_infer_eval_cycles;
+                4'd13: batch_summary_select = batch_other_cycles;
+                default: batch_summary_select = 32'd0;
+            endcase
+        end
+    endfunction
+
     // S16.16 multiply with symmetric rounding (reduces systematic truncation bias vs [47:16] slicing)
     function automatic signed [31:0] fxp_mul_s16_16(
         input signed [31:0] a,
@@ -1839,6 +1883,9 @@ module top_level(
             resp_result       <= 32'sd0;
             resp_checksum     <= 8'h00;
             tx_byte_idx       <= 3'd0;
+            batch_status_word <= 32'd0;
+            batch_summary_word <= 32'd0;
+            train_busy_uart_blocked <= 1'b0;
             tx_dv             <= 1'b0;
             tx_byte           <= 8'h00;
             ddr_req_pending_core <= 1'b0;
@@ -2084,6 +2131,10 @@ module top_level(
             train_xexc_wr_addr <= 7'd0;
             train_xexc_wr_data <= 32'd0;
             train_xexc_rd_addr <= 7'd0;
+            train_xpost2_wr_en <= 1'b0;
+            train_xpost2_wr_addr <= 7'd0;
+            train_xpost2_wr_data <= 32'd0;
+            train_xpost2_rd_addr <= 7'd0;
             infer_active        <= 1'b0;
             infer_state         <= INFER_IDLE;
             infer_steps_target  <= 32'd0;
@@ -2105,6 +2156,10 @@ module top_level(
             infer_trace_phase <= 3'd0;
             infer_trace_spike_latched <= 1'b0;
             infer_apply_xexc_trace_q <= 32'sd0;
+            infer_apply_xpost2_trace_q <= 32'sd0;
+            infer_apply_xpost2_prod <= 64'sd0;
+            infer_apply_xpost2_decay <= 32'sd0;
+            infer_apply_xpost2_next <= 32'sd0;
             infer_sum_c_inh     <= 32'sd0;
             infer_pass2_g_inh_next <= 32'sd0;
             infer_step_winner_valid <= 1'b0;
@@ -2117,8 +2172,8 @@ module top_level(
             infer_evt_has_winner <= 1'b0;
             infer_evt_winner_idx <= 7'd0;
             infer_evt_trace_val <= 32'sd0;
+            infer_evt_post2_before_q <= 32'sd0;
             infer_evt_w_cur <= 32'sd0;
-            infer_evt_w_gap_q16 <= 32'sd0;
             infer_evt_mid_q16 <= 32'sd0;
             infer_evt_term_prod_q32 <= 64'sd0;
             infer_evt_term_q16 <= 32'sd0;
@@ -2189,6 +2244,14 @@ module top_level(
             snap_count_we <= 1'b0;
             train_xin_wr_en <= 1'b0;
             train_xexc_wr_en <= 1'b0;
+            train_xpost2_wr_en <= 1'b0;
+            batch_status_word <= {batch_phase, batch_error_code, batch_error, batch_done, batch_active, batch_cfg1_valid, batch_cfg0_valid, 6'd0};
+            batch_summary_word <= batch_summary_select(arg0[3:0]);
+            train_busy_uart_blocked <= TRAIN_ENABLE &&
+                                       (train_trace_active || train_stdp_active || train_gen_active ||
+                                        train_label_stats_active || train_stdp_batch_active || train_chunk_active) &&
+                                       (req_opcode != OP_BATCH_STATUS) &&
+                                       (req_opcode != OP_BATCH_READ_SUMMARY);
             ddr_rsp_toggle_core_sync1 <= ddr_rsp_toggle_ddr;
             ddr_rsp_toggle_core_sync2 <= ddr_rsp_toggle_core_sync1;
             if (!ddr_req_pending_core_prev && ddr_req_pending_core) begin
@@ -4128,12 +4191,9 @@ module top_level(
                             resp_result    <= 32'sd0;
                             resp_checksum  <= 8'h00;
                             response_ready <= 1'b1;
-                        end else if (TRAIN_ENABLE &&
-                                     (train_trace_active || train_stdp_active || train_gen_active || train_label_stats_active || train_stdp_batch_active || train_chunk_active) &&
-                                     (req_opcode != OP_BATCH_STATUS) &&
-                                     (req_opcode != OP_BATCH_READ_SUMMARY)) begin
+                        end else if (train_busy_uart_blocked) begin
                             resp_status    <= STATUS_BAD_PACKET;
-                            resp_result    <= {8'h31, req_opcode, 16'h0000}; // TRAIN_BUSY debug tag
+                            resp_result    <= 32'h31000000;
                             resp_checksum  <= 8'h00;
                             response_ready <= 1'b1;
                         end else if (!TRAIN_ENABLE &&
@@ -4486,7 +4546,7 @@ module top_level(
                                 OP_BATCH_STATUS: begin
                                     if (req_nargs == 8'd2) begin
                                         resp_status    <= STATUS_OK;
-                                        resp_result    <= {batch_phase, batch_error_code, batch_error, batch_done, batch_active, batch_cfg1_valid, batch_cfg0_valid, 6'd0};
+                                        resp_result    <= batch_status_word;
                                         resp_checksum  <= 8'h00;
                                         response_ready <= 1'b1;
                                     end else begin
@@ -4499,23 +4559,7 @@ module top_level(
                                 OP_BATCH_READ_SUMMARY: begin
                                     if (req_nargs == 8'd2) begin
                                         resp_status <= STATUS_OK;
-                                        case (arg0[3:0])
-                                            4'd0: resp_result <= batch_cfg_start_sample_idx;
-                                            4'd1: resp_result <= batch_cfg_num_samples;
-                                            4'd2: resp_result <= batch_cfg_seed;
-                                            4'd3: resp_result <= batch_current_sample_idx;
-                                            4'd4: resp_result <= batch_processed_samples;
-                                            4'd5: resp_result <= batch_total_spikes;
-                                            4'd6: resp_result <= batch_correct_count;
-                                            4'd7: resp_result <= batch_elapsed_cycles;
-                                            4'd8: resp_result <= batch_load_cycles;
-                                            4'd9: resp_result <= batch_train_core_cycles;
-                                            4'd10: resp_result <= batch_infer_core_cycles;
-                                            4'd11: resp_result <= batch_label_stats_cycles;
-                                            4'd12: resp_result <= batch_infer_eval_cycles;
-                                            4'd13: resp_result <= batch_other_cycles;
-                                            default: resp_result <= 32'd0;
-                                        endcase
+                                        resp_result <= batch_summary_word;
                                         resp_checksum  <= 8'h00;
                                         response_ready <= 1'b1;
                                     end else begin
@@ -4916,7 +4960,7 @@ module top_level(
                             end
                             infer_trace_phase <= 3'd2;
                         end else if (infer_trace_phase == 3'd2) begin
-                            infer_apply_xin_prod <= $signed(train_xin_rd_data) * $signed(FXP_TRACE_DECAY);
+                            infer_apply_xin_prod <= $signed(train_xin_rd_data) * $signed(FXP_TRACE_PRE_DECAY);
                             infer_trace_phase <= 3'd3;
                         end else if (infer_trace_phase == 3'd3) begin
                             if (infer_apply_xin_prod >= 0) begin
@@ -4927,7 +4971,7 @@ module top_level(
                             infer_trace_phase <= 3'd4;
                         end else if (infer_trace_phase == 3'd4) begin
                             infer_apply_xin_next <= infer_trace_spike_latched
-                                                  ? (infer_apply_xin_decay + FXP_TRACE_SPIKE)
+                                                  ? FXP_TRACE_EVENT_SET
                                                   : infer_apply_xin_decay;
                             infer_trace_phase <= 3'd5;
                         end else begin
@@ -5182,15 +5226,20 @@ module top_level(
                             logic signed [31:0] c_exc_next;
                             if (infer_trace_phase == 2'd0) begin
                                 train_xexc_rd_addr <= infer_apply_idx;
+                                train_xpost2_rd_addr <= infer_apply_idx;
                                 infer_trace_spike_latched <= infer_s_exc[infer_apply_idx];
                                 infer_trace_phase <= 2'd1;
                             end else if (infer_trace_phase == 2'd1) begin
                                 infer_trace_phase <= 2'd2;
                             end else if (infer_trace_phase == 2'd2) begin
                                 infer_apply_xexc_trace_q <= $signed(train_xexc_rd_data);
+                                infer_apply_xpost2_trace_q <= $signed(train_xpost2_rd_data);
+                                infer_post1_before[infer_apply_idx] <= $signed(train_xexc_rd_data);
+                                infer_post2_before[infer_apply_idx] <= $signed(train_xpost2_rd_data);
                                 infer_trace_phase <= 3'd3;
                             end else if (infer_trace_phase == 3'd3) begin
-                                infer_apply_xexc_prod <= $signed(infer_apply_xexc_trace_q) * $signed(FXP_TRACE_DECAY);
+                                infer_apply_xexc_prod <= $signed(infer_apply_xexc_trace_q) * $signed(FXP_TRACE_POST1_DECAY);
+                                infer_apply_xpost2_prod <= $signed(infer_apply_xpost2_trace_q) * $signed(FXP_TRACE_POST2_DECAY);
                                 infer_trace_phase <= 3'd4;
                             end else if (infer_trace_phase == 3'd4) begin
                                 if (infer_apply_xexc_prod >= 0) begin
@@ -5198,16 +5247,27 @@ module top_level(
                                 end else begin
                                     infer_apply_xexc_decay <= $signed((infer_apply_xexc_prod - 64'sd32768) >>> 16);
                                 end
+                                if (infer_apply_xpost2_prod >= 0) begin
+                                    infer_apply_xpost2_decay <= $signed((infer_apply_xpost2_prod + 64'sd32768) >>> 16);
+                                end else begin
+                                    infer_apply_xpost2_decay <= $signed((infer_apply_xpost2_prod - 64'sd32768) >>> 16);
+                                end
                                 infer_trace_phase <= 3'd5;
                             end else if (infer_trace_phase == 3'd5) begin
                                 infer_apply_xexc_next <= infer_trace_spike_latched
-                                                       ? (infer_apply_xexc_decay + FXP_TRACE_SPIKE)
+                                                       ? FXP_TRACE_EVENT_SET
                                                        : infer_apply_xexc_decay;
+                                infer_apply_xpost2_next <= infer_trace_spike_latched
+                                                         ? FXP_TRACE_EVENT_SET
+                                                         : infer_apply_xpost2_decay;
                                 infer_trace_phase <= 3'd6;
                             end else begin
                                 train_xexc_wr_en <= 1'b1;
                                 train_xexc_wr_addr <= infer_apply_idx;
                                 train_xexc_wr_data <= infer_apply_xexc_next;
+                                train_xpost2_wr_en <= 1'b1;
+                                train_xpost2_wr_addr <= infer_apply_idx;
+                                train_xpost2_wr_data <= infer_apply_xpost2_next;
 
                                 // Match mine.py exc_synapse(td=1ms, dt=1ms): c_exc = 1000*s_exc (no decay carry).
                                 c_exc_next = infer_trace_spike_latched ? FXP_SCALE_1000 : 32'sd0;
@@ -5465,16 +5525,15 @@ module top_level(
                     INFER_EVT_PRE_EDGE_WAIT: begin
                         infer_evt_post_idx <= csc_row_idx_rd_data;
                         infer_evt_edge_ptr <= csc_edge_idx_rd_data;
-                        infer_state <= INFER_EVT_PRE_TRACE_REQ;
+                        infer_state <= INFER_EVT_PRE_TRACE_WAIT;
                     end
 
                     INFER_EVT_PRE_TRACE_REQ: begin
-                        train_xexc_rd_addr <= infer_evt_post_idx;
                         infer_state <= INFER_EVT_PRE_TRACE_WAIT;
                     end
 
                     INFER_EVT_PRE_TRACE_WAIT: begin
-                        infer_evt_trace_val <= $signed(train_xexc_rd_data);
+                        infer_evt_trace_val <= infer_post1_before[infer_evt_post_idx];
                         infer_w_rd_addr <= infer_evt_edge_ptr;
                         infer_state <= INFER_EVT_PRE_W_WAIT;
                     end
@@ -5485,7 +5544,7 @@ module top_level(
                     end
 
                     INFER_EVT_PRE_APPLY: begin
-                        infer_evt_mid_q16 <= fxp_mul_s16_16(TRAIN_LR_M_Q16, infer_evt_w_cur);
+                        infer_evt_mid_q16 <= TRAIN_LR_M_Q16;
                         infer_state <= INFER_EVT_PRE_APPLY_MUL1;
                     end
 
@@ -5505,10 +5564,6 @@ module top_level(
                     INFER_EVT_PRE_APPLY_CLIP: begin
                         logic signed [31:0] dW_q16;
                         dW_q16 = -infer_evt_term_q16;
-                        if (dW_q16 > TRAIN_CLIP_DW_Q16)
-                            dW_q16 = TRAIN_CLIP_DW_Q16;
-                        else if (dW_q16 < -TRAIN_CLIP_DW_Q16)
-                            dW_q16 = -TRAIN_CLIP_DW_Q16;
                         infer_evt_dw_q16 <= dW_q16;
                         infer_state <= INFER_EVT_PRE_APPLY_WNEXT;
                     end
@@ -5585,23 +5640,23 @@ module top_level(
 
                     INFER_EVT_POST_TRACE_WAIT: begin
                         infer_evt_trace_val <= $signed(train_xin_rd_data);
+                        infer_evt_post2_before_q <= infer_post2_before[infer_evt_winner_idx];
                         infer_w_rd_addr <= infer_evt_edge_ptr;
                         infer_state <= INFER_EVT_POST_W_WAIT;
                     end
 
                     INFER_EVT_POST_W_WAIT: begin
                         infer_evt_w_cur <= $signed({16'd0, infer_w_rd_data});
-                        infer_evt_w_gap_q16 <= (TRAIN_WMAX_Q16 - $signed({16'd0, infer_w_rd_data}));
                         infer_state <= INFER_EVT_POST_APPLY;
                     end
 
                     INFER_EVT_POST_APPLY: begin
-                        infer_evt_mid_q16 <= fxp_mul_s16_16(TRAIN_LR_P_Q16, infer_evt_w_gap_q16);
+                        infer_evt_mid_q16 <= fxp_mul_s16_16(TRAIN_LR_P_Q16, infer_evt_trace_val);
                         infer_state <= INFER_EVT_POST_APPLY_MUL1;
                     end
 
                     INFER_EVT_POST_APPLY_MUL1: begin
-                        infer_evt_term_prod_q32 <= $signed(infer_evt_mid_q16) * $signed(infer_evt_trace_val);
+                        infer_evt_term_prod_q32 <= $signed(infer_evt_mid_q16) * $signed(infer_evt_post2_before_q);
                         infer_state <= INFER_EVT_POST_APPLY_MUL2;
                     end
 
@@ -5616,10 +5671,6 @@ module top_level(
                     INFER_EVT_POST_APPLY_CLIP: begin
                         logic signed [31:0] dW_q16;
                         dW_q16 = infer_evt_term_q16;
-                        if (dW_q16 > TRAIN_CLIP_DW_Q16)
-                            dW_q16 = TRAIN_CLIP_DW_Q16;
-                        else if (dW_q16 < -TRAIN_CLIP_DW_Q16)
-                            dW_q16 = -TRAIN_CLIP_DW_Q16;
                         infer_evt_dw_q16 <= dW_q16;
                         infer_state <= INFER_EVT_POST_APPLY_WNEXT;
                     end

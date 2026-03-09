@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 -------------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version     : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date             : Sun Mar  8 01:51:22 2026
-| Host             : eecs-digital-09 running 64-bit Ubuntu 24.04.3 LTS
+| Date             : Mon Mar  9 09:37:23 2026
+| Host             : eecs-digital-16 running 64-bit Ubuntu 24.04.3 LTS
 | Command          : report_power -file obj/post_route_power.rpt
 | Design           : top_level
 | Device           : xc7s50csga324-1
@@ -30,10 +30,10 @@ Table of Contents
 ----------
 
 +--------------------------+--------------+
-| Total On-Chip Power (W)  | 0.687        |
+| Total On-Chip Power (W)  | 0.696        |
 | Design Power Budget (W)  | Unspecified* |
 | Power Budget Margin (W)  | NA           |
-| Dynamic (W)              | 0.610        |
+| Dynamic (W)              | 0.619        |
 | Device Static (W)        | 0.076        |
 | Effective TJA (C/W)      | 4.9          |
 | Max Ambient (C)          | 81.6         |
@@ -52,21 +52,21 @@ Table of Contents
 +--------------------------+-----------+----------+-----------+-----------------+
 | On-Chip                  | Power (W) | Used     | Available | Utilization (%) |
 +--------------------------+-----------+----------+-----------+-----------------+
-| Clocks                   |     0.042 |        9 |       --- |             --- |
-| Slice Logic              |     0.019 |    41877 |       --- |             --- |
-|   LUT as Logic           |     0.017 |    17219 |     32600 |           52.82 |
-|   CARRY4                 |     0.002 |     1514 |      8150 |           18.58 |
-|   Register               |    <0.001 |    17586 |     65200 |           26.97 |
-|   F7/F8 Muxes            |    <0.001 |      925 |     32600 |            2.84 |
-|   LUT as Distributed RAM |    <0.001 |      519 |      9600 |            5.41 |
-|   Others                 |     0.000 |       79 |       --- |             --- |
-| Signals                  |     0.023 |    37246 |       --- |             --- |
-| Block RAM                |     0.014 |     34.5 |        75 |           46.00 |
+| Clocks                   |     0.043 |        9 |       --- |             --- |
+| Slice Logic              |     0.022 |    42968 |       --- |             --- |
+|   LUT as Logic           |     0.019 |    17402 |     32600 |           53.38 |
+|   CARRY4                 |     0.002 |     1517 |      8150 |           18.61 |
+|   Register               |    <0.001 |    17915 |     65200 |           27.48 |
+|   F7/F8 Muxes            |    <0.001 |     1383 |     32600 |            4.24 |
+|   LUT as Distributed RAM |    <0.001 |      563 |      9600 |            5.86 |
+|   Others                 |     0.000 |       77 |       --- |             --- |
+| Signals                  |     0.027 |    37724 |       --- |             --- |
+| Block RAM                |     0.012 |     35.5 |        75 |           47.33 |
 | MMCM                     |     0.109 |        1 |         5 |           20.00 |
-| DSPs                     |     0.012 |       61 |       120 |           50.83 |
+| DSPs                     |     0.015 |       60 |       120 |           50.00 |
 | I/O                      |     0.392 |       83 |       210 |           39.52 |
 | Static Power             |     0.076 |          |           |                 |
-| Total                    |     0.687 |          |           |                 |
+| Total                    |     0.696 |          |           |                 |
 +--------------------------+-----------+----------+-----------+-----------------+
 
 
@@ -76,7 +76,7 @@ Table of Contents
 +-----------+-------------+-----------+-------------+------------+-------------+-------------+------------+
 | Source    | Voltage (V) | Total (A) | Dynamic (A) | Static (A) | Powerup (A) | Budget (A)  | Margin (A) |
 +-----------+-------------+-----------+-------------+------------+-------------+-------------+------------+
-| Vccint    |       1.000 |     0.137 |       0.125 |      0.012 |       NA    | Unspecified | NA         |
+| Vccint    |       1.000 |     0.146 |       0.134 |      0.012 |       NA    | Unspecified | NA         |
 | Vccaux    |       1.800 |     0.151 |       0.139 |      0.013 |       NA    | Unspecified | NA         |
 | Vcco33    |       3.300 |     0.002 |       0.001 |      0.001 |       NA    | Unspecified | NA         |
 | Vcco25    |       2.500 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
@@ -149,7 +149,7 @@ Table of Contents
 +------------------------------+-----------+
 | Name                         | Power (W) |
 +------------------------------+-----------+
-| top_level                    |     0.610 |
+| top_level                    |     0.619 |
 |   u_csr_col_idx_bram         |     0.009 |
 |     xpm_memory_base_inst     |     0.009 |
 |   u_ddr3_top                 |     0.375 |
@@ -176,9 +176,9 @@ Table of Contents
 |       genblk7[1].IOBUFDS_dqs |     0.022 |
 |   u_ddr_clk_wiz              |     0.110 |
 |   u_poisson_divider          |     0.002 |
-|   u_sd_controller            |     0.003 |
+|   u_sd_controller            |     0.004 |
 |   u_stdp_divider             |     0.003 |
-|   u_uart_rx                  |     0.005 |
+|   u_uart_rx                  |     0.004 |
 +------------------------------+-----------+
 
 
