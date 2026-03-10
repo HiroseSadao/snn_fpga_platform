@@ -1,4 +1,4 @@
-# bram_snn_cuda
+# snn_cuda
 
 Fixed-backend FPGA SNN demo prototype.
 

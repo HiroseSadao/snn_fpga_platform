@@ -1,3 +1,3 @@
 .venv/
 ubuvenv/
-bram_snn_cuda/brian2_minimal_results/
+snn_cuda/brian2_minimal_results/
