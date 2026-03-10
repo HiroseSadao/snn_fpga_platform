@@ -1,0 +1,208 @@
+{
+  "accuracy": 0.08,
+  "backend": "fpga_uart",
+  "caps_hex": "0x00017F0F",
+  "compiler_plan": {
+    "batch_train_only": false,
+    "batch_train_then_infer": true,
+    "estimated_timeout_sec": 600.0,
+    "expected_image_bytes": 470400,
+    "expected_image_sectors": 919,
+    "expected_total_samples": 600,
+    "legacy_cli": [
+      "python",
+      "ctrl/use_fpga_calc.py",
+      "--port",
+      "COM7",
+      "--start-lba",
+      "2048",
+      "--timeout",
+      "600.0",
+      "--seed",
+      "0x12345678",
+      "--batch-train-then-infer",
+      "--train-then-infer-train-samples",
+      "500",
+      "--train-then-infer-infer-samples",
+      "100"
+    ],
+    "runtime_steps": [
+      {
+        "description": "Query FPGA training kernel capabilities.",
+        "kind": "query_caps"
+      },
+      {
+        "description": "Lower the Python SNN model into the fixed FPGA-oriented IR.",
+        "kind": "lower_to_fixed_ir"
+      },
+      {
+        "description": "Upload label metadata used by the batch engine.",
+        "kind": "preload_labels"
+      },
+      {
+        "description": "Run the FPGA batch training phase.",
+        "kind": "train_batch"
+      },
+      {
+        "description": "Convert aggregated spike statistics into neuron-label assignments.",
+        "kind": "derive_assignments"
+      },
+      {
+        "description": "Upload the compiled neuron-label assignments.",
+        "kind": "preload_assignments"
+      },
+      {
+        "description": "Run the FPGA batch inference phase.",
+        "kind": "infer_batch"
+      },
+      {
+        "description": "Read back accuracy and timing counters.",
+        "kind": "collect_metrics"
+      }
+    ],
+    "spec": {
+      "artifacts": {
+        "output_path": "ctrl/demo_result.json"
+      },
+      "dataset": {
+        "name": "mnist",
+        "source": "fpga",
+        "start_lba": 2048
+      },
+      "execution": {
+        "chunk_nsteps": 16,
+        "infer_samples": 100,
+        "mode": "train-then-infer",
+        "port": "COM7",
+        "seed": 305419896,
+        "timeout_sec": 600.0,
+        "train_e2e_mine_timing": false,
+        "train_samples": 500
+      },
+      "ir": {
+        "backend_name": "fixed_mnist_fpga",
+        "connections": [
+          {
+            "delay_steps": 5,
+            "dst": "exc",
+            "learning_rule": "stdp_input_exc",
+            "name": "input_to_exc",
+            "pattern": "dense",
+            "src": "input"
+          },
+          {
+            "delay_steps": 2,
+            "dst": "inh",
+            "learning_rule": "fixed_exc_inh",
+            "name": "exc_to_inh",
+            "pattern": "one_to_one",
+            "src": "exc"
+          },
+          {
+            "delay_steps": 0,
+            "dst": "exc",
+            "learning_rule": "fixed_inh_exc",
+            "name": "inh_to_exc",
+            "pattern": "all_but_self",
+            "src": "inh"
+          }
+        ],
+        "execution": {
+          "chunk_nsteps": 16,
+          "infer_samples": 100,
+          "mode": "train-then-infer",
+          "phases": [
+            "query_caps",
+            "preload_labels",
+            "train_batch",
+            "derive_assignments",
+            "preload_assignments",
+            "infer_batch",
+            "collect_metrics"
+          ],
+          "train_samples": 500
+        },
+        "groups": [
+          {
+            "name": "input",
+            "neuron_model": "poisson_input",
+            "role": "input",
+            "size": 784
+          },
+          {
+            "name": "exc",
+            "neuron_model": "diehl_cook_exc",
+            "role": "excitatory",
+            "size": 50
+          },
+          {
+            "name": "inh",
+            "neuron_model": "conductance_inh",
+            "role": "inhibitory",
+            "size": 50
+          }
+        ],
+        "learning": {
+          "assignment_source": "aggregated_label_stats",
+          "mode": "local_stdp",
+          "train_enabled": true
+        },
+        "memory_regions": [
+          {
+            "kind": "synapse_state",
+            "logical_size": 39200,
+            "name": "weights",
+            "note": "input->exc dense weights"
+          },
+          {
+            "kind": "neuron_state",
+            "logical_size": 50,
+            "name": "theta",
+            "note": "exc adaptive thresholds"
+          },
+          {
+            "kind": "neuron_state",
+            "logical_size": 50,
+            "name": "v_state",
+            "note": "exc membrane state"
+          },
+          {
+            "kind": "summary_state",
+            "logical_size": 500,
+            "name": "label_stats",
+            "note": "aggregated label spike sums"
+          }
+        ],
+        "model_name": "mnist_stdp_fixed_demo"
+      },
+      "network": {
+        "n_classes": 10,
+        "n_in": 784,
+        "n_neurons": 50,
+        "name": "mnist_stdp_fixed_demo"
+      },
+      "source_kind": "python_model"
+    }
+  },
+  "correct": 8,
+  "cycle_breakdown": {
+    "infer_core": 230968000,
+    "infer_eval": 19100,
+    "label_stats": 0,
+    "load": 30719644,
+    "other": 0,
+    "train_core": 0
+  },
+  "dataset_name": "mnist",
+  "elapsed_cycles": 261706744,
+  "elapsed_sec": 2.61706744,
+  "infer_samples": 100,
+  "mode": "train-then-infer",
+  "network_name": "mnist_stdp_fixed_demo",
+  "port": "COM7",
+  "seed": 305419896,
+  "start_lba": 2048,
+  "status": "ok",
+  "timeout_sec": 600.0,
+  "train_samples": 500
+}
