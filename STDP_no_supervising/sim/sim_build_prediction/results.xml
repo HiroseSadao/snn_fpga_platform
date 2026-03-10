@@ -1,6 +1,0 @@
-<testsuites name="results">
-  <testsuite name="all" package="all">
-    <property name="random_seed" value="1770173189" />
-    <testcase name="prediction_basic_test" classname="prediction_test" file="C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\STDP_no_supervising\sim\prediction_test.py" lineno="42" time="42.81100845336914" sim_time_ns="6562160.001" ratio_time="153282.0701513648" />
-  </testsuite>
-</testsuites>

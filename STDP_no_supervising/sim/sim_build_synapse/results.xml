@@ -1,7 +1,0 @@
-<testsuites name="results">
-  <testsuite name="all" package="all">
-    <property name="random_seed" value="1770128171" />
-    <testcase name="single_exponential_synapse_fixed_test" classname="synapse_test" file="C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\sim\synapse_test.py" lineno="40" time="0.013999700546264648" sim_time_ns="2120.001" ratio_time="151431.88191733512" />
-    <testcase name="single_exponential_synapse_float_test" classname="synapse_test" file="C:\Users\kamer\Documents\brain_inspired_computer\tombo_snn\sim\synapse_test.py" lineno="75" time="0.011998653411865234" sim_time_ns="2130.001" ratio_time="177520.0038609069" />
-  </testsuite>
-</testsuites>

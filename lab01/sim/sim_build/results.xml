@@ -1,6 +1,0 @@
-<testsuites name="results">
-  <testsuite name="all" package="all">
-    <property name="random_seed" value="1757520547" />
-    <testcase name="first_test" classname="test_rgb_controller" file="C:\Users\kamer\Documents\2025年度東大\MIT留学\留学後\digital_systems_laboratory\lab01\sim\test_rgb_controller.py" lineno="19" time="0.13468527793884277" sim_time_ns="21420.001" ratio_time="159037.43399279533" />
-  </testsuite>
-</testsuites>
