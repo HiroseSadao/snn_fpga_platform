@@ -696,18 +696,36 @@ def fpga_batch_read_summary_field_u32(ser: serial.Serial, field_idx: int) -> int
     return int(value) & 0xFFFFFFFF
 
 
+def fpga_batch_read_summary_field_u64(ser: serial.Serial, field_idx_low: int, field_idx_high: int) -> int:
+    low = fpga_batch_read_summary_field_u32(ser, field_idx_low)
+    high = fpga_batch_read_summary_field_u32(ser, field_idx_high)
+    return (int(high) << 32) | int(low)
+
+
 def cycles_to_seconds(cycles: int) -> float:
-    return float(int(cycles) & 0xFFFFFFFF) / float(CORE_CLK_HZ)
+    return float(int(cycles)) / float(CORE_CLK_HZ)
 
 
 def fpga_batch_read_cycle_breakdown(ser: serial.Serial) -> dict[str, int]:
     return {
-        "load": fpga_batch_read_summary_field_u32(ser, 8),
-        "train_core": fpga_batch_read_summary_field_u32(ser, 9),
-        "infer_core": fpga_batch_read_summary_field_u32(ser, 10),
-        "label_stats": fpga_batch_read_summary_field_u32(ser, 11),
-        "infer_eval": fpga_batch_read_summary_field_u32(ser, 12),
-        "other": fpga_batch_read_summary_field_u32(ser, 13),
+        "load": fpga_batch_read_summary_field_u64(ser, 8, 22),
+        "train_core": fpga_batch_read_summary_field_u64(ser, 9, 23),
+        "infer_core": fpga_batch_read_summary_field_u64(ser, 10, 24),
+        "label_stats": fpga_batch_read_summary_field_u64(ser, 11, 25),
+        "infer_eval": fpga_batch_read_summary_field_u64(ser, 12, 26),
+        "other": fpga_batch_read_summary_field_u64(ser, 13, 27),
+    }
+
+
+def fpga_batch_read_train_detail_breakdown(ser: serial.Serial) -> dict[str, int]:
+    return {
+        "train_inject_infer": fpga_batch_read_summary_field_u64(ser, 14, 28),
+        "train_blank_infer": fpga_batch_read_summary_field_u64(ser, 15, 29),
+        "train_snap_copy": fpga_batch_read_summary_field_u64(ser, 16, 30),
+        "train_rebase_gin": fpga_batch_read_summary_field_u64(ser, 17, 31),
+        "train_evt_pre": fpga_batch_read_summary_field_u64(ser, 18, 32),
+        "train_evt_post": fpga_batch_read_summary_field_u64(ser, 19, 33),
+        "train_accum": fpga_batch_read_summary_field_u64(ser, 20, 34),
     }
 
 
@@ -719,6 +737,26 @@ def print_cycle_breakdown(title: str, breakdown: dict[str, int]) -> None:
         frac = (float(cycles) / float(total)) if total > 0 else 0.0
         print(
             f"  {key:>11} = {cycles:10d} cycles, "
+            f"{cycles_to_seconds(cycles):9.6f} s, {frac:6.2%}"
+        )
+
+
+def print_train_detail_breakdown(title: str, breakdown: dict[str, int], *, train_core_cycles: int) -> None:
+    total = int(train_core_cycles)
+    print(title)
+    for key in (
+        "train_inject_infer",
+        "train_blank_infer",
+        "train_snap_copy",
+        "train_rebase_gin",
+        "train_evt_pre",
+        "train_evt_post",
+        "train_accum",
+    ):
+        cycles = int(breakdown[key])
+        frac = (float(cycles) / float(total)) if total > 0 else 0.0
+        print(
+            f"  {key:>18} = {cycles:10d} cycles, "
             f"{cycles_to_seconds(cycles):9.6f} s, {frac:6.2%}"
         )
 
@@ -1167,9 +1205,16 @@ def fpga_batch_single_smoke(
         else:
             value = fpga_batch_read_summary_field(ser, idx)
         print(f"Batch summary[{idx}] = {value}")
-    elapsed_cycles = fpga_batch_read_summary_field_u32(ser, 7)
+    elapsed_cycles = fpga_batch_read_summary_field_u64(ser, 7, 21)
     print(f"Batch elapsed time = {cycles_to_seconds(elapsed_cycles):.6f} s ({elapsed_cycles} cycles)")
-    print_cycle_breakdown("Batch cycle breakdown:", fpga_batch_read_cycle_breakdown(ser))
+    cycle_breakdown = fpga_batch_read_cycle_breakdown(ser)
+    print_cycle_breakdown("Batch cycle breakdown:", cycle_breakdown)
+    if mode_train:
+        print_train_detail_breakdown(
+            "Batch train detailed breakdown:",
+            fpga_batch_read_train_detail_breakdown(ser),
+            train_core_cycles=cycle_breakdown["train_core"],
+        )
     if mode_train:
         label_counts = fpga_read_train_label_counts_all(ser)
         nonzero = [(idx, int(cnt)) for idx, cnt in enumerate(label_counts) if int(cnt) > 0]
@@ -1221,9 +1266,15 @@ def fpga_batch_train_only(
     if done.has_error:
         raise RuntimeError(f"BATCH train failed: {done}")
 
-    elapsed_cycles = fpga_batch_read_summary_field_u32(ser, 7)
+    elapsed_cycles = fpga_batch_read_summary_field_u64(ser, 7, 21)
     print(f"Batch train elapsed time = {cycles_to_seconds(elapsed_cycles):.6f} s ({elapsed_cycles} cycles)")
-    print_cycle_breakdown("Batch train cycle breakdown:", fpga_batch_read_cycle_breakdown(ser))
+    cycle_breakdown = fpga_batch_read_cycle_breakdown(ser)
+    print_cycle_breakdown("Batch train cycle breakdown:", cycle_breakdown)
+    print_train_detail_breakdown(
+        "Batch train detailed breakdown:",
+        fpga_batch_read_train_detail_breakdown(ser),
+        train_core_cycles=cycle_breakdown["train_core"],
+    )
     label_counts = fpga_read_train_label_counts_all(ser)
     nonzero = [(idx, int(cnt)) for idx, cnt in enumerate(label_counts) if int(cnt) > 0]
     print(f"Nonzero label counts: {nonzero}")
@@ -1279,6 +1330,16 @@ def fpga_batch_train_then_infer(
     if done_train.has_error:
         raise RuntimeError(f"BATCH train failed: {done_train}")
 
+    train_elapsed_cycles = fpga_batch_read_summary_field_u64(ser, 7, 21)
+    train_cycle_breakdown = fpga_batch_read_cycle_breakdown(ser)
+    print(f"Batch train elapsed time = {cycles_to_seconds(train_elapsed_cycles):.6f} s ({train_elapsed_cycles} cycles)")
+    print_cycle_breakdown("Batch train cycle breakdown:", train_cycle_breakdown)
+    print_train_detail_breakdown(
+        "Batch train detailed breakdown:",
+        fpga_batch_read_train_detail_breakdown(ser),
+        train_core_cycles=train_cycle_breakdown["train_core"],
+    )
+
     fpga_sums, fpga_counts = fpga_read_train_label_stats_all(ser)
     fpga_assign, _ = assign_labels_from_aggregated_stats(fpga_sums, fpga_counts, rates_prev=None, alpha=1.0)
     fpga_batch_preload_assignments(ser, fpga_assign)
@@ -1303,7 +1364,7 @@ def fpga_batch_train_then_infer(
         raise RuntimeError(f"BATCH infer failed: {done}")
 
     correct = fpga_batch_read_summary_field(ser, 6)
-    elapsed_cycles = fpga_batch_read_summary_field_u32(ser, 7)
+    elapsed_cycles = fpga_batch_read_summary_field_u64(ser, 7, 21)
     print(f"Batch infer elapsed time = {cycles_to_seconds(elapsed_cycles):.6f} s ({elapsed_cycles} cycles)")
     print_cycle_breakdown("Batch infer cycle breakdown:", fpga_batch_read_cycle_breakdown(ser))
     print("FPGA train/infer summary:")

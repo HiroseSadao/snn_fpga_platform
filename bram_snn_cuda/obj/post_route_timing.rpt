@@ -1,7 +1,7 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Mon Mar  9 09:37:20 2026
+| Date         : Mon Mar  9 21:16:40 2026
 | Host         : eecs-digital-16 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_timing -file obj/post_route_timing.rpt
 | Design       : top_level
@@ -12,20 +12,20 @@ Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanc
 
 Timing Report
 
-Slack (MET) :             0.054ns  (required time - arrival time)
-  Source:                 arg1_reg[0]/C
+Slack (VIOLATED) :        -0.228ns  (required time - arrival time)
+  Source:                 imgload_byte_idx_reg[1]/C
                             (rising edge-triggered cell FDRE clocked by clk_passthrough_clk_wiz_0  {rise@0.000ns fall@5.000ns period=10.000ns})
-  Destination:            resp_result_reg[14]/D
+  Destination:            resp_result_reg[10]/CE
                             (rising edge-triggered cell FDRE clocked by clk_passthrough_clk_wiz_0  {rise@0.000ns fall@5.000ns period=10.000ns})
   Path Group:             clk_passthrough_clk_wiz_0
   Path Type:              Setup (Max at Slow Process Corner)
   Requirement:            10.000ns  (clk_passthrough_clk_wiz_0 rise@10.000ns - clk_passthrough_clk_wiz_0 rise@0.000ns)
-  Data Path Delay:        9.812ns  (logic 3.250ns (33.124%)  route 6.562ns (66.876%))
-  Logic Levels:           12  (CARRY4=4 LUT2=3 LUT5=1 LUT6=4)
-  Clock Path Skew:        -0.090ns (DCD - SCD + CPR)
+  Data Path Delay:        9.928ns  (logic 2.448ns (24.658%)  route 7.480ns (75.342%))
+  Logic Levels:           12  (CARRY4=1 LUT2=1 LUT3=1 LUT5=1 LUT6=8)
+  Clock Path Skew:        -0.022ns (DCD - SCD + CPR)
     Destination Clock Delay (DCD):    -1.575ns = ( 8.425 - 10.000 ) 
-    Source Clock Delay      (SCD):    -0.995ns
-    Clock Pessimism Removal (CPR):    0.489ns
+    Source Clock Delay      (SCD):    -0.992ns
+    Clock Pessimism Removal (CPR):    0.561ns
   Clock Uncertainty:      0.074ns  ((TSJ^2 + DJ^2)^1/2) / 2 + PE
     Total System Jitter     (TSJ):    0.071ns
     Discrete Jitter          (DJ):    0.129ns
@@ -43,40 +43,37 @@ Slack (MET) :             0.054ns  (required time - arrival time)
                                                      -6.965    -4.291 r  u_ddr_clk_wiz/mmcm_adv_inst/CLKOUT5
                          net (fo=1, routed)           1.666    -2.625    u_ddr_clk_wiz/clk_passthrough_clk_wiz_0
     BUFGCTRL_X0Y4        BUFG (Prop_bufg_I_O)         0.096    -2.529 r  u_ddr_clk_wiz/clkout6_buf/O
-                         net (fo=15762, routed)       1.534    -0.995    core_clk
-    SLICE_X34Y76         FDRE                                         r  arg1_reg[0]/C
+                         net (fo=15444, routed)       1.537    -0.992    core_clk
+    SLICE_X43Y72         FDRE                                         r  imgload_byte_idx_reg[1]/C
   -------------------------------------------------------------------    -------------------
-    SLICE_X34Y76         FDRE (Prop_fdre_C_Q)         0.518    -0.477 f  arg1_reg[0]/Q
-                         net (fo=17, routed)          0.861     0.384    u_uart_rx/raw_bytes_per_image_reg[31][0]
-    SLICE_X34Y76         LUT2 (Prop_lut2_I0_O)        0.157     0.541 r  u_uart_rx/imgload_start_addr_word[30]_i_41/O
-                         net (fo=1, routed)           0.336     0.877    u_uart_rx/imgload_start_addr_word[30]_i_41_n_0
-    SLICE_X34Y78         CARRY4 (Prop_carry4_CYINIT_CO[3])
-                                                      0.826     1.703 r  u_uart_rx/imgload_start_addr_word_reg[30]_i_36/CO[3]
-                         net (fo=1, routed)           0.000     1.703    u_uart_rx/imgload_start_addr_word_reg[30]_i_36_n_0
-    SLICE_X34Y79         CARRY4 (Prop_carry4_CI_CO[3])
-                                                      0.117     1.820 r  u_uart_rx/imgload_start_addr_word_reg[30]_i_31/CO[3]
-                         net (fo=1, routed)           0.000     1.820    u_uart_rx/imgload_start_addr_word_reg[30]_i_31_n_0
-    SLICE_X34Y80         CARRY4 (Prop_carry4_CI_CO[3])
-                                                      0.117     1.937 r  u_uart_rx/imgload_start_addr_word_reg[30]_i_27/CO[3]
-                         net (fo=1, routed)           0.000     1.937    u_uart_rx/imgload_start_addr_word_reg[30]_i_27_n_0
-    SLICE_X34Y81         CARRY4 (Prop_carry4_CI_CO[2])
-                                                      0.229     2.166 r  u_uart_rx/imgload_start_addr_word_reg[30]_i_26/CO[2]
-                         net (fo=2, routed)           1.019     3.185    u_uart_rx/response_ready5418_in
-    SLICE_X34Y76         LUT2 (Prop_lut2_I1_O)        0.310     3.495 f  u_uart_rx/imgload_start_addr_word[30]_i_20/O
-                         net (fo=1, routed)           0.670     4.165    u_uart_rx/imgload_start_addr_word[30]_i_20_n_0
-    SLICE_X34Y76         LUT6 (Prop_lut6_I1_O)        0.124     4.289 r  u_uart_rx/imgload_start_addr_word[30]_i_10/O
-                         net (fo=13, routed)          0.857     5.146    u_stdp_divider/response_ready1421_out
-    SLICE_X45Y83         LUT5 (Prop_lut5_I0_O)        0.124     5.270 r  u_stdp_divider/resp_result[10]_i_11/O
-                         net (fo=20, routed)          1.092     6.362    u_stdp_divider/train_gen_active_reg
-    SLICE_X51Y88         LUT2 (Prop_lut2_I1_O)        0.153     6.515 f  u_stdp_divider/resp_result[0]_i_12/O
-                         net (fo=7, routed)           0.977     7.492    u_stdp_divider/arg0_reg[31]_0
-    SLICE_X56Y85         LUT6 (Prop_lut6_I1_O)        0.327     7.819 r  u_stdp_divider/resp_result[14]_i_11/O
-                         net (fo=1, routed)           0.312     8.131    u_stdp_divider/resp_result[14]_i_11_n_0
-    SLICE_X55Y84         LUT6 (Prop_lut6_I1_O)        0.124     8.255 r  u_stdp_divider/resp_result[14]_i_5/O
-                         net (fo=1, routed)           0.437     8.693    u_sd_controller/resp_result_reg[14]_0
-    SLICE_X55Y85         LUT6 (Prop_lut6_I3_O)        0.124     8.817 r  u_sd_controller/resp_result[14]_i_1/O
-                         net (fo=1, routed)           0.000     8.817    resp_result2_out[14]
-    SLICE_X55Y85         FDRE                                         r  resp_result_reg[14]/D
+    SLICE_X43Y72         FDRE (Prop_fdre_C_Q)         0.456    -0.536 r  imgload_byte_idx_reg[1]/Q
+                         net (fo=18, routed)          0.470    -0.066    u_uart_rx/raw_image0_wr_addr_reg[9]_i_2_0[1]
+    SLICE_X43Y71         LUT2 (Prop_lut2_I0_O)        0.124     0.058 r  u_uart_rx/imgload_byte_idx[6]_i_3/O
+                         net (fo=2, routed)           0.601     0.659    u_uart_rx/imgload_byte_idx_reg[1]
+    SLICE_X42Y72         LUT6 (Prop_lut6_I3_O)        0.124     0.783 r  u_uart_rx/raw_image0_sum_u8[31]_i_28/O
+                         net (fo=2, routed)           0.513     1.296    u_uart_rx/raw_image0_sum_u8[31]_i_28_n_0
+    SLICE_X42Y73         LUT6 (Prop_lut6_I2_O)        0.124     1.420 r  u_uart_rx/raw_image0_sum_u8[31]_i_15/O
+                         net (fo=1, routed)           0.636     2.056    u_uart_rx/raw_image0_sum_u8[31]_i_15_n_0
+    SLICE_X41Y73         CARRY4 (Prop_carry4_DI[0]_CO[0])
+                                                      0.379     2.435 r  u_uart_rx/raw_image0_sum_u8_reg[31]_i_6/CO[0]
+                         net (fo=48, routed)          0.543     2.977    u_uart_rx/imgload_total_bytes_reg[9][0]
+    SLICE_X44Y75         LUT6 (Prop_lut6_I0_O)        0.373     3.350 r  u_uart_rx/resp_status[6]_i_66/O
+                         net (fo=1, routed)           0.406     3.756    u_uart_rx/resp_status[6]_i_66_n_0
+    SLICE_X45Y77         LUT6 (Prop_lut6_I5_O)        0.124     3.880 r  u_uart_rx/resp_status[6]_i_46/O
+                         net (fo=2, routed)           0.446     4.326    u_uart_rx/resp_status[6]_i_46_n_0
+    SLICE_X45Y77         LUT5 (Prop_lut5_I2_O)        0.124     4.450 r  u_uart_rx/resp_status[6]_i_19/O
+                         net (fo=2, routed)           0.592     5.043    u_uart_rx/resp_status[6]_i_19_n_0
+    SLICE_X45Y82         LUT6 (Prop_lut6_I0_O)        0.124     5.167 f  u_uart_rx/resp_status[6]_i_23/O
+                         net (fo=5, routed)           0.605     5.771    u_uart_rx/resp_status[6]_i_23_n_0
+    SLICE_X46Y84         LUT6 (Prop_lut6_I3_O)        0.124     5.895 f  u_uart_rx/resp_status[6]_i_12/O
+                         net (fo=1, routed)           0.797     6.692    u_uart_rx/resp_status[6]_i_12_n_0
+    SLICE_X47Y85         LUT6 (Prop_lut6_I2_O)        0.124     6.816 f  u_uart_rx/resp_status[6]_i_6/O
+                         net (fo=3, routed)           0.547     7.364    u_uart_rx/req_opcode_reg[3]_rep__1
+    SLICE_X48Y86         LUT6 (Prop_lut6_I2_O)        0.124     7.488 r  u_uart_rx/resp_result[31]_i_3/O
+                         net (fo=1, routed)           0.420     7.907    u_uart_rx/resp_result[31]_i_3_n_0
+    SLICE_X48Y86         LUT3 (Prop_lut3_I2_O)        0.124     8.031 r  u_uart_rx/resp_result[31]_i_1/O
+                         net (fo=32, routed)          0.905     8.936    u_uart_rx_n_1802
+    SLICE_X47Y91         FDRE                                         r  resp_result_reg[10]/CE
   -------------------------------------------------------------------    -------------------
 
                          (clock clk_passthrough_clk_wiz_0 rise edge)
@@ -89,16 +86,16 @@ Slack (MET) :             0.054ns  (required time - arrival time)
                                                      -7.221     5.311 r  u_ddr_clk_wiz/mmcm_adv_inst/CLKOUT5
                          net (fo=1, routed)           1.587     6.898    u_ddr_clk_wiz/clk_passthrough_clk_wiz_0
     BUFGCTRL_X0Y4        BUFG (Prop_bufg_I_O)         0.091     6.989 r  u_ddr_clk_wiz/clkout6_buf/O
-                         net (fo=15762, routed)       1.437     8.425    core_clk
-    SLICE_X55Y85         FDRE                                         r  resp_result_reg[14]/C
-                         clock pessimism              0.489     8.915    
-                         clock uncertainty           -0.074     8.841    
-    SLICE_X55Y85         FDRE (Setup_fdre_C_D)        0.029     8.870    resp_result_reg[14]
+                         net (fo=15444, routed)       1.437     8.425    core_clk
+    SLICE_X47Y91         FDRE                                         r  resp_result_reg[10]/C
+                         clock pessimism              0.561     8.986    
+                         clock uncertainty           -0.074     8.912    
+    SLICE_X47Y91         FDRE (Setup_fdre_C_CE)      -0.205     8.707    resp_result_reg[10]
   -------------------------------------------------------------------
-                         required time                          8.870    
-                         arrival time                          -8.817    
+                         required time                          8.707    
+                         arrival time                          -8.936    
   -------------------------------------------------------------------
-                         slack                                  0.054    
+                         slack                                 -0.228    
 
 
 

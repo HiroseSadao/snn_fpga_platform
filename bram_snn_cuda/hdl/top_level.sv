@@ -371,27 +371,8 @@ module top_level(
         TCK_SNAP_COPY_INIT,
         TCK_SNAP_COPY_WAIT,
         TCK_SNAP_COPY_WRITE,
-        TCK_PICK_WINNER_INIT,
-        TCK_PICK_WINNER_SCAN,
         TCK_BLANK_INFER_START,
         TCK_BLANK_INFER_WAIT,
-        TCK_GEN_XIN_START,
-        TCK_GEN_XIN_WAIT,
-        TCK_GEN_XEXC_START,
-        TCK_GEN_XEXC_WAIT,
-        TCK_BUILD_XIN_INIT,
-        TCK_BUILD_XIN_SCAN,
-        TCK_BUILD_XEXC_INIT,
-        TCK_BUILD_XEXC_SCAN,
-        TCK_PRELIST_BUILD_INIT,
-        TCK_PRELIST_BUILD_PRIME,
-        TCK_PRELIST_BUILD_SCAN,
-        TCK_PRELIST_WRITE_REQ,
-        TCK_PRELIST_WRITE_WAIT,
-        TCK_TRACE_START,
-        TCK_TRACE_WAIT,
-        TCK_STDP_START,
-        TCK_STDP_WAIT,
         TCK_REBASE_GIN_INIT,
         TCK_REBASE_GIN_RUN,
         TCK_DONE
@@ -729,13 +710,20 @@ module top_level(
     logic [31:0] batch_current_sample_idx;
     logic [31:0] batch_total_spikes;
     logic [31:0] batch_correct_count;
-    logic [31:0] batch_elapsed_cycles;
-    logic [31:0] batch_load_cycles;
-    logic [31:0] batch_train_core_cycles;
-    logic [31:0] batch_infer_core_cycles;
-    logic [31:0] batch_label_stats_cycles;
-    logic [31:0] batch_infer_eval_cycles;
-    logic [31:0] batch_other_cycles;
+    logic [63:0] batch_elapsed_cycles;
+    logic [63:0] batch_load_cycles;
+    logic [63:0] batch_train_core_cycles;
+    logic [63:0] batch_infer_core_cycles;
+    logic [63:0] batch_label_stats_cycles;
+    logic [63:0] batch_infer_eval_cycles;
+    logic [63:0] batch_other_cycles;
+    logic [63:0] batch_train_inject_infer_cycles;
+    logic [63:0] batch_train_blank_infer_cycles;
+    logic [63:0] batch_train_snap_cycles;
+    logic [63:0] batch_train_rebase_cycles;
+    logic [63:0] batch_train_evt_pre_cycles;
+    logic [63:0] batch_train_evt_post_cycles;
+    logic [63:0] batch_train_accum_cycles;
     logic [31:0] batch_img_byte_off;
     logic [31:0] batch_img_sector_off;
     logic [31:0] batch_img_byte_in_sector;
@@ -784,6 +772,9 @@ module top_level(
     logic [W_ADDR_W-1:0] infer_w_rd_addr;
     logic [15:0] infer_w_rd_data;
     logic [15:0] infer_w_rd_data_q;
+    logic [W_ADDR_W-1:0] infer_w_rd_addr_lane1;
+    logic [15:0] infer_w_rd_data_lane1;
+    logic [15:0] infer_w_rd_data_q_lane1;
     logic        infer_w_wr_en;
     logic [W_ADDR_W-1:0] infer_w_wr_addr;
     logic [15:0] infer_w_wr_data;
@@ -819,6 +810,8 @@ module top_level(
     logic [CSR_ROW_PTR_W-1:0] csr_row_ptr_rd_data;
     logic [EDGE_ADDR_W-1:0] csr_col_idx_rd_addr;
     logic [COL_IDX_W-1:0] csr_col_idx_rd_data;
+    logic [EDGE_ADDR_W-1:0] csr_col_idx_rd_addr_lane1;
+    logic [COL_IDX_W-1:0] csr_col_idx_rd_data_lane1;
     logic [COL_IDX_W:0] csc_col_ptr_rd_addr;
     logic [CSR_ROW_PTR_W-1:0] csc_col_ptr_rd_data;
     logic [EDGE_ADDR_W-1:0] csc_row_idx_rd_addr;
@@ -886,6 +879,9 @@ module top_level(
     logic [EDGE_ADDR_W-1:0] infer_evt_edge_idx;
     logic [EDGE_ADDR_W-1:0] infer_evt_edge_end;
     logic [EDGE_ADDR_W-1:0] infer_evt_edge_ptr;
+    logic [1:0]  infer_accum_pair_count;
+    logic        infer_accum_lane0_fire;
+    logic        infer_accum_lane1_fire;
     logic [31:0] infer_total_spikes;
     logic [31:0] infer_rng_state;
     (* use_dsp = "yes" *) logic [63:0] infer_rng_mul_prod_q32;
@@ -907,6 +903,8 @@ module top_level(
     logic        infer_pre_spike_wr_data;
     logic [9:0]  infer_pre_spike_rd_addr;
     logic        infer_pre_spike_rd_data;
+    logic [9:0]  infer_pre_spike_rd_addr_lane1;
+    logic        infer_pre_spike_rd_data_lane1;
     logic [31:0] infer_dividend;
     logic [31:0] infer_divisor;
     (* use_dsp = "yes" *) logic [63:0] infer_prep_div_prod_q32;
@@ -1044,6 +1042,7 @@ module top_level(
     // inference (instead of LUTRAM/distributed RAM).
     always_ff @(posedge core_clk) begin
         infer_w_rd_data_q <= infer_w_rd_data;
+        infer_w_rd_data_q_lane1 <= infer_w_rd_data_lane1;
 
         if (raw_image0_wr_en && !imgload_target_buf_sel) begin
             raw_image0_mem[raw_image0_wr_addr] <= raw_image0_wr_data;
@@ -1203,6 +1202,49 @@ module top_level(
         .dbiterrb       ()
     );
 
+    xpm_memory_sdpram #(
+        .ADDR_WIDTH_A(10),
+        .ADDR_WIDTH_B(10),
+        .AUTO_SLEEP_TIME(0),
+        .BYTE_WRITE_WIDTH_A(1),
+        .CLOCKING_MODE("common_clock"),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE("none"),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("distributed"),
+        .MEMORY_SIZE(N_IN),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_B(1),
+        .READ_LATENCY_B(1),
+        .READ_RESET_VALUE_B("0"),
+        .RST_MODE_A("SYNC"),
+        .RST_MODE_B("SYNC"),
+        .SIM_ASSERT_CHK(0),
+        .USE_EMBEDDED_CONSTRAINT(0),
+        .USE_MEM_INIT(0),
+        .WAKEUP_TIME("disable_sleep"),
+        .WRITE_DATA_WIDTH_A(1),
+        .WRITE_MODE_B("read_first")
+    ) u_infer_pre_spike_map_lane1 (
+        .sleep          (1'b0),
+        .clka           (core_clk),
+        .ena            (infer_pre_spike_wr_en),
+        .wea            (infer_pre_spike_wr_en),
+        .addra          (infer_pre_spike_wr_addr),
+        .dina           (infer_pre_spike_wr_data),
+        .injectsbiterra (1'b0),
+        .injectdbiterra (1'b0),
+        .clkb           (core_clk),
+        .rstb           (1'b0),
+        .enb            (1'b1),
+        .regceb         (1'b1),
+        .addrb          (infer_pre_spike_rd_addr_lane1),
+        .doutb          (infer_pre_spike_rd_data_lane1),
+        .sbiterrb       (),
+        .dbiterrb       ()
+    );
+
     // Sparse inference weight table: csr_weight[N_EDGES].
     xpm_memory_sdpram #(
         .ADDR_WIDTH_A(W_ADDR_W),
@@ -1243,6 +1285,49 @@ module top_level(
         .regceb         (1'b1),
         .addrb          (infer_w_rd_addr),
         .doutb          (infer_w_rd_data),
+        .sbiterrb       (),
+        .dbiterrb       ()
+    );
+
+    xpm_memory_sdpram #(
+        .ADDR_WIDTH_A(W_ADDR_W),
+        .ADDR_WIDTH_B(W_ADDR_W),
+        .AUTO_SLEEP_TIME(0),
+        .BYTE_WRITE_WIDTH_A(16),
+        .CLOCKING_MODE("common_clock"),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE("data/csr_weight_q16.mem"),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("block"),
+        .MEMORY_SIZE(N_EDGES * 16),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_B(16),
+        .READ_LATENCY_B(1),
+        .READ_RESET_VALUE_B("0"),
+        .RST_MODE_A("SYNC"),
+        .RST_MODE_B("SYNC"),
+        .SIM_ASSERT_CHK(0),
+        .USE_EMBEDDED_CONSTRAINT(0),
+        .USE_MEM_INIT(1),
+        .WAKEUP_TIME("disable_sleep"),
+        .WRITE_DATA_WIDTH_A(16),
+        .WRITE_MODE_B("read_first")
+    ) u_infer_w_rom_bram_lane1 (
+        .sleep          (1'b0),
+        .clka           (core_clk),
+        .ena            (infer_w_wr_en),
+        .wea            (infer_w_wr_en),
+        .addra          (infer_w_wr_addr),
+        .dina           (infer_w_wr_data),
+        .injectsbiterra (1'b0),
+        .injectdbiterra (1'b0),
+        .clkb           (core_clk),
+        .rstb           (1'b0),
+        .enb            (1'b1),
+        .regceb         (1'b1),
+        .addrb          (infer_w_rd_addr_lane1),
+        .doutb          (infer_w_rd_data_lane1),
         .sbiterrb       (),
         .dbiterrb       ()
     );
@@ -1408,6 +1493,37 @@ module top_level(
         .regcea         (1'b1),
         .addra          (csr_col_idx_rd_addr),
         .douta          (csr_col_idx_rd_data),
+        .injectsbiterra (1'b0),
+        .injectdbiterra (1'b0),
+        .sbiterra       (),
+        .dbiterra       ()
+    );
+
+    xpm_memory_sprom #(
+        .ADDR_WIDTH_A(EDGE_ADDR_W),
+        .AUTO_SLEEP_TIME(0),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE("data/csr_col_idx.mem"),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("block"),
+        .MEMORY_SIZE(N_EDGES * COL_IDX_W),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_A(COL_IDX_W),
+        .READ_LATENCY_A(1),
+        .READ_RESET_VALUE_A("0"),
+        .RST_MODE_A("SYNC"),
+        .SIM_ASSERT_CHK(0),
+        .USE_MEM_INIT(1),
+        .WAKEUP_TIME("disable_sleep")
+    ) u_csr_col_idx_bram_lane1 (
+        .sleep          (1'b0),
+        .clka           (core_clk),
+        .rsta           (1'b0),
+        .ena            (1'b1),
+        .regcea         (1'b1),
+        .addra          (csr_col_idx_rd_addr_lane1),
+        .douta          (csr_col_idx_rd_data_lane1),
         .injectsbiterra (1'b0),
         .injectdbiterra (1'b0),
         .sbiterra       (),
@@ -1687,24 +1803,129 @@ module top_level(
         end
     endfunction
 
-    function automatic [31:0] batch_summary_select(input logic [3:0] field_idx);
+    function automatic [31:0] batch_summary_select(input logic [5:0] field_idx);
         begin
             case (field_idx)
-                4'd0: batch_summary_select = batch_cfg_start_sample_idx;
-                4'd1: batch_summary_select = batch_cfg_num_samples;
-                4'd2: batch_summary_select = batch_cfg_seed;
-                4'd3: batch_summary_select = batch_current_sample_idx;
-                4'd4: batch_summary_select = batch_processed_samples;
-                4'd5: batch_summary_select = batch_total_spikes;
-                4'd6: batch_summary_select = batch_correct_count;
-                4'd7: batch_summary_select = batch_elapsed_cycles;
-                4'd8: batch_summary_select = batch_load_cycles;
-                4'd9: batch_summary_select = batch_train_core_cycles;
-                4'd10: batch_summary_select = batch_infer_core_cycles;
-                4'd11: batch_summary_select = batch_label_stats_cycles;
-                4'd12: batch_summary_select = batch_infer_eval_cycles;
-                4'd13: batch_summary_select = batch_other_cycles;
+                6'd0: batch_summary_select = batch_cfg_start_sample_idx;
+                6'd1: batch_summary_select = batch_cfg_num_samples;
+                6'd2: batch_summary_select = batch_cfg_seed;
+                6'd3: batch_summary_select = batch_current_sample_idx;
+                6'd4: batch_summary_select = batch_processed_samples;
+                6'd5: batch_summary_select = batch_total_spikes;
+                6'd6: batch_summary_select = batch_correct_count;
+                6'd7: batch_summary_select = batch_elapsed_cycles[31:0];
+                6'd8: batch_summary_select = batch_load_cycles[31:0];
+                6'd9: batch_summary_select = batch_train_core_cycles[31:0];
+                6'd10: batch_summary_select = batch_infer_core_cycles[31:0];
+                6'd11: batch_summary_select = batch_label_stats_cycles[31:0];
+                6'd12: batch_summary_select = batch_infer_eval_cycles[31:0];
+                6'd13: batch_summary_select = batch_other_cycles[31:0];
+                6'd14: batch_summary_select = batch_train_inject_infer_cycles[31:0];
+                6'd15: batch_summary_select = batch_train_blank_infer_cycles[31:0];
+                6'd16: batch_summary_select = batch_train_snap_cycles[31:0];
+                6'd17: batch_summary_select = batch_train_rebase_cycles[31:0];
+                6'd18: batch_summary_select = batch_train_evt_pre_cycles[31:0];
+                6'd19: batch_summary_select = batch_train_evt_post_cycles[31:0];
+                6'd20: batch_summary_select = batch_train_accum_cycles[31:0];
+                6'd21: batch_summary_select = batch_elapsed_cycles[63:32];
+                6'd22: batch_summary_select = batch_load_cycles[63:32];
+                6'd23: batch_summary_select = batch_train_core_cycles[63:32];
+                6'd24: batch_summary_select = batch_infer_core_cycles[63:32];
+                6'd25: batch_summary_select = batch_label_stats_cycles[63:32];
+                6'd26: batch_summary_select = batch_infer_eval_cycles[63:32];
+                6'd27: batch_summary_select = batch_other_cycles[63:32];
+                6'd28: batch_summary_select = batch_train_inject_infer_cycles[63:32];
+                6'd29: batch_summary_select = batch_train_blank_infer_cycles[63:32];
+                6'd30: batch_summary_select = batch_train_snap_cycles[63:32];
+                6'd31: batch_summary_select = batch_train_rebase_cycles[63:32];
+                6'd32: batch_summary_select = batch_train_evt_pre_cycles[63:32];
+                6'd33: batch_summary_select = batch_train_evt_post_cycles[63:32];
+                6'd34: batch_summary_select = batch_train_accum_cycles[63:32];
                 default: batch_summary_select = 32'd0;
+            endcase
+        end
+    endfunction
+
+    function automatic logic infer_state_is_evt_pre(input infer_state_t state_in);
+        begin
+            case (state_in)
+                INFER_EVT_PRE_PRELIST_REQ,
+                INFER_EVT_PRE_PRELIST_WAIT,
+                INFER_EVT_PRE_PTR0_REQ,
+                INFER_EVT_PRE_PTR0_WAIT,
+                INFER_EVT_PRE_PTR1_REQ,
+                INFER_EVT_PRE_PTR1_WAIT,
+                INFER_EVT_PRE_EDGE_REQ,
+                INFER_EVT_PRE_EDGE_WAIT,
+                INFER_EVT_PRE_TRACE_REQ,
+                INFER_EVT_PRE_TRACE_WAIT,
+                INFER_EVT_PRE_W_WAIT,
+                INFER_EVT_PRE_APPLY,
+                INFER_EVT_PRE_APPLY_MUL1,
+                INFER_EVT_PRE_APPLY_MUL2,
+                INFER_EVT_PRE_APPLY_CLIP,
+                INFER_EVT_PRE_APPLY_WNEXT: infer_state_is_evt_pre = 1'b1;
+                default: infer_state_is_evt_pre = 1'b0;
+            endcase
+        end
+    endfunction
+
+    function automatic logic infer_state_is_evt_post(input infer_state_t state_in);
+        begin
+            case (state_in)
+                INFER_EVT_POST_PTR0_REQ,
+                INFER_EVT_POST_PTR0_WAIT,
+                INFER_EVT_POST_PTR1_REQ,
+                INFER_EVT_POST_PTR1_WAIT,
+                INFER_EVT_POST_EDGE_REQ,
+                INFER_EVT_POST_EDGE_WAIT,
+                INFER_EVT_POST_TRACE_REQ,
+                INFER_EVT_POST_TRACE_WAIT,
+                INFER_EVT_POST_W_WAIT,
+                INFER_EVT_POST_APPLY,
+                INFER_EVT_POST_APPLY_MUL1,
+                INFER_EVT_POST_APPLY_MUL2,
+                INFER_EVT_POST_APPLY_CLIP,
+                INFER_EVT_POST_APPLY_WNEXT: infer_state_is_evt_post = 1'b1;
+                default: infer_state_is_evt_post = 1'b0;
+            endcase
+        end
+    endfunction
+
+    function automatic logic infer_state_is_accum_core(input infer_state_t state_in);
+        begin
+            case (state_in)
+                INFER_GEN_INPUT_SPIKES,
+                INFER_ACCUM_NEURON,
+                INFER_ACCUM_NEURON_GIN_MUL,
+                INFER_ACCUM_NEURON_GIN_MUL_ROUND,
+                INFER_ACCUM_NEURON_GIN_COMB,
+                INFER_ACCUM_NEURON_PIPE,
+                INFER_NEURON_DV_PRE,
+                INFER_NEURON_DV_DRIVE,
+                INFER_NEURON_DV_SYN,
+                INFER_NEURON_DV_SYN_ROUND,
+                INFER_NEURON_VNEXT,
+                INFER_NEURON_SPIKE,
+                INFER_NEURON_THETA_PRE,
+                INFER_NEURON_THETA_ROUND,
+                INFER_NEURON_COMMIT,
+                INFER_NEURON_WRITE,
+                INFER_APPLY_WTA,
+                INFER_APPLY_WTA_PRE,
+                INFER_APPLY_WTA_PRE_MUL,
+                INFER_APPLY_WTA_PRE_ROUND,
+                INFER_APPLY_WTA_INH,
+                INFER_APPLY_WTA_INH_PROD,
+                INFER_APPLY_WTA_INH_MUL,
+                INFER_APPLY_WTA_INH_DV,
+                INFER_APPLY_WTA_INH_VPROP,
+                INFER_APPLY_WTA_INH_POST,
+                INFER_APPLY_WTA_ACCUM,
+                INFER_WTA_PASS2_PRE,
+                INFER_WTA_PASS2,
+                INFER_WTA_PASS2_WRITE: infer_state_is_accum_core = 1'b1;
+                default: infer_state_is_accum_core = 1'b0;
             endcase
         end
     endfunction
@@ -2081,13 +2302,20 @@ module top_level(
             batch_current_sample_idx <= 32'd0;
             batch_total_spikes <= 32'd0;
             batch_correct_count <= 32'd0;
-            batch_elapsed_cycles <= 32'd0;
-            batch_load_cycles <= 32'd0;
-            batch_train_core_cycles <= 32'd0;
-            batch_infer_core_cycles <= 32'd0;
-            batch_label_stats_cycles <= 32'd0;
-            batch_infer_eval_cycles <= 32'd0;
-            batch_other_cycles <= 32'd0;
+            batch_elapsed_cycles <= 64'd0;
+            batch_load_cycles <= 64'd0;
+            batch_train_core_cycles <= 64'd0;
+            batch_infer_core_cycles <= 64'd0;
+            batch_label_stats_cycles <= 64'd0;
+            batch_infer_eval_cycles <= 64'd0;
+            batch_other_cycles <= 64'd0;
+            batch_train_inject_infer_cycles <= 64'd0;
+            batch_train_blank_infer_cycles <= 64'd0;
+            batch_train_snap_cycles <= 64'd0;
+            batch_train_rebase_cycles <= 64'd0;
+            batch_train_evt_pre_cycles <= 64'd0;
+            batch_train_evt_post_cycles <= 64'd0;
+            batch_train_accum_cycles <= 64'd0;
             batch_img_byte_off <= 32'd0;
             batch_img_sector_off <= 32'd0;
             batch_img_byte_in_sector <= 32'd0;
@@ -2201,6 +2429,7 @@ module top_level(
             snap_count_raddr <= '0;
             csr_row_ptr_rd_addr <= '0;
             csr_col_idx_rd_addr <= '0;
+            csr_col_idx_rd_addr_lane1 <= '0;
             csc_col_ptr_rd_addr <= '0;
             csc_row_idx_rd_addr <= '0;
             csc_edge_idx_rd_addr <= '0;
@@ -2221,6 +2450,12 @@ module top_level(
             infer_pre_spike_wr_addr <= 10'd0;
             infer_pre_spike_wr_data <= 1'b0;
             infer_pre_spike_rd_addr <= 10'd0;
+            infer_pre_spike_rd_addr_lane1 <= 10'd0;
+            infer_w_rd_addr_lane1 <= '0;
+            infer_w_rd_data_q_lane1 <= 16'd0;
+            infer_accum_pair_count <= 2'd0;
+            infer_accum_lane0_fire <= 1'b0;
+            infer_accum_lane1_fire <= 1'b0;
             memrd_pending <= 1'b0;
             memrd_wait    <= 1'b0;
             memrd_kind    <= MEMRD_NONE;
@@ -2246,10 +2481,9 @@ module top_level(
             train_xexc_wr_en <= 1'b0;
             train_xpost2_wr_en <= 1'b0;
             batch_status_word <= {batch_phase, batch_error_code, batch_error, batch_done, batch_active, batch_cfg1_valid, batch_cfg0_valid, 6'd0};
-            batch_summary_word <= batch_summary_select(arg0[3:0]);
+            batch_summary_word <= batch_summary_select(arg0[5:0]);
             train_busy_uart_blocked <= TRAIN_ENABLE &&
-                                       (train_trace_active || train_stdp_active || train_gen_active ||
-                                        train_label_stats_active || train_stdp_batch_active || train_chunk_active) &&
+                                       (train_label_stats_active || train_chunk_active) &&
                                        (req_opcode != OP_BATCH_STATUS) &&
                                        (req_opcode != OP_BATCH_READ_SUMMARY);
             ddr_rsp_toggle_core_sync1 <= ddr_rsp_toggle_ddr;
@@ -2260,22 +2494,47 @@ module top_level(
             end
             ddr_req_pending_core_prev <= ddr_req_pending_core;
             if (batch_active) begin
-                batch_elapsed_cycles <= batch_elapsed_cycles + 32'd1;
+                batch_elapsed_cycles <= batch_elapsed_cycles + 64'd1;
                 if ((batch_phase == BATCH_PHASE_LOADING) ||
                     sd_copy_active || imgload_active || imgload_start_pending ||
                     ddr_req_pending_core || ddr_rsp_drain_active_core) begin
-                    batch_load_cycles <= batch_load_cycles + 32'd1;
-                end else if (train_chunk_active || train_trace_active || train_stdp_active ||
-                             train_stdp_batch_active || train_gen_active) begin
-                    batch_train_core_cycles <= batch_train_core_cycles + 32'd1;
+                    batch_load_cycles <= batch_load_cycles + 64'd1;
+                end else if (train_chunk_active) begin
+                    batch_train_core_cycles <= batch_train_core_cycles + 64'd1;
                 end else if (infer_active) begin
-                    batch_infer_core_cycles <= batch_infer_core_cycles + 32'd1;
+                    batch_infer_core_cycles <= batch_infer_core_cycles + 64'd1;
                 end else if (train_label_stats_active) begin
-                    batch_label_stats_cycles <= batch_label_stats_cycles + 32'd1;
+                    batch_label_stats_cycles <= batch_label_stats_cycles + 64'd1;
                 end else if (batch_infer_eval_active) begin
-                    batch_infer_eval_cycles <= batch_infer_eval_cycles + 32'd1;
+                    batch_infer_eval_cycles <= batch_infer_eval_cycles + 64'd1;
                 end else begin
-                    batch_other_cycles <= batch_other_cycles + 32'd1;
+                    batch_other_cycles <= batch_other_cycles + 64'd1;
+                end
+
+                if (batch_cfg_mode_train && train_chunk_active) begin
+                    if (infer_active) begin
+                        if (infer_force_no_input) begin
+                            batch_train_blank_infer_cycles <= batch_train_blank_infer_cycles + 64'd1;
+                        end else begin
+                            batch_train_inject_infer_cycles <= batch_train_inject_infer_cycles + 64'd1;
+                        end
+                        if (infer_state_is_evt_pre(infer_state)) begin
+                            batch_train_evt_pre_cycles <= batch_train_evt_pre_cycles + 64'd1;
+                        end else if (infer_state_is_evt_post(infer_state)) begin
+                            batch_train_evt_post_cycles <= batch_train_evt_post_cycles + 64'd1;
+                        end else if (infer_state_is_accum_core(infer_state)) begin
+                            batch_train_accum_cycles <= batch_train_accum_cycles + 64'd1;
+                        end
+                    end else begin
+                        case (train_chunk_state)
+                            TCK_SNAP_COPY_INIT,
+                            TCK_SNAP_COPY_WAIT,
+                            TCK_SNAP_COPY_WRITE: batch_train_snap_cycles <= batch_train_snap_cycles + 64'd1;
+                            TCK_REBASE_GIN_INIT,
+                            TCK_REBASE_GIN_RUN: batch_train_rebase_cycles <= batch_train_rebase_cycles + 64'd1;
+                            default: begin end
+                        endcase
+                    end
                 end
             end
             if (ddr_rsp_drain_active_core && !ddr_req_pending_core) begin
@@ -2751,17 +3010,10 @@ module top_level(
                     end
                 end else begin
                     // Generic DDR read/write response path (non-SD, non-imgload, non-train-kernel).
-                    // During TRAIN_RUN_CHUNK phase1 prelist staging, a single generic DDR write is issued
-                    // intentionally; consume its ACK silently so only the coarse chunk completion response
-                    // is visible to the host.
-                    if (TRAIN_ENABLE && train_chunk_active && (train_chunk_state == TCK_PRELIST_WRITE_WAIT)) begin
-                        // consume ACK silently during chunk prelist staging
-                    end else begin
-                        resp_status    <= ddr_resp_status_core;
-                        resp_result    <= ddr_resp_rdata_core;
-                        resp_checksum  <= 8'h00;
-                        response_ready <= 1'b1;
-                    end
+                    resp_status    <= ddr_resp_status_core;
+                    resp_result    <= ddr_resp_rdata_core;
+                    resp_checksum  <= 8'h00;
+                    response_ready <= 1'b1;
                 end
             end
             end
@@ -3488,35 +3740,6 @@ module top_level(
                             train_chunk_state <= TCK_SNAP_COPY_WAIT;
                         end
                     end
-                    TCK_PICK_WINNER_INIT: begin
-                        train_chunk_winner_scan_idx  <= 7'd0;
-                        train_chunk_winner_best_idx  <= 7'd0;
-                        train_chunk_winner_best_count<= 16'd0;
-                        train_chunk_winner_scan_phase <= 1'b0;
-                        snap_count_raddr <= 7'd0;
-                        train_chunk_pre_from_infer   <= 10'd0;
-                        train_chunk_state <= TCK_PICK_WINNER_SCAN;
-                    end
-                    TCK_PICK_WINNER_SCAN: begin
-                        if (!train_chunk_winner_scan_phase) begin
-                            train_chunk_winner_scan_phase <= 1'b1;
-                        end else begin
-                            // Match numpy.argmax tie-break: keep earliest index on equal counts.
-                            if (snap_count_rdata > train_chunk_winner_best_count) begin
-                                train_chunk_winner_best_count <= snap_count_rdata;
-                                train_chunk_winner_best_idx   <= train_chunk_winner_scan_idx;
-                            end
-                            if (train_chunk_winner_scan_idx == (N_NEURONS - 1)) begin
-                                train_chunk_winner <= train_chunk_winner_best_idx;
-                                train_chunk_state  <= TCK_PRELIST_BUILD_INIT;
-                                train_chunk_winner_scan_phase <= 1'b0;
-                            end else begin
-                                train_chunk_winner_scan_idx <= train_chunk_winner_scan_idx + 7'd1;
-                                snap_count_raddr <= train_chunk_winner_scan_idx + 7'd1;
-                                train_chunk_winner_scan_phase <= 1'b0;
-                            end
-                        end
-                    end
                     TCK_BLANK_INFER_START: begin
                         if (raw_image_compute_valid && (raw_bytes_per_image == 32'd784) && (raw_image_compute_sum_u8 != 32'd0)) begin
                             infer_active       <= 1'b1;
@@ -3554,143 +3777,6 @@ module top_level(
                                 response_ready <= 1'b0;
                             end
                             train_chunk_state <= TCK_DONE;
-                        end
-                    end
-                    TCK_GEN_XIN_START: begin
-                        if (train_chunk_steps_left == 16'd0) begin
-                            train_chunk_state <= TCK_STDP_START;
-                        end else begin
-                            train_gen_active      <= 1'b1;
-                            train_gen_state       <= TGK_WRITE_REQ;
-                            train_gen_idx         <= 16'd0;
-                            train_gen_lcg_state   <= train_chunk_seed_xin;
-                            train_gen_curr_word   <= train_gen_word_from_state(train_chunk_seed_xin);
-                            train_gen_lcg_enable  <= 1'b1;
-                            train_gen_cache_mode  <= 2'd1;
-                            train_xin_cache_valid <= 1'b0;
-                            train_gen_base_word   <= TRAIN_BASE_XIN_WORK_WORDS;
-                            train_gen_count_total <= N_IN[15:0];
-                            train_chunk_state     <= TCK_GEN_XIN_WAIT;
-                        end
-                    end
-                    TCK_GEN_XIN_WAIT: begin
-                        if (!train_gen_active) begin
-                            // Use generator terminal state directly to avoid extra LCG multiply on this path.
-                            train_chunk_seed_xin <= train_gen_lcg_state;
-                            train_chunk_state <= TCK_GEN_XEXC_START;
-                        end
-                    end
-                    TCK_GEN_XEXC_START: begin
-                        train_gen_active       <= 1'b1;
-                        train_gen_state        <= TGK_WRITE_REQ;
-                        train_gen_idx          <= 16'd0;
-                        train_gen_lcg_state    <= train_chunk_seed_xexc;
-                        train_gen_curr_word    <= train_gen_word_from_state(train_chunk_seed_xexc);
-                        train_gen_lcg_enable   <= 1'b1;
-                        train_gen_cache_mode   <= 2'd2;
-                        train_xexc_cache_valid <= 1'b0;
-                        train_gen_base_word    <= TRAIN_BASE_XEXC_WORK_WORDS;
-                        train_gen_count_total  <= N_NEURONS[15:0];
-                        train_chunk_state      <= TCK_GEN_XEXC_WAIT;
-                    end
-                    TCK_GEN_XEXC_WAIT: begin
-                        if (!train_gen_active) begin
-                            // Use generator terminal state directly to avoid extra LCG multiply on this path.
-                            train_chunk_seed_xexc <= train_gen_lcg_state;
-                            train_chunk_state <= TCK_PRELIST_BUILD_INIT;
-                        end
-                    end
-                    TCK_PRELIST_BUILD_INIT: begin
-                        train_chunk_pre_scan_idx    <= 10'd0;
-                        train_chunk_pre_write_count <= 10'd0;
-                        infer_pre_rd_addr           <= 10'd0;
-                        train_chunk_state           <= TCK_PRELIST_BUILD_PRIME;
-                    end
-                    TCK_PRELIST_BUILD_PRIME: begin
-                        train_chunk_state           <= TCK_PRELIST_BUILD_SCAN;
-                    end
-                    TCK_PRELIST_BUILD_SCAN: begin
-                        if (train_chunk_pre_scan_idx >= infer_pre_active_count) begin
-                            train_chunk_state <= TCK_TRACE_START;
-                        end else begin
-                            train_chunk_pre_from_infer <= infer_pre_rd_data;
-                            train_chunk_state <= TCK_PRELIST_WRITE_REQ;
-                        end
-                    end
-                    TCK_PRELIST_WRITE_REQ: begin
-                        ddr_req_pending_core      <= 1'b1;
-                        ddr_req_we_core           <= 1'b1;
-                        ddr_req_from_sd_core      <= 1'b0;
-                        ddr_req_from_imgload_core <= 1'b0;
-                        ddr_req_from_train_core   <= 1'b0; // generic write path response is fine; chunk waits on ddr_req_pending_core
-                        ddr_req_kind_core        <= DDR_REQ_GENERIC;
-                        ddr_req_addr_word_core    <= TRAIN_BASE_PRELIST_WORK_WORDS + {22'd0, train_chunk_pre_write_count};
-                        ddr_req_wdata_core        <= {22'd0, train_chunk_pre_from_infer};
-                        ddr_req_wide_core         <= 1'b0;
-                        ddr_req_wdata128_core     <= 128'd0;
-                        ddr_req_sel16_core        <= 16'd0;
-                        ddr_req_word_count_core   <= 3'd1;
-                        ddr_req_toggle_core       <= ~ddr_req_toggle_core;
-                        train_chunk_state         <= TCK_PRELIST_WRITE_WAIT;
-                    end
-                    TCK_PRELIST_WRITE_WAIT: begin
-                        if (!ddr_req_pending_core) begin
-                            if (response_ready && (resp_status == STATUS_OK)) begin
-                                response_ready <= 1'b0;
-                            end
-                            train_chunk_pre_write_count <= train_chunk_pre_write_count + 10'd1;
-                            train_chunk_pre_scan_idx    <= train_chunk_pre_scan_idx + 10'd1;
-                            infer_pre_rd_addr           <= train_chunk_pre_scan_idx + 10'd1;
-                            train_chunk_state <= TCK_PRELIST_BUILD_PRIME;
-                        end
-                    end
-                    TCK_TRACE_START: begin
-                        train_trace_active <= 1'b1;
-                        train_winner_idx   <= train_chunk_winner;
-                        train_pre_count    <= train_chunk_pre_write_count;
-                        train_trace_use_infer_prelist <= 1'b0;
-                        train_trace_skip_a <= 1'b0;
-                        train_trace_skip_b <= 1'b0;
-                        train_trace_multi_post_active <= 1'b0;
-                        train_trace_post_scan_idx <= 7'd0;
-                        train_a_idx        <= 10'd0;
-                        train_pre_idx      <= 10'd0;
-                        train_b_col_idx    <= 7'd0;
-                        train_curr_pre     <= 10'd0;
-                        train_tmp_x_val    <= 32'd0;
-                        train_tmp_mem_val  <= 32'd0;
-                        train_trace_a_row_base <= TRAIN_BASE_A_Q16_WORDS + ({25'd0, train_chunk_winner} * N_IN);
-                        train_trace_bt_pre_base <= TRAIN_BASE_BT_Q16_WORDS;
-                        train_trace_state  <= TRK_A_READ_X_REQ;
-                        train_chunk_state  <= TCK_TRACE_WAIT;
-                    end
-                    TCK_TRACE_WAIT: begin
-                        if (!train_trace_active) begin
-                            train_chunk_state <= TCK_STDP_START;
-                        end
-                    end
-                    TCK_STDP_START: begin
-                        train_stdp_update_nt <= {16'd0, train_chunk_steps_left};
-                        train_stdp_batch_active    <= 1'b1;
-                        train_stdp_active          <= 1'b1;
-                        train_stdp_row0            <= 7'd0;
-                        train_stdp_row_end         <= N_NEURONS[6:0];
-                        train_stdp_row_idx         <= 7'd0;
-                        train_stdp_col_idx         <= 10'd0;
-                        train_stdp_w_val           <= 32'sd0;
-                        train_stdp_a_val           <= 32'sd0;
-                        train_stdp_bt_val          <= 32'sd0;
-                        train_stdp_w_new           <= 32'sd0;
-                        train_stdp_row_sum_abs     <= 32'd0;
-                        train_stdp_w_row_base      <= TRAIN_BASE_W_Q16_WORDS;
-                        train_stdp_a_row_base      <= TRAIN_BASE_A_Q16_WORDS;
-                        train_stdp_bt_col_base     <= TRAIN_BASE_BT_Q16_WORDS;
-                        train_stdp_state           <= TSK_SUM_READ_W_REQ;
-                        train_chunk_state          <= TCK_STDP_WAIT;
-                    end
-                    TCK_STDP_WAIT: begin
-                        if (!train_stdp_active && !train_stdp_batch_active) begin
-                            train_chunk_state <= TCK_REBASE_GIN_INIT;
                         end
                     end
                     TCK_REBASE_GIN_INIT: begin
@@ -4443,13 +4529,20 @@ module top_level(
                                         batch_current_sample_idx <= batch_cfg_start_sample_idx;
                                         batch_total_spikes <= 32'd0;
                                         batch_correct_count <= 32'd0;
-                                        batch_elapsed_cycles <= 32'd0;
-                                        batch_load_cycles <= 32'd0;
-                                        batch_train_core_cycles <= 32'd0;
-                                        batch_infer_core_cycles <= 32'd0;
-                                        batch_label_stats_cycles <= 32'd0;
-                                        batch_infer_eval_cycles <= 32'd0;
-                                        batch_other_cycles <= 32'd0;
+                                        batch_elapsed_cycles <= 64'd0;
+                                        batch_load_cycles <= 64'd0;
+                                        batch_train_core_cycles <= 64'd0;
+                                        batch_infer_core_cycles <= 64'd0;
+                                        batch_label_stats_cycles <= 64'd0;
+                                        batch_infer_eval_cycles <= 64'd0;
+                                        batch_other_cycles <= 64'd0;
+                                        batch_train_inject_infer_cycles <= 64'd0;
+                                        batch_train_blank_infer_cycles <= 64'd0;
+                                        batch_train_snap_cycles <= 64'd0;
+                                        batch_train_rebase_cycles <= 64'd0;
+                                        batch_train_evt_pre_cycles <= 64'd0;
+                                        batch_train_evt_post_cycles <= 64'd0;
+                                        batch_train_accum_cycles <= 64'd0;
                                         batch_img_byte_off <= RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + (batch_cfg_start_sample_idx * RAW1_BYTES_PER_IMAGE);
                                         batch_img_sector_off <= (RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + (batch_cfg_start_sample_idx * RAW1_BYTES_PER_IMAGE)) / 32'd512;
                                         batch_img_byte_in_sector <= (RAW1_HEADER_BYTES + RAW1_NUM_IMAGES + (batch_cfg_start_sample_idx * RAW1_BYTES_PER_IMAGE)) % 32'd512;
@@ -5009,40 +5102,61 @@ module top_level(
                                 infer_state <= INFER_ACCUM_NEURON_GIN_MUL;
                             end else begin
                                 csr_col_idx_rd_addr <= infer_evt_edge_idx;
+                                if ((infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}}, 1'b1}) < csr_row_ptr_rd_data[W_ADDR_W-1:0]) begin
+                                    csr_col_idx_rd_addr_lane1 <= infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}}, 1'b1};
+                                    infer_accum_pair_count <= 2'd2;
+                                end else begin
+                                    csr_col_idx_rd_addr_lane1 <= infer_evt_edge_idx;
+                                    infer_accum_pair_count <= 2'd1;
+                                end
                                 infer_accum_weight_phase <= 3'd3;
                             end
                         end else if (infer_accum_weight_phase == 3'd3) begin
                             infer_pre_spike_rd_addr <= {3'd0, csr_col_idx_rd_data};
+                            infer_pre_spike_rd_addr_lane1 <= {3'd0, csr_col_idx_rd_data_lane1};
                             infer_accum_weight_phase <= 3'd4;
                         end else if (infer_accum_weight_phase == 3'd4) begin
+                            infer_accum_lane0_fire <= infer_pre_spike_rd_data;
+                            infer_accum_lane1_fire <= (infer_accum_pair_count == 2'd2) && infer_pre_spike_rd_data_lane1;
                             if (infer_pre_spike_rd_data) begin
                                 infer_w_rd_addr <= infer_evt_edge_idx;
-                                infer_accum_weight_phase <= 3'd5;
-                            end else begin
-                                if ((infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1}) >= infer_evt_edge_end) begin
-                                    infer_delay_pipe_valid <= 1'b1;
-                                    infer_delay_pipe_idx <= infer_neuron_idx;
-                                    infer_accum_weight_phase <= 3'd0;
-                                    infer_state <= INFER_ACCUM_NEURON_GIN_MUL;
-                                end else begin
-                                    infer_evt_edge_idx <= infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1};
-                                    csr_col_idx_rd_addr <= infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1};
-                                    infer_accum_weight_phase <= 3'd3;
-                                end
                             end
+                            if ((infer_accum_pair_count == 2'd2) && infer_pre_spike_rd_data_lane1) begin
+                                infer_w_rd_addr_lane1 <= infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}}, 1'b1};
+                            end
+                            infer_accum_weight_phase <= 3'd5;
                         end else if (infer_accum_weight_phase == 3'd5) begin
                             // weight BRAM read latency fill cycle.
                             infer_accum_weight_phase <= 3'd6;
                         end else begin
-                            infer_accum <= infer_accum + $signed({16'd0, infer_w_rd_data_q});
-                            if ((infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1}) >= infer_evt_edge_end) begin
+                            logic signed [31:0] accum_delta_q16;
+                            logic [EDGE_ADDR_W-1:0] infer_evt_edge_next;
+                            accum_delta_q16 = 32'sd0;
+                            if (infer_accum_lane0_fire) begin
+                                accum_delta_q16 = accum_delta_q16 + $signed({16'd0, infer_w_rd_data_q});
+                            end
+                            if (infer_accum_lane1_fire) begin
+                                accum_delta_q16 = accum_delta_q16 + $signed({16'd0, infer_w_rd_data_q_lane1});
+                            end
+                            infer_accum <= infer_accum + accum_delta_q16;
+                            infer_evt_edge_next = infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}}, infer_accum_pair_count};
+                            infer_accum_lane0_fire <= 1'b0;
+                            infer_accum_lane1_fire <= 1'b0;
+                            if (infer_evt_edge_next >= infer_evt_edge_end) begin
                                 infer_delay_pipe_valid <= 1'b1;
                                 infer_delay_pipe_idx <= infer_neuron_idx;
                                 infer_accum_weight_phase <= 3'd0;
                                 infer_state <= INFER_ACCUM_NEURON_GIN_MUL;
                             end else begin
-                                infer_evt_edge_idx <= infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1};
-                                csr_col_idx_rd_addr <= infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1};
+                                infer_evt_edge_idx <= infer_evt_edge_next;
+                                csr_col_idx_rd_addr <= infer_evt_edge_next;
+                                if ((infer_evt_edge_next + {{(W_ADDR_W-1){1'b0}}, 1'b1}) < infer_evt_edge_end) begin
+                                    csr_col_idx_rd_addr_lane1 <= infer_evt_edge_next + {{(W_ADDR_W-1){1'b0}}, 1'b1};
+                                    infer_accum_pair_count <= 2'd2;
+                                end else begin
+                                    csr_col_idx_rd_addr_lane1 <= infer_evt_edge_next;
+                                    infer_accum_pair_count <= 2'd1;
+                                end
                                 infer_accum_weight_phase <= 3'd3;
                             end
                         end
