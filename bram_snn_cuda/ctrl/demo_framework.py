@@ -18,9 +18,6 @@ class DemoSessionInfo:
 class DemoBackend(Protocol):
     name: str
 
-    def open(self) -> object:
-        ...
-
     def query_session_info(self, handle: object, plan: DemoCompilePlan) -> DemoSessionInfo:
         ...
 
@@ -30,29 +27,6 @@ class DemoBackend(Protocol):
 
 class FpgaDemoBackend:
     name = "fpga_uart"
-
-    def open(self) -> fpga.serial.Serial:
-        if fpga.serial is None:
-            raise RuntimeError(
-                "pyserial is not installed. Install it to use FPGA communication paths."
-            )
-        ser = fpga.serial.Serial(
-            self._port_placeholder,
-            fpga.BAUD,
-            timeout=fpga.TIMEOUT_SEC,
-            write_timeout=fpga.WRITE_TIMEOUT_SEC,
-        )
-        fpga.time.sleep(0.05)
-        try:
-            ser.reset_input_buffer()
-            ser.reset_output_buffer()
-        except Exception:
-            pass
-        return ser
-
-    @property
-    def _port_placeholder(self) -> str:
-        raise RuntimeError("FpgaDemoBackend.open() must be called through DemoRunner")
 
     def open_for_port(self, port: str) -> fpga.serial.Serial:
         if fpga.serial is None:

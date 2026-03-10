@@ -6,14 +6,9 @@ from types import SimpleNamespace
 import use_fpga_calc as fpga
 
 from demo_ir import ModelIR, lower_model_to_ir
-from snn_api import ArtifactConfig, DatasetConfig, RunConfig, SNNModel, create_fixed_mnist_stdp_model
+from snn_api import ArtifactConfig, DatasetConfig, RunConfig, SNNModel
 
 RAW1_BYTES_PER_IMAGE = 784
-
-
-def _dict_get(data: dict[str, object], key: str, default: object) -> object:
-    value = data.get(key, default)
-    return default if value is None else value
 
 
 @dataclass(frozen=True)
@@ -95,33 +90,6 @@ class DemoCompilePlan:
         }
 
 
-def model_from_config(config: dict[str, object]) -> SNNModel:
-    network_cfg = config.get("network")
-    dataset_cfg = config.get("dataset")
-    execution_cfg = config.get("execution")
-    artifacts_cfg = config.get("artifacts")
-
-    if not isinstance(network_cfg, dict):
-        network_cfg = {}
-    if not isinstance(dataset_cfg, dict):
-        dataset_cfg = {}
-    if not isinstance(execution_cfg, dict):
-        execution_cfg = {}
-    if not isinstance(artifacts_cfg, dict):
-        artifacts_cfg = {}
-
-    return create_fixed_mnist_stdp_model(
-        name=str(_dict_get(network_cfg, "name", "diehl_cook_fpga_demo")),
-        port=str(_dict_get(execution_cfg, "port", config.get("port", fpga.SERIAL_PORTNAME))),
-        start_lba=int(_dict_get(dataset_cfg, "start_lba", config.get("start_lba", 2048))),
-        train_samples=int(_dict_get(execution_cfg, "train_samples", config.get("train_samples", 100))),
-        infer_samples=int(_dict_get(execution_cfg, "infer_samples", config.get("infer_samples", 20))),
-        timeout_sec=float(_dict_get(execution_cfg, "timeout_sec", config.get("timeout", 180.0))),
-        seed=int(_dict_get(execution_cfg, "seed", config.get("seed", 0x12345678))),
-        output_path=str(_dict_get(artifacts_cfg, "output_path", config.get("output", "ctrl/demo_result.json"))),
-    )
-
-
 def model_spec_from_model(model: SNNModel, *, source_kind: str) -> DemoModelSpec:
     n_neurons = 0
     for group in model.neuron_groups:
@@ -142,11 +110,6 @@ def model_spec_from_model(model: SNNModel, *, source_kind: str) -> DemoModelSpec
         source_kind=source_kind,
     )
     return spec
-
-
-def model_spec_from_config(config: dict[str, object]) -> DemoModelSpec:
-    return model_spec_from_model(model_from_config(config), source_kind="config")
-
 
 def _build_runtime_steps(mode: str) -> tuple[RuntimeStep, ...]:
     steps = [

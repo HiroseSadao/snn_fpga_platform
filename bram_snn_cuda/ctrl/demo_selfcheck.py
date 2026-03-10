@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
-from demo_compiler import compile_demo_spec, model_from_config, model_spec_from_model
+from demo_compiler import compile_demo_spec, model_spec_from_model
 from mnist_stdp_fixed_demo import build_model
 
 
@@ -22,14 +21,6 @@ def _check_plan(label: str, plan) -> None:
 
 
 def main() -> None:
-    config_path = Path(__file__).resolve().parent / "demo_config.json"
-    with config_path.open("r", encoding="utf-8") as fh:
-        config = json.load(fh)
-
-    spec_from_config = model_spec_from_model(model_from_config(config), source_kind="config")
-    plan_from_config = compile_demo_spec(spec_from_config)
-    _check_plan("config", plan_from_config)
-
     spec_from_model = model_spec_from_model(build_model(), source_kind="python_model")
     plan_from_model = compile_demo_spec(spec_from_model)
     _check_plan("python_model", plan_from_model)
