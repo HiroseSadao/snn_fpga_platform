@@ -1,7 +1,4 @@
 {
-  "accuracy": 0.08,
-  "backend": "fpga_uart",
-  "caps_hex": "0x00017F0F",
   "compiler_plan": {
     "batch_train_only": false,
     "batch_train_then_infer": true,
@@ -184,25 +181,7 @@
       "source_kind": "python_model"
     }
   },
-  "correct": 8,
-  "cycle_breakdown": {
-    "infer_core": 230963050,
-    "infer_eval": 19100,
-    "label_stats": 0,
-    "load": 30544618,
-    "other": 0,
-    "train_core": 0
-  },
-  "dataset_name": "mnist",
-  "elapsed_cycles": 261526768,
-  "elapsed_sec": 2.61526768,
-  "infer_samples": 100,
-  "mode": "train-then-infer",
-  "network_name": "mnist_stdp_fixed_demo",
-  "port": "COM7",
-  "seed": 305419896,
-  "start_lba": 2048,
-  "status": "ok",
-  "timeout_sec": 600.0,
-  "train_samples": 500
+  "error_message": "BATCH_READ_SUMMARY[40]: FPGA rejected packet (BAD_PACKET). BATCH_READ_SUMMARY[40]: opcode=0x44 args=[40, 0] req=[A5 01 44 02 28 00 00 00 00 00 00 00 6F] resp=[5A E1 00 00 00 31 D0] result=0x31000000 retry_attempt=0. decoded=reason=0x31, opcode=0x00, arg0_lo16=0x0000",
+  "error_type": "RuntimeError",
+  "status": "error"
 }

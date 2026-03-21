@@ -541,9 +541,16 @@ module top_level(
     logic [31:0] batch_prefetch_img_sector_off;
     logic [31:0] batch_prefetch_img_byte_in_sector;
     logic [31:0] batch_prefetch_img_sectors_needed;
+    logic [31:0] batch_prefetch_lba;
+    logic        batch_sd_issue_pending;
+    logic [31:0] batch_sd_issue_lba;
+    logic [31:0] batch_sd_issue_sectors;
+    logic [31:0] batch_sd_issue_dest_base_word;
     logic        sd_copy_resp_pending;
     logic [7:0]  sd_copy_resp_status;
     logic signed [31:0] sd_copy_resp_result;
+    logic        infer_done_resp_pending;
+    logic signed [31:0] infer_done_resp_result;
     logic        raw_image_compute_valid;
     logic [31:0] raw_image_compute_sum_u8;
     logic [7:0]  raw_image_compute_rd_data;
@@ -778,7 +785,7 @@ module top_level(
     logic        infer_active;
     infer_state_t infer_state;
     logic [31:0] infer_steps_target;
-    logic [15:0] infer_step_idx;
+    logic [31:0] infer_step_idx;
     logic [6:0]  infer_neuron_idx;
     logic [9:0]  infer_input_idx;
     logic [9:0]  infer_prep_idx;
@@ -1461,197 +1468,6 @@ module top_level(
         .dbiterrb       ()
     );
 
-    // CSR row pointer: [N_NEURONS+1], entries are edge offsets into csr_w/csr_col_idx.
-    xpm_memory_sprom #(
-        .ADDR_WIDTH_A(ROW_IDX_W + 1),
-        .AUTO_SLEEP_TIME(0),
-        .ECC_MODE("no_ecc"),
-        .MEMORY_INIT_FILE("data/csr_row_ptr_dense.mem"),
-        .MEMORY_INIT_PARAM("0"),
-        .MEMORY_OPTIMIZATION("true"),
-        .MEMORY_PRIMITIVE("block"),
-        .MEMORY_SIZE((N_NEURONS + 1) * CSR_ROW_PTR_W),
-        .MESSAGE_CONTROL(0),
-        .READ_DATA_WIDTH_A(CSR_ROW_PTR_W),
-        .READ_LATENCY_A(1),
-        .READ_RESET_VALUE_A("0"),
-        .RST_MODE_A("SYNC"),
-        .SIM_ASSERT_CHK(0),
-        .USE_MEM_INIT(1),
-        .WAKEUP_TIME("disable_sleep")
-    ) u_csr_row_ptr_bram (
-        .sleep          (1'b0),
-        .clka           (core_clk),
-        .rsta           (1'b0),
-        .ena            (1'b1),
-        .regcea         (1'b1),
-        .addra          (csr_row_ptr_rd_addr),
-        .douta          (csr_row_ptr_rd_data),
-        .injectsbiterra (1'b0),
-        .injectdbiterra (1'b0),
-        .sbiterra       (),
-        .dbiterra       ()
-    );
-
-    // CSR col index: [N_EDGES], input index for each edge.
-    xpm_memory_sprom #(
-        .ADDR_WIDTH_A(EDGE_ADDR_W),
-        .AUTO_SLEEP_TIME(0),
-        .ECC_MODE("no_ecc"),
-        .MEMORY_INIT_FILE("data/csr_col_idx_dense.mem"),
-        .MEMORY_INIT_PARAM("0"),
-        .MEMORY_OPTIMIZATION("true"),
-        .MEMORY_PRIMITIVE("block"),
-        .MEMORY_SIZE(N_EDGES * COL_IDX_W),
-        .MESSAGE_CONTROL(0),
-        .READ_DATA_WIDTH_A(COL_IDX_W),
-        .READ_LATENCY_A(1),
-        .READ_RESET_VALUE_A("0"),
-        .RST_MODE_A("SYNC"),
-        .SIM_ASSERT_CHK(0),
-        .USE_MEM_INIT(1),
-        .WAKEUP_TIME("disable_sleep")
-    ) u_csr_col_idx_bram (
-        .sleep          (1'b0),
-        .clka           (core_clk),
-        .rsta           (1'b0),
-        .ena            (1'b1),
-        .regcea         (1'b1),
-        .addra          (csr_col_idx_rd_addr),
-        .douta          (csr_col_idx_rd_data),
-        .injectsbiterra (1'b0),
-        .injectdbiterra (1'b0),
-        .sbiterra       (),
-        .dbiterra       ()
-    );
-
-    xpm_memory_sprom #(
-        .ADDR_WIDTH_A(EDGE_ADDR_W),
-        .AUTO_SLEEP_TIME(0),
-        .ECC_MODE("no_ecc"),
-        .MEMORY_INIT_FILE("data/csr_col_idx_dense.mem"),
-        .MEMORY_INIT_PARAM("0"),
-        .MEMORY_OPTIMIZATION("true"),
-        .MEMORY_PRIMITIVE("block"),
-        .MEMORY_SIZE(N_EDGES * COL_IDX_W),
-        .MESSAGE_CONTROL(0),
-        .READ_DATA_WIDTH_A(COL_IDX_W),
-        .READ_LATENCY_A(1),
-        .READ_RESET_VALUE_A("0"),
-        .RST_MODE_A("SYNC"),
-        .SIM_ASSERT_CHK(0),
-        .USE_MEM_INIT(1),
-        .WAKEUP_TIME("disable_sleep")
-    ) u_csr_col_idx_bram_lane1 (
-        .sleep          (1'b0),
-        .clka           (core_clk),
-        .rsta           (1'b0),
-        .ena            (1'b1),
-        .regcea         (1'b1),
-        .addra          (csr_col_idx_rd_addr_lane1),
-        .douta          (csr_col_idx_rd_data_lane1),
-        .injectsbiterra (1'b0),
-        .injectdbiterra (1'b0),
-        .sbiterra       (),
-        .dbiterra       ()
-    );
-
-    // CSC col pointer: [N_IN+1], reverse index range for each pre neuron.
-    xpm_memory_sprom #(
-        .ADDR_WIDTH_A(COL_IDX_W + 1),
-        .AUTO_SLEEP_TIME(0),
-        .ECC_MODE("no_ecc"),
-        .MEMORY_INIT_FILE("data/csc_col_ptr_dense.mem"),
-        .MEMORY_INIT_PARAM("0"),
-        .MEMORY_OPTIMIZATION("true"),
-        .MEMORY_PRIMITIVE("block"),
-        .MEMORY_SIZE((N_IN + 1) * CSR_ROW_PTR_W),
-        .MESSAGE_CONTROL(0),
-        .READ_DATA_WIDTH_A(CSR_ROW_PTR_W),
-        .READ_LATENCY_A(1),
-        .READ_RESET_VALUE_A("0"),
-        .RST_MODE_A("SYNC"),
-        .SIM_ASSERT_CHK(0),
-        .USE_MEM_INIT(1),
-        .WAKEUP_TIME("disable_sleep")
-    ) u_csc_col_ptr_bram (
-        .sleep          (1'b0),
-        .clka           (core_clk),
-        .rsta           (1'b0),
-        .ena            (1'b1),
-        .regcea         (1'b1),
-        .addra          (csc_col_ptr_rd_addr),
-        .douta          (csc_col_ptr_rd_data),
-        .injectsbiterra (1'b0),
-        .injectdbiterra (1'b0),
-        .sbiterra       (),
-        .dbiterra       ()
-    );
-
-    // CSC row index: [N_EDGES], post neuron index for each reverse entry.
-    xpm_memory_sprom #(
-        .ADDR_WIDTH_A(EDGE_ADDR_W),
-        .AUTO_SLEEP_TIME(0),
-        .ECC_MODE("no_ecc"),
-        .MEMORY_INIT_FILE("data/csc_row_idx_dense.mem"),
-        .MEMORY_INIT_PARAM("0"),
-        .MEMORY_OPTIMIZATION("true"),
-        .MEMORY_PRIMITIVE("block"),
-        .MEMORY_SIZE(N_EDGES * ROW_IDX_W),
-        .MESSAGE_CONTROL(0),
-        .READ_DATA_WIDTH_A(ROW_IDX_W),
-        .READ_LATENCY_A(1),
-        .READ_RESET_VALUE_A("0"),
-        .RST_MODE_A("SYNC"),
-        .SIM_ASSERT_CHK(0),
-        .USE_MEM_INIT(1),
-        .WAKEUP_TIME("disable_sleep")
-    ) u_csc_row_idx_bram (
-        .sleep          (1'b0),
-        .clka           (core_clk),
-        .rsta           (1'b0),
-        .ena            (1'b1),
-        .regcea         (1'b1),
-        .addra          (csc_row_idx_rd_addr),
-        .douta          (csc_row_idx_rd_data),
-        .injectsbiterra (1'b0),
-        .injectdbiterra (1'b0),
-        .sbiterra       (),
-        .dbiterra       ()
-    );
-
-    // CSC edge index: [N_EDGES], mapping reverse entry -> edge index in infer_w (CSR w array).
-    xpm_memory_sprom #(
-        .ADDR_WIDTH_A(EDGE_ADDR_W),
-        .AUTO_SLEEP_TIME(0),
-        .ECC_MODE("no_ecc"),
-        .MEMORY_INIT_FILE("data/csc_edge_idx_dense.mem"),
-        .MEMORY_INIT_PARAM("0"),
-        .MEMORY_OPTIMIZATION("true"),
-        .MEMORY_PRIMITIVE("block"),
-        .MEMORY_SIZE(N_EDGES * EDGE_ADDR_W),
-        .MESSAGE_CONTROL(0),
-        .READ_DATA_WIDTH_A(EDGE_ADDR_W),
-        .READ_LATENCY_A(1),
-        .READ_RESET_VALUE_A("0"),
-        .RST_MODE_A("SYNC"),
-        .SIM_ASSERT_CHK(0),
-        .USE_MEM_INIT(1),
-        .WAKEUP_TIME("disable_sleep")
-    ) u_csc_edge_idx_bram (
-        .sleep          (1'b0),
-        .clka           (core_clk),
-        .rsta           (1'b0),
-        .ena            (1'b1),
-        .regcea         (1'b1),
-        .addra          (csc_edge_idx_rd_addr),
-        .douta          (csc_edge_idx_rd_data),
-        .injectsbiterra (1'b0),
-        .injectdbiterra (1'b0),
-        .sbiterra       (),
-        .dbiterra       ()
-    );
-
     uart_rx #(
         .CLKS_PER_BIT(CLKS_PER_BIT)
     ) u_uart_rx (
@@ -1867,8 +1683,29 @@ module top_level(
                 6'd32: batch_summary_select = batch_train_evt_pre_cycles[63:32];
                 6'd33: batch_summary_select = batch_train_evt_post_cycles[63:32];
                 6'd34: batch_summary_select = batch_train_accum_cycles[63:32];
+                6'd35: batch_summary_select = {24'd0, train_chunk_state};
+                6'd36: batch_summary_select = {24'd0, infer_state};
+                6'd37: batch_summary_select = {29'd0, train_rebase_phase};
+                6'd38: batch_summary_select = {25'd0, train_rebase_neuron_idx};
+                6'd39: batch_summary_select = train_rebase_edge_idx;
+                6'd40: batch_summary_select = train_rebase_edge_end;
                 default: batch_summary_select = 32'd0;
             endcase
+        end
+    endfunction
+
+    function automatic [W_ADDR_W-1:0] dense_weight_addr(
+        input logic [6:0] post_idx,
+        input logic [9:0] pre_idx
+    );
+        logic [31:0] post_base;
+        begin
+            // 784 = 512 + 256 + 16. Generate full-connectivity addresses
+            // arithmetically so CSR/CSC index ROMs are no longer needed.
+            post_base = ({25'd0, post_idx} << 9)
+                      + ({25'd0, post_idx} << 8)
+                      + ({25'd0, post_idx} << 4);
+            dense_weight_addr = post_base + {22'd0, pre_idx};
         end
     endfunction
 
@@ -2218,9 +2055,16 @@ module top_level(
             batch_prefetch_img_sector_off <= 32'd0;
             batch_prefetch_img_byte_in_sector <= 32'd0;
             batch_prefetch_img_sectors_needed <= 32'd0;
+            batch_prefetch_lba <= 32'd0;
+            batch_sd_issue_pending <= 1'b0;
+            batch_sd_issue_lba <= 32'd0;
+            batch_sd_issue_sectors <= 32'd0;
+            batch_sd_issue_dest_base_word <= 32'd0;
             sd_copy_resp_pending <= 1'b0;
             sd_copy_resp_status <= STATUS_OK;
             sd_copy_resp_result <= 32'sd0;
+            infer_done_resp_pending <= 1'b0;
+            infer_done_resp_result <= 32'sd0;
             imgload_active      <= 1'b0;
             imgload_addr_word    <= 32'd0;
             imgload_lane        <= 2'd0;
@@ -2406,7 +2250,7 @@ module top_level(
             infer_active        <= 1'b0;
             infer_state         <= INFER_IDLE;
             infer_steps_target  <= 32'd0;
-            infer_step_idx      <= 16'd0;
+            infer_step_idx      <= 32'd0;
             infer_neuron_idx    <= 7'd0;
             infer_input_idx     <= 10'd0;
             infer_prep_idx      <= 10'd0;
@@ -2520,7 +2364,21 @@ module top_level(
             train_xin_wr_en <= 1'b0;
             train_xexc_wr_en <= 1'b0;
             train_xpost2_wr_en <= 1'b0;
-            batch_status_word <= {batch_phase, batch_error_code, batch_error, batch_done, batch_active, batch_cfg1_valid, batch_cfg0_valid, 6'd0};
+            batch_status_word <= {
+                batch_phase,
+                batch_error_code,
+                batch_error,
+                batch_done,
+                batch_active,
+                batch_cfg1_valid,
+                batch_cfg0_valid,
+                sd_copy_active,
+                batch_prefetch_active,
+                batch_infer_eval_active,
+                train_label_stats_active,
+                infer_active,
+                train_chunk_active
+            };
             batch_summary_word <= batch_summary_select(arg0[5:0]);
             train_busy_uart_blocked <= TRAIN_ENABLE &&
                                        (train_label_stats_active || train_chunk_active) &&
@@ -2538,6 +2396,13 @@ module top_level(
                 sd_copy_resp_pending <= 1'b0;
                 resp_status <= sd_copy_resp_status;
                 resp_result <= sd_copy_resp_result;
+                resp_checksum <= 8'h00;
+                response_ready <= 1'b1;
+            end
+            if (infer_done_resp_pending && !response_ready) begin
+                infer_done_resp_pending <= 1'b0;
+                resp_status <= STATUS_OK;
+                resp_result <= infer_done_resp_result;
                 resp_checksum <= 8'h00;
                 response_ready <= 1'b1;
             end
@@ -2675,11 +2540,11 @@ module top_level(
                     infer_active       <= 1'b1;
                     if (infer_model_state_valid) begin
                         infer_state        <= INFER_CLEAR_SPIKE_COUNT;
-                        infer_steps_target <= {16'd0, infer_step_idx} + 32'd350;
+                        infer_steps_target <= infer_step_idx + 32'd350;
                     end else begin
                         infer_state        <= INFER_INIT_CLEAR;
                         infer_steps_target <= 32'd350;
-                        infer_step_idx     <= 16'd0;
+                        infer_step_idx     <= 32'd0;
                         infer_model_state_valid <= 1'b1;
                     end
                     infer_neuron_idx   <= 7'd0;
@@ -2733,6 +2598,7 @@ module top_level(
                 batch_prefetch_img_sector_off <= next_img_sector_off_tmp;
                 batch_prefetch_img_byte_in_sector <= next_img_byte_in_sector_norm_tmp;
                 batch_prefetch_img_sectors_needed <= next_img_sectors_needed_tmp;
+                batch_prefetch_lba <= batch_cfg_start_lba + next_img_sector_off_tmp;
                 imgload_target_buf_sel <= batch_fill_buf_sel;
             end
 
@@ -2741,10 +2607,20 @@ module top_level(
                 !sd_copy_active && !imgload_active && !imgload_start_pending &&
                 !ddr_req_pending_core && !ddr_rsp_drain_active_core && !response_ready) begin
                 batch_prefetch_issue_pending <= 1'b0;
+                batch_sd_issue_pending <= 1'b1;
+                batch_sd_issue_lba <= batch_prefetch_lba;
+                batch_sd_issue_sectors <= batch_prefetch_img_sectors_needed;
+                batch_sd_issue_dest_base_word <= IMG_STAGING_BASE_WORD;
+            end
+
+            if (batch_sd_issue_pending &&
+                !sd_copy_active && !imgload_active && !imgload_start_pending &&
+                !ddr_req_pending_core && !ddr_rsp_drain_active_core && !response_ready) begin
+                batch_sd_issue_pending <= 1'b0;
                 sd_copy_active        <= 1'b1;
                 sd_in_read            <= 1'b0;
-                sd_copy_lba           <= batch_cfg_start_lba + batch_prefetch_img_sector_off;
-                sd_copy_sectors_left  <= batch_prefetch_img_sectors_needed;
+                sd_copy_lba           <= batch_sd_issue_lba;
+                sd_copy_sectors_left  <= batch_sd_issue_sectors;
                 sd_byte_count         <= 9'd0;
                 sd_pack_idx           <= 2'd0;
                 sd_pack_word          <= 32'd0;
@@ -2756,7 +2632,7 @@ module top_level(
                 sd_copy_done_pending  <= 1'b0;
                 sd_use_sector_limit   <= 1'b1;
                 sd_copy_raw1_mode     <= 1'b0;
-                sd_copy_dest_base_word <= IMG_STAGING_BASE_WORD;
+                sd_copy_dest_base_word <= batch_sd_issue_dest_base_word;
             end
 
             if (batch_prefetch_active && !batch_prefetch_issue_pending && !batch_prefetch_ready &&
@@ -3651,7 +3527,7 @@ module top_level(
                             if (train_chunk_retry_continue_infer) begin
                                 // mine.py retry keeps neuron/synapse/RNG state and only reruns an inj window.
                                 infer_state        <= INFER_CLEAR_SPIKE_COUNT;
-                                infer_steps_target <= {16'd0, infer_step_idx} + {16'd0, train_chunk_steps_left};
+                                infer_steps_target <= infer_step_idx + {16'd0, train_chunk_steps_left};
                                 infer_neuron_idx   <= 7'd0;
                                 infer_input_idx    <= 10'd0;
                                 infer_prep_idx     <= 10'd0;
@@ -3676,7 +3552,7 @@ module top_level(
                                     infer_state        <= INFER_INIT_CLEAR;
                                     infer_model_state_valid <= 1'b1;
                                 end
-                                infer_steps_target <= {16'd0, infer_step_idx} + {16'd0, train_chunk_steps_left};
+                                infer_steps_target <= infer_step_idx + {16'd0, train_chunk_steps_left};
                                 infer_neuron_idx   <= 7'd0;
                                 infer_input_idx    <= 10'd0;
                                 infer_prep_idx     <= 10'd0;
@@ -3746,7 +3622,7 @@ module top_level(
                             infer_state        <= INFER_GEN_INPUT_SPIKES; // blank: continue existing state, skip clear/threshold prep
                             // Keep infer_step_idx continuous across inj->blank, so blank duration
                             // target must be relative to current step index.
-                            infer_steps_target <= {16'd0, infer_step_idx} + TRAIN_MINE_NT_BLANK[31:0];
+                            infer_steps_target <= infer_step_idx + TRAIN_MINE_NT_BLANK[31:0];
                             infer_neuron_idx   <= 7'd0;
                             infer_input_idx    <= 10'd0;
                             infer_prep_idx     <= 10'd0;
@@ -3790,15 +3666,14 @@ module top_level(
                     end
                     TCK_REBASE_GIN_RUN: begin
                         if (train_rebase_phase == 3'd0) begin
-                            csr_row_ptr_rd_addr <= train_rebase_neuron_idx[ROW_IDX_W:0];
-                            train_rebase_phase <= 3'd1;
+                            train_rebase_edge_idx <= '0;
+                            train_rebase_edge_end <= N_IN[W_ADDR_W-1:0];
+                            infer_pre_spike_rd_addr <= 10'd0;
+                            train_rebase_phase <= 3'd4;
                         end else if (train_rebase_phase == 3'd1) begin
-                            train_rebase_edge_idx <= csr_row_ptr_rd_data[W_ADDR_W-1:0];
-                            csr_row_ptr_rd_addr <= train_rebase_neuron_idx[ROW_IDX_W:0] + {{ROW_IDX_W{1'b0}}, 1'b1};
                             train_rebase_phase <= 3'd2;
                         end else if (train_rebase_phase == 3'd2) begin
-                            train_rebase_edge_end <= csr_row_ptr_rd_data[W_ADDR_W-1:0];
-                            if (train_rebase_edge_idx >= csr_row_ptr_rd_data[W_ADDR_W-1:0]) begin
+                            if (train_rebase_edge_idx >= train_rebase_edge_end) begin
                                 infer_g_in_state[train_rebase_neuron_idx] <= fxp_mul_s16_16(train_rebase_accum, FXP_SCALE_1000);
                                 if (train_rebase_neuron_idx == (N_NEURONS - 1)) begin
                                     train_chunk_state <= TCK_BLANK_INFER_START;
@@ -3808,23 +3683,22 @@ module top_level(
                                     train_rebase_phase <= 3'd0;
                                 end
                             end else begin
-                                csr_col_idx_rd_addr <= train_rebase_edge_idx;
-                                train_rebase_phase <= 3'd3;
+                                infer_pre_spike_rd_addr <= train_rebase_edge_idx[9:0];
+                                train_rebase_phase <= 3'd4;
                             end
                         end else if (train_rebase_phase == 3'd3) begin
-                            infer_pre_spike_rd_addr <= {3'd0, csr_col_idx_rd_data};
                             train_rebase_phase <= 3'd4;
                         end else if (train_rebase_phase == 3'd4) begin
                             if (infer_pre_spike_rd_data) begin
-                                infer_w_rd_addr <= train_rebase_edge_idx;
+                                infer_w_rd_addr <= dense_weight_addr(train_rebase_neuron_idx, train_rebase_edge_idx[9:0]);
                                 train_rebase_phase <= 3'd5;
                             end else begin
                                 if ((train_rebase_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1}) >= train_rebase_edge_end) begin
                                     train_rebase_phase <= 3'd2;
                                 end else begin
                                     train_rebase_edge_idx <= train_rebase_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1};
-                                    csr_col_idx_rd_addr <= train_rebase_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1};
-                                    train_rebase_phase <= 3'd3;
+                                    infer_pre_spike_rd_addr <= train_rebase_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1};
+                                    train_rebase_phase <= 3'd4;
                                 end
                             end
                         end else if (train_rebase_phase == 3'd5) begin
@@ -3835,8 +3709,8 @@ module top_level(
                                 train_rebase_phase <= 3'd2;
                             end else begin
                                 train_rebase_edge_idx <= train_rebase_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1};
-                                csr_col_idx_rd_addr <= train_rebase_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1};
-                                train_rebase_phase <= 3'd3;
+                                infer_pre_spike_rd_addr <= train_rebase_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1};
+                                train_rebase_phase <= 3'd4;
                             end
                         end
                     end
@@ -3891,22 +3765,10 @@ module top_level(
                                     batch_img_byte_in_sector <= next_img_byte_in_sector_norm_tmp;
                                     batch_img_sectors_needed <= next_img_sectors_needed_tmp;
                                     batch_label_rd_addr <= batch_current_sample_idx + 32'd1;
-                                    sd_copy_active        <= 1'b1;
-                                    sd_in_read            <= 1'b0;
-                                    sd_copy_lba           <= batch_cfg_start_lba + next_img_sector_off_tmp;
-                                    sd_copy_sectors_left  <= next_img_sectors_needed_tmp;
-                                    sd_byte_count         <= 9'd0;
-                                    sd_pack_idx           <= 2'd0;
-                                    sd_pack_word          <= 32'd0;
-                                    sd_copy_words_written <= 32'd0;
-                                    sd_sector_buf_ready   <= 2'b00;
-                                    sd_header_done        <= 1'b0;
-                                    sd_file_total_bytes   <= 32'd0;
-                                    sd_file_bytes_seen    <= 32'd0;
-                                    sd_copy_done_pending  <= 1'b0;
-                                    sd_use_sector_limit   <= 1'b1;
-                                    sd_copy_raw1_mode     <= 1'b0;
-                                    sd_copy_dest_base_word <= IMG_STAGING_BASE_WORD;
+                                    batch_sd_issue_pending <= 1'b1;
+                                    batch_sd_issue_lba <= batch_cfg_start_lba + next_img_sector_off_tmp;
+                                    batch_sd_issue_sectors <= next_img_sectors_needed_tmp;
+                                    batch_sd_issue_dest_base_word <= IMG_STAGING_BASE_WORD;
                                     raw_image0_valid <= 1'b0;
                                     raw_image0_capture_idx <= 10'd0;
                                     raw_image0_sum_u8 <= 32'd0;
@@ -4118,22 +3980,10 @@ module top_level(
                                     batch_img_sector_off <= next_img_sector_off_tmp;
                                     batch_img_byte_in_sector <= next_img_byte_in_sector_norm_tmp;
                                     batch_img_sectors_needed <= next_img_sectors_needed_tmp;
-                                    sd_copy_active        <= 1'b1;
-                                    sd_in_read            <= 1'b0;
-                                    sd_copy_lba           <= batch_cfg_start_lba + next_img_sector_off_tmp;
-                                    sd_copy_sectors_left  <= next_img_sectors_needed_tmp;
-                                    sd_byte_count         <= 9'd0;
-                                    sd_pack_idx           <= 2'd0;
-                                    sd_pack_word          <= 32'd0;
-                                    sd_copy_words_written <= 32'd0;
-                                    sd_sector_buf_ready   <= 2'b00;
-                                    sd_header_done        <= 1'b0;
-                                    sd_file_total_bytes   <= 32'd0;
-                                    sd_file_bytes_seen    <= 32'd0;
-                                    sd_copy_done_pending  <= 1'b0;
-                                    sd_use_sector_limit   <= 1'b1;
-                                    sd_copy_raw1_mode     <= 1'b0;
-                                    sd_copy_dest_base_word <= IMG_STAGING_BASE_WORD;
+                                    batch_sd_issue_pending <= 1'b1;
+                                    batch_sd_issue_lba <= batch_cfg_start_lba + next_img_sector_off_tmp;
+                                    batch_sd_issue_sectors <= next_img_sectors_needed_tmp;
+                                    batch_sd_issue_dest_base_word <= IMG_STAGING_BASE_WORD;
                                     raw_image0_valid <= 1'b0;
                                     raw_image0_capture_idx <= 10'd0;
                                     raw_image0_sum_u8 <= 32'd0;
@@ -4377,7 +4227,7 @@ module top_level(
                                         infer_active       <= 1'b1;
                                         infer_state        <= INFER_INIT_CLEAR;
                                         infer_steps_target <= {16'd0, arg1[15:0]};
-                                        infer_step_idx     <= 16'd0;
+                                        infer_step_idx     <= 32'd0;
                                         infer_neuron_idx   <= 7'd0;
                                         infer_input_idx    <= 10'd0;
                                         infer_prep_idx     <= 10'd0;
@@ -5103,7 +4953,7 @@ module top_level(
                             train_xin_wr_data <= infer_apply_xin_next;
                             infer_trace_phase <= 3'd0;
                             if (infer_input_idx == (N_IN - 1)) begin
-                                if (infer_step_idx == 16'd0) begin
+                                if (infer_step_idx == 32'd0) begin
                                 end
                                 infer_input_idx <= 10'd0;
                                 infer_state <= INFER_ACCUM_NEURON;
@@ -5115,44 +4965,52 @@ module top_level(
                     end
 
                     INFER_ACCUM_NEURON: begin
-                        // Sparse O(N_EDGES) accumulation: walk CSR edges for current neuron.
+                        // Event-driven accumulation over the full row. With dense
+                        // connectivity, pre indices are implicit 0..N_IN-1.
                         if (infer_accum_weight_phase == 3'd0) begin
-                            csr_row_ptr_rd_addr <= infer_neuron_idx[ROW_IDX_W:0];
-                            infer_accum_weight_phase <= 3'd1;
+                            infer_evt_edge_idx <= '0;
+                            infer_evt_edge_end <= N_IN[EDGE_ADDR_W-1:0];
+                            infer_pre_spike_rd_addr <= 10'd0;
+                            if (N_IN > 1) begin
+                                infer_pre_spike_rd_addr_lane1 <= 10'd1;
+                                infer_accum_pair_count <= 2'd2;
+                            end else begin
+                                infer_pre_spike_rd_addr_lane1 <= 10'd0;
+                                infer_accum_pair_count <= 2'd1;
+                            end
+                            infer_accum_weight_phase <= 3'd4;
                         end else if (infer_accum_weight_phase == 3'd1) begin
-                            infer_evt_edge_idx <= csr_row_ptr_rd_data[W_ADDR_W-1:0];
-                            csr_row_ptr_rd_addr <= infer_neuron_idx[ROW_IDX_W:0] + {{ROW_IDX_W{1'b0}}, 1'b1};
                             infer_accum_weight_phase <= 3'd2;
                         end else if (infer_accum_weight_phase == 3'd2) begin
-                            infer_evt_edge_end <= csr_row_ptr_rd_data[W_ADDR_W-1:0];
-                            if (infer_evt_edge_idx >= csr_row_ptr_rd_data[W_ADDR_W-1:0]) begin
+                            if (infer_evt_edge_idx >= infer_evt_edge_end) begin
                                 infer_delay_pipe_valid <= 1'b1;
                                 infer_delay_pipe_idx <= infer_neuron_idx;
                                 infer_accum_weight_phase <= 3'd0;
                                 infer_state <= INFER_ACCUM_NEURON_GIN_MUL;
                             end else begin
-                                csr_col_idx_rd_addr <= infer_evt_edge_idx;
-                                if ((infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}}, 1'b1}) < csr_row_ptr_rd_data[W_ADDR_W-1:0]) begin
-                                    csr_col_idx_rd_addr_lane1 <= infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}}, 1'b1};
+                                infer_pre_spike_rd_addr <= infer_evt_edge_idx[9:0];
+                                if ((infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}}, 1'b1}) < infer_evt_edge_end) begin
+                                    infer_pre_spike_rd_addr_lane1 <= infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}}, 1'b1};
                                     infer_accum_pair_count <= 2'd2;
                                 end else begin
-                                    csr_col_idx_rd_addr_lane1 <= infer_evt_edge_idx;
+                                    infer_pre_spike_rd_addr_lane1 <= infer_evt_edge_idx[9:0];
                                     infer_accum_pair_count <= 2'd1;
                                 end
-                                infer_accum_weight_phase <= 3'd3;
+                                infer_accum_weight_phase <= 3'd4;
                             end
                         end else if (infer_accum_weight_phase == 3'd3) begin
-                            infer_pre_spike_rd_addr <= {3'd0, csr_col_idx_rd_data};
-                            infer_pre_spike_rd_addr_lane1 <= {3'd0, csr_col_idx_rd_data_lane1};
                             infer_accum_weight_phase <= 3'd4;
                         end else if (infer_accum_weight_phase == 3'd4) begin
                             infer_accum_lane0_fire <= infer_pre_spike_rd_data;
                             infer_accum_lane1_fire <= (infer_accum_pair_count == 2'd2) && infer_pre_spike_rd_data_lane1;
                             if (infer_pre_spike_rd_data) begin
-                                infer_w_rd_addr <= infer_evt_edge_idx;
+                                infer_w_rd_addr <= dense_weight_addr(infer_neuron_idx, infer_evt_edge_idx[9:0]);
                             end
                             if ((infer_accum_pair_count == 2'd2) && infer_pre_spike_rd_data_lane1) begin
-                                infer_w_rd_addr_lane1 <= infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}}, 1'b1};
+                                infer_w_rd_addr_lane1 <= dense_weight_addr(
+                                    infer_neuron_idx,
+                                    infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}}, 1'b1}
+                                );
                             end
                             infer_accum_weight_phase <= 3'd5;
                         end else if (infer_accum_weight_phase == 3'd5) begin
@@ -5179,15 +5037,17 @@ module top_level(
                                 infer_state <= INFER_ACCUM_NEURON_GIN_MUL;
                             end else begin
                                 infer_evt_edge_idx <= infer_evt_edge_next;
-                                csr_col_idx_rd_addr <= infer_evt_edge_next;
                                 if ((infer_evt_edge_next + {{(W_ADDR_W-1){1'b0}}, 1'b1}) < infer_evt_edge_end) begin
-                                    csr_col_idx_rd_addr_lane1 <= infer_evt_edge_next + {{(W_ADDR_W-1){1'b0}}, 1'b1};
+                                    infer_pre_spike_rd_addr <= infer_evt_edge_next[9:0];
+                                    infer_pre_spike_rd_addr_lane1 <=
+                                        infer_evt_edge_next + {{(W_ADDR_W-1){1'b0}}, 1'b1};
                                     infer_accum_pair_count <= 2'd2;
                                 end else begin
-                                    csr_col_idx_rd_addr_lane1 <= infer_evt_edge_next;
+                                    infer_pre_spike_rd_addr <= infer_evt_edge_next[9:0];
+                                    infer_pre_spike_rd_addr_lane1 <= infer_evt_edge_next[9:0];
                                     infer_accum_pair_count <= 2'd1;
                                 end
-                                infer_accum_weight_phase <= 3'd3;
+                                infer_accum_weight_phase <= 3'd4;
                             end
                         end
                     end
@@ -5265,7 +5125,7 @@ module top_level(
                         logic signed [31:0] leak_dt;
                         logic exc_refractory_ok;
 
-                        exc_refractory_ok = ((infer_step_idx - infer_eval_last_spike_step) > EXC_TREF_STEPS);
+                        exc_refractory_ok = ((infer_step_idx[15:0] - infer_eval_last_spike_step) > EXC_TREF_STEPS);
                         exc_drive_dt = fxp_mul_s16_16(infer_eval_eexc_minus_v, FXP_EXC_DT_OVER_TCM);
                         inh_drive_dt = fxp_mul_s16_16(infer_eval_einh_minus_v, FXP_EXC_DT_OVER_TCM);
                         leak_dt = fxp_mul_s16_16(infer_eval_vrest_minus_v, FXP_EXC_DT_OVER_TCM);
@@ -5355,7 +5215,7 @@ module top_level(
                             spike_count_waddr <= infer_commit_idx;
                             spike_count_wdata <= infer_spike_rd_data + 16'd1;
                             infer_total_spikes <= infer_total_spikes + 32'd1;
-                            infer_exc_last_spike_step[infer_commit_idx] <= infer_step_idx;
+                            infer_exc_last_spike_step[infer_commit_idx] <= infer_step_idx[15:0];
                             infer_s_exc[infer_commit_idx] <= 1'b1;
                         end else begin
                             infer_v_state[infer_commit_idx] <= infer_commit_v_next;
@@ -5440,7 +5300,7 @@ module top_level(
 	                    end
 
 	                    INFER_APPLY_WTA_PRE: begin
-                            infer_apply_inh_refractory_ok <= ((infer_step_idx - infer_apply_inh_last_spike) > INH_TREF_STEPS);
+                            infer_apply_inh_refractory_ok <= ((infer_step_idx[15:0] - infer_apply_inh_last_spike) > INH_TREF_STEPS);
                             infer_apply_inh_eexc_minus_v <= (FXP_INH_EEXC - infer_apply_v_inh_cur);
                             infer_apply_inh_vrest_minus_v <= (FXP_INH_VREST - infer_apply_v_inh_cur);
                             infer_state <= INFER_APPLY_WTA_PRE_MUL;
@@ -5516,7 +5376,7 @@ module top_level(
                             infer_v_inh_state[infer_apply_idx] <= infer_apply_v_inh_write;
                             infer_c_inh_state[infer_apply_idx] <= infer_apply_c_inh_next;
                             if (infer_apply_s_inh_now) begin
-                                infer_inh_last_spike_step[infer_apply_idx] <= infer_step_idx;
+                                infer_inh_last_spike_step[infer_apply_idx] <= infer_step_idx[15:0];
                             end
 	                        infer_sum_c_inh <= infer_sum_c_inh + infer_apply_c_inh_next;
 	                        if (infer_apply_idx == (N_NEURONS - 1)) begin
@@ -5550,7 +5410,7 @@ module top_level(
                             run_online_trace_now = (TRAIN_ENABLE && train_chunk_active &&
                                                     (train_chunk_mode == 3'd3) &&
                                                     !infer_force_no_input);
-                            step_last_now = ((infer_step_idx + 16'd1) >= infer_steps_target[15:0]);
+                            step_last_now = ((infer_step_idx + 32'd1) >= infer_steps_target);
 	                        infer_pass2_g_inh_next <= fxp_mul_s16_16(infer_pass2_diff_c_inh, FXP_INH_COEFF);
                             infer_state <= INFER_WTA_PASS2_WRITE;
 	                    end
@@ -5561,7 +5421,7 @@ module top_level(
                             run_online_trace_now = (TRAIN_ENABLE && train_chunk_active &&
                                                     (train_chunk_mode == 3'd3) &&
                                                     !infer_force_no_input);
-                            step_last_now = ((infer_step_idx + 16'd1) >= infer_steps_target[15:0]);
+                            step_last_now = ((infer_step_idx + 32'd1) >= infer_steps_target);
 	                        infer_g_inh_state[infer_apply_idx] <= infer_pass2_g_inh_next;
 
 	                        if (infer_apply_idx == (N_NEURONS - 1)) begin
@@ -5588,7 +5448,7 @@ module top_level(
                                 end else if (step_last_now) begin
                                     // Match mine.py tcount semantics: increment at end of each processed step,
                                     // including the terminal step.
-                                    infer_step_idx <= infer_step_idx + 16'd1;
+                                    infer_step_idx <= infer_step_idx + 32'd1;
 	                                infer_active <= 1'b0;
 	                                infer_state <= INFER_IDLE;
                                     infer_skip_init_clear <= 1'b0;
@@ -5607,12 +5467,11 @@ module top_level(
                                         batch_infer_eval_pred_label <= 4'd0;
                                     end else begin
 	                                    resp_status <= STATUS_OK;
-	                                    resp_result <= infer_total_spikes;
-	                                    resp_checksum  <= 8'h00;
-	                                    response_ready <= 1'b1;
+	                                    infer_done_resp_pending <= 1'b1;
+	                                    infer_done_resp_result <= infer_total_spikes;
                                     end
 	                            end else begin
-	                                    infer_step_idx <= infer_step_idx + 16'd1;
+	                                    infer_step_idx <= infer_step_idx + 32'd1;
 	                                    infer_state <= INFER_GEN_INPUT_SPIKES;
                                         infer_trace_phase <= 2'd0;
 	                            end
@@ -5638,23 +5497,34 @@ module top_level(
                     end
 
                     INFER_EVT_PRE_PTR0_REQ: begin
-                        csc_col_ptr_rd_addr <= {1'b0, infer_evt_pre_idx};
+                        infer_evt_edge_idx <= '0;
+                        infer_evt_edge_end <= N_NEURONS[EDGE_ADDR_W-1:0];
                         infer_state <= INFER_EVT_PRE_PTR0_WAIT;
                     end
 
                     INFER_EVT_PRE_PTR0_WAIT: begin
-                        infer_evt_edge_idx <= csc_col_ptr_rd_data[EDGE_ADDR_W-1:0];
-                        infer_state <= INFER_EVT_PRE_PTR1_REQ;
+                        if (infer_evt_edge_end == '0) begin
+                            if ((infer_evt_prelist_idx + 10'd1) >= infer_pre_active_count) begin
+                                if (infer_evt_has_winner) begin
+                                    infer_state <= INFER_EVT_POST_PTR0_REQ;
+                                end else begin
+                                    infer_state <= INFER_EVT_DONE;
+                                end
+                            end else begin
+                                infer_evt_prelist_idx <= infer_evt_prelist_idx + 10'd1;
+                                infer_state <= INFER_EVT_PRE_PRELIST_REQ;
+                            end
+                        end else begin
+                            infer_state <= INFER_EVT_PRE_EDGE_REQ;
+                        end
                     end
 
                     INFER_EVT_PRE_PTR1_REQ: begin
-                        csc_col_ptr_rd_addr <= {1'b0, infer_evt_pre_idx} + {{COL_IDX_W{1'b0}}, 1'b1};
                         infer_state <= INFER_EVT_PRE_PTR1_WAIT;
                     end
 
                     INFER_EVT_PRE_PTR1_WAIT: begin
-                        infer_evt_edge_end <= csc_col_ptr_rd_data[EDGE_ADDR_W-1:0];
-                        if (infer_evt_edge_idx >= csc_col_ptr_rd_data[EDGE_ADDR_W-1:0]) begin
+                        if (infer_evt_edge_idx >= infer_evt_edge_end) begin
                             if ((infer_evt_prelist_idx + 10'd1) >= infer_pre_active_count) begin
                                 if (infer_evt_has_winner) begin
                                     infer_state <= INFER_EVT_POST_PTR0_REQ;
@@ -5671,14 +5541,12 @@ module top_level(
                     end
 
                     INFER_EVT_PRE_EDGE_REQ: begin
-                        csc_row_idx_rd_addr <= infer_evt_edge_idx;
-                        csc_edge_idx_rd_addr <= infer_evt_edge_idx;
+                        infer_evt_post_idx <= infer_evt_edge_idx[ROW_IDX_W-1:0];
+                        infer_evt_edge_ptr <= dense_weight_addr(infer_evt_edge_idx[6:0], infer_evt_pre_idx);
                         infer_state <= INFER_EVT_PRE_EDGE_WAIT;
                     end
 
                     INFER_EVT_PRE_EDGE_WAIT: begin
-                        infer_evt_post_idx <= csc_row_idx_rd_data;
-                        infer_evt_edge_ptr <= csc_edge_idx_rd_data;
                         infer_state <= INFER_EVT_PRE_TRACE_WAIT;
                     end
 
@@ -5760,24 +5628,31 @@ module top_level(
                                 infer_evt_post_idx <= infer_evt_post_idx + 7'd1;
                             end
                         end else begin
-                            csr_row_ptr_rd_addr <= infer_evt_post_idx[ROW_IDX_W:0];
+                            infer_evt_edge_idx <= '0;
+                            infer_evt_edge_end <= N_IN[EDGE_ADDR_W-1:0];
                             infer_state <= INFER_EVT_POST_PTR0_WAIT;
                         end
                     end
 
                     INFER_EVT_POST_PTR0_WAIT: begin
-                        infer_evt_edge_idx <= csr_row_ptr_rd_data[EDGE_ADDR_W-1:0];
-                        infer_state <= INFER_EVT_POST_PTR1_REQ;
+                        if (infer_evt_edge_end == '0) begin
+                            if (infer_evt_post_idx == (N_NEURONS - 1)) begin
+                                infer_state <= INFER_EVT_DONE;
+                            end else begin
+                                infer_evt_post_idx <= infer_evt_post_idx + 7'd1;
+                                infer_state <= INFER_EVT_POST_PTR0_REQ;
+                            end
+                        end else begin
+                            infer_state <= INFER_EVT_POST_EDGE_REQ;
+                        end
                     end
 
                     INFER_EVT_POST_PTR1_REQ: begin
-                        csr_row_ptr_rd_addr <= infer_evt_post_idx[ROW_IDX_W:0] + {{ROW_IDX_W{1'b0}}, 1'b1};
                         infer_state <= INFER_EVT_POST_PTR1_WAIT;
                     end
 
                     INFER_EVT_POST_PTR1_WAIT: begin
-                        infer_evt_edge_end <= csr_row_ptr_rd_data[EDGE_ADDR_W-1:0];
-                        if (infer_evt_edge_idx >= csr_row_ptr_rd_data[EDGE_ADDR_W-1:0]) begin
+                        if (infer_evt_edge_idx >= infer_evt_edge_end) begin
                             infer_state <= INFER_EVT_DONE;
                         end else begin
                             infer_state <= INFER_EVT_POST_EDGE_REQ;
@@ -5785,13 +5660,12 @@ module top_level(
                     end
 
                     INFER_EVT_POST_EDGE_REQ: begin
-                        csr_col_idx_rd_addr <= infer_evt_edge_idx;
+                        infer_evt_post_input_idx <= infer_evt_edge_idx[9:0];
+                        infer_evt_edge_ptr <= dense_weight_addr(infer_evt_post_idx, infer_evt_edge_idx[9:0]);
                         infer_state <= INFER_EVT_POST_EDGE_WAIT;
                     end
 
                     INFER_EVT_POST_EDGE_WAIT: begin
-                        infer_evt_post_input_idx <= {3'd0, csr_col_idx_rd_data};
-                        infer_evt_edge_ptr <= infer_evt_edge_idx;
                         infer_state <= INFER_EVT_POST_TRACE_REQ;
                     end
 
@@ -5866,7 +5740,7 @@ module top_level(
                     INFER_EVT_DONE: begin
                         if (infer_trace_wait_last_step) begin
                             infer_trace_wait_last_step <= 1'b0;
-                            infer_step_idx <= infer_step_idx + 16'd1;
+                            infer_step_idx <= infer_step_idx + 32'd1;
                             infer_active <= 1'b0;
                             infer_state <= INFER_IDLE;
                             infer_skip_init_clear <= 1'b0;
@@ -5884,13 +5758,11 @@ module top_level(
                                 batch_infer_eval_best_count <= 16'd0;
                                 batch_infer_eval_pred_label <= 4'd0;
                             end else begin
-                                resp_status <= STATUS_OK;
-                                resp_result <= infer_total_spikes;
-                                resp_checksum  <= 8'h00;
-                                response_ready <= 1'b1;
+                                infer_done_resp_pending <= 1'b1;
+                                infer_done_resp_result <= infer_total_spikes;
                             end
                         end else begin
-                            infer_step_idx <= infer_step_idx + 16'd1;
+                            infer_step_idx <= infer_step_idx + 32'd1;
                             infer_state <= INFER_GEN_INPUT_SPIKES;
                             infer_trace_phase <= 3'd0;
                         end
@@ -6026,11 +5898,11 @@ module top_level(
                                 infer_active       <= 1'b1;
                                 if (infer_model_state_valid) begin
                                     infer_state        <= INFER_CLEAR_SPIKE_COUNT;
-                                    infer_steps_target <= {16'd0, infer_step_idx} + 32'd350;
+                                    infer_steps_target <= infer_step_idx + 32'd350;
                                 end else begin
                                     infer_state        <= INFER_INIT_CLEAR;
                                     infer_steps_target <= 32'd350;
-                                    infer_step_idx     <= 16'd0;
+                                    infer_step_idx     <= 32'd0;
                                     infer_model_state_valid <= 1'b1;
                                 end
                                 infer_neuron_idx   <= 7'd0;
@@ -6074,22 +5946,10 @@ module top_level(
                                 batch_img_sector_off <= next_img_sector_off_tmp;
                                 batch_img_byte_in_sector <= next_img_byte_in_sector_norm_tmp;
                                 batch_img_sectors_needed <= next_img_sectors_needed_tmp;
-                                sd_copy_active        <= 1'b1;
-                                sd_in_read            <= 1'b0;
-                                sd_copy_lba           <= batch_cfg_start_lba + next_img_sector_off_tmp;
-                                sd_copy_sectors_left  <= next_img_sectors_needed_tmp;
-                                sd_byte_count         <= 9'd0;
-                                sd_pack_idx           <= 2'd0;
-                                sd_pack_word          <= 32'd0;
-                                sd_copy_words_written <= 32'd0;
-                                sd_sector_buf_ready   <= 2'b00;
-                                sd_header_done        <= 1'b0;
-                                sd_file_total_bytes   <= 32'd0;
-                                sd_file_bytes_seen    <= 32'd0;
-                                sd_copy_done_pending  <= 1'b0;
-                                sd_use_sector_limit   <= 1'b1;
-                                sd_copy_raw1_mode     <= 1'b0;
-                                sd_copy_dest_base_word <= IMG_STAGING_BASE_WORD;
+                                batch_sd_issue_pending <= 1'b1;
+                                batch_sd_issue_lba <= batch_cfg_start_lba + next_img_sector_off_tmp;
+                                batch_sd_issue_sectors <= next_img_sectors_needed_tmp;
+                                batch_sd_issue_dest_base_word <= IMG_STAGING_BASE_WORD;
                                 if (!batch_compute_buf_sel) begin
                                     raw_image0_valid <= 1'b0;
                                     raw_image0_capture_idx <= 10'd0;

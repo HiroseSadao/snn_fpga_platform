@@ -84,6 +84,12 @@ class BatchStatus:
     active: bool
     cfg1_valid: bool
     cfg0_valid: bool
+    train_chunk_active: bool = False
+    infer_active: bool = False
+    train_label_stats_active: bool = False
+    batch_infer_eval_active: bool = False
+    batch_prefetch_active: bool = False
+    sd_copy_active: bool = False
 
 
 @dataclass(frozen=True)
@@ -681,6 +687,12 @@ def fpga_batch_read_status(ser: serial.Serial) -> BatchStatus:
         active=bool((u >> 8) & 0x1),
         cfg1_valid=bool((u >> 7) & 0x1),
         cfg0_valid=bool((u >> 6) & 0x1),
+        sd_copy_active=bool((u >> 5) & 0x1),
+        batch_prefetch_active=bool((u >> 4) & 0x1),
+        batch_infer_eval_active=bool((u >> 3) & 0x1),
+        train_label_stats_active=bool((u >> 2) & 0x1),
+        infer_active=bool((u >> 1) & 0x1),
+        train_chunk_active=bool(u & 0x1),
     )
 
 
@@ -726,6 +738,17 @@ def fpga_batch_read_train_detail_breakdown(ser: serial.Serial) -> dict[str, int]
         "train_evt_pre": fpga_batch_read_summary_field_u64(ser, 18, 32),
         "train_evt_post": fpga_batch_read_summary_field_u64(ser, 19, 33),
         "train_accum": fpga_batch_read_summary_field_u64(ser, 20, 34),
+    }
+
+
+def fpga_batch_read_debug_state(ser: serial.Serial) -> dict[str, int]:
+    return {
+        "train_chunk_state": fpga_batch_read_summary_field_u32(ser, 35),
+        "infer_state": fpga_batch_read_summary_field_u32(ser, 36),
+        "train_rebase_phase": fpga_batch_read_summary_field_u32(ser, 37),
+        "train_rebase_neuron_idx": fpga_batch_read_summary_field_u32(ser, 38),
+        "train_rebase_edge_idx": fpga_batch_read_summary_field_u32(ser, 39),
+        "train_rebase_edge_end": fpga_batch_read_summary_field_u32(ser, 40),
     }
 
 
@@ -840,6 +863,7 @@ def fpga_run_batch_with_progress(
     t0 = time.time()
     last_done = 0
     last_status: BatchStatus | None = None
+    last_progress_poll = 0.0
     try:
         while True:
             try:
@@ -853,6 +877,43 @@ def fpga_run_batch_with_progress(
                 time.sleep(0.2)
                 continue
             last_status = st
+            now = time.time()
+            if (now - last_progress_poll) >= 2.0:
+                try:
+                    done_now = fpga_batch_read_summary_field_u32(ser, 4)
+                except TimeoutError:
+                    done_now = last_done
+                try:
+                    dbg = fpga_batch_read_debug_state(ser)
+                except TimeoutError:
+                    dbg = {
+                        "train_chunk_state": 0,
+                        "infer_state": 0,
+                        "train_rebase_phase": 0,
+                        "train_rebase_neuron_idx": 0,
+                        "train_rebase_edge_idx": 0,
+                        "train_rebase_edge_end": 0,
+                    }
+                if done_now > last_done:
+                    pbar.update(done_now - last_done)
+                    last_done = done_now
+                pbar.set_postfix_str(
+                    "phase="
+                    f"{st.phase}"
+                    f" done={done_now}/{int(num_samples)}"
+                    f" tch={int(st.train_chunk_active)}"
+                    f" inf={int(st.infer_active)}"
+                    f" tls={int(st.train_label_stats_active)}"
+                    f" bie={int(st.batch_infer_eval_active)}"
+                    f" pre={int(st.batch_prefetch_active)}"
+                    f" sd={int(st.sd_copy_active)}"
+                    f" tstate={dbg['train_chunk_state']}"
+                    f" istate={dbg['infer_state']}"
+                    f" rph={dbg['train_rebase_phase']}"
+                    f" rn={dbg['train_rebase_neuron_idx']}"
+                    f" re={dbg['train_rebase_edge_idx']}/{dbg['train_rebase_edge_end']}"
+                )
+                last_progress_poll = now
             if st.done and not st.active:
                 break
             if st.has_error and not st.active:
