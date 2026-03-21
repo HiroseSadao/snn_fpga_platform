@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 -------------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version     : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date             : Fri Mar 20 21:19:03 2026
-| Host             : eecs-digital-09 running 64-bit Ubuntu 24.04.3 LTS
+| Date             : Fri Mar 20 21:39:59 2026
+| Host             : eecs-digital-03 running 64-bit Ubuntu 24.04.3 LTS
 | Command          : report_power -file obj/post_route_power.rpt
 | Design           : top_level
 | Device           : xc7s50csga324-1
@@ -30,14 +30,14 @@ Table of Contents
 ----------
 
 +--------------------------+--------------+
-| Total On-Chip Power (W)  | 0.673        |
+| Total On-Chip Power (W)  | 0.679        |
 | Design Power Budget (W)  | Unspecified* |
 | Power Budget Margin (W)  | NA           |
-| Dynamic (W)              | 0.596        |
+| Dynamic (W)              | 0.603        |
 | Device Static (W)        | 0.076        |
 | Effective TJA (C/W)      | 4.9          |
-| Max Ambient (C)          | 81.7         |
-| Junction Temperature (C) | 28.3         |
+| Max Ambient (C)          | 81.6         |
+| Junction Temperature (C) | 28.4         |
 | Confidence Level         | Low          |
 | Setting File             | ---          |
 | Simulation Activity File | ---          |
@@ -52,21 +52,21 @@ Table of Contents
 +--------------------------+-----------+----------+-----------+-----------------+
 | On-Chip                  | Power (W) | Used     | Available | Utilization (%) |
 +--------------------------+-----------+----------+-----------+-----------------+
-| Clocks                   |     0.041 |        9 |       --- |             --- |
-| Slice Logic              |     0.018 |    41499 |       --- |             --- |
-|   LUT as Logic           |     0.016 |    16478 |     32600 |           50.55 |
-|   CARRY4                 |     0.002 |     1609 |      8150 |           19.74 |
-|   Register               |    <0.001 |    17555 |     65200 |           26.92 |
-|   F7/F8 Muxes            |    <0.001 |     1335 |     32600 |            4.10 |
-|   LUT as Distributed RAM |    <0.001 |      694 |      9600 |            7.23 |
-|   Others                 |     0.000 |       73 |       --- |             --- |
-| Signals                  |     0.021 |    35962 |       --- |             --- |
-| Block RAM                |     0.010 |     34.5 |        75 |           46.00 |
+| Clocks                   |     0.043 |        9 |       --- |             --- |
+| Slice Logic              |     0.020 |    43579 |       --- |             --- |
+|   LUT as Logic           |     0.017 |    17636 |     32600 |           54.10 |
+|   CARRY4                 |     0.002 |     1747 |      8150 |           21.44 |
+|   Register               |    <0.001 |    18002 |     65200 |           27.61 |
+|   F7/F8 Muxes            |    <0.001 |     1531 |     32600 |            4.70 |
+|   LUT as Distributed RAM |    <0.001 |      650 |      9600 |            6.77 |
+|   Others                 |     0.000 |       72 |       --- |             --- |
+| Signals                  |     0.022 |    37884 |       --- |             --- |
+| Block RAM                |     0.011 |       35 |        75 |           46.67 |
 | MMCM                     |     0.109 |        1 |         5 |           20.00 |
-| DSPs                     |     0.005 |       42 |       120 |           35.00 |
+| DSPs                     |     0.006 |       50 |       120 |           41.67 |
 | I/O                      |     0.392 |       83 |       210 |           39.52 |
 | Static Power             |     0.076 |          |           |                 |
-| Total                    |     0.673 |          |           |                 |
+| Total                    |     0.679 |          |           |                 |
 +--------------------------+-----------+----------+-----------+-----------------+
 
 
@@ -76,8 +76,8 @@ Table of Contents
 +-----------+-------------+-----------+-------------+------------+-------------+-------------+------------+
 | Source    | Voltage (V) | Total (A) | Dynamic (A) | Static (A) | Powerup (A) | Budget (A)  | Margin (A) |
 +-----------+-------------+-----------+-------------+------------+-------------+-------------+------------+
-| Vccint    |       1.000 |     0.123 |       0.111 |      0.012 |       NA    | Unspecified | NA         |
-| Vccaux    |       1.800 |     0.152 |       0.139 |      0.013 |       NA    | Unspecified | NA         |
+| Vccint    |       1.000 |     0.129 |       0.118 |      0.012 |       NA    | Unspecified | NA         |
+| Vccaux    |       1.800 |     0.151 |       0.139 |      0.013 |       NA    | Unspecified | NA         |
 | Vcco33    |       3.300 |     0.002 |       0.001 |      0.001 |       NA    | Unspecified | NA         |
 | Vcco25    |       2.500 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
 | Vcco18    |       1.800 |     0.000 |       0.000 |      0.000 |       NA    | Unspecified | NA         |
@@ -149,7 +149,7 @@ Table of Contents
 +------------------------------+-----------+
 | Name                         | Power (W) |
 +------------------------------+-----------+
-| top_level                    |     0.596 |
+| top_level                    |     0.603 |
 |   u_csr_col_idx_bram         |     0.009 |
 |     xpm_memory_base_inst     |     0.009 |
 |   u_ddr3_top                 |     0.376 |
@@ -175,9 +175,10 @@ Table of Contents
 |       genblk7[0].IOBUFDS_dqs |     0.022 |
 |       genblk7[1].IOBUFDS_dqs |     0.022 |
 |   u_ddr_clk_wiz              |     0.110 |
-|   u_poisson_divider          |     0.002 |
+|   u_poisson_divider          |     0.003 |
 |   u_sd_controller            |     0.003 |
-|   u_uart_rx                  |     0.006 |
+|   u_stdp_divider             |     0.002 |
+|   u_uart_rx                  |     0.007 |
 +------------------------------+-----------+
 
 

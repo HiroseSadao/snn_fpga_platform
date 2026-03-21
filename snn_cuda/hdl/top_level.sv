@@ -2986,7 +2986,7 @@ module top_level(
                                         train_stdp_w_row_base <= train_stdp_w_row_base + N_IN;
                                         train_stdp_a_row_base <= train_stdp_a_row_base + N_IN;
                                         train_stdp_bt_col_base <= TRAIN_BASE_BT_Q16_WORDS + {24'd0, (train_stdp_row_idx + 7'd1)};
-                                        train_stdp_state   <= TSK_SUM_READ_W_REQ;
+                                        train_stdp_state   <= TSK_READ_W_REQ;
                                     end
                                 end else begin
                                     train_stdp_col_idx <= train_stdp_col_idx + 10'd1;
@@ -3371,19 +3371,11 @@ module top_level(
             if (TRAIN_ENABLE && train_stdp_active && !ddr_req_pending_core && !response_ready && !sd_ddr_flush_active && !imgload_word_valid && !train_trace_active) begin
                 case (train_stdp_state)
                     TSK_SUM_READ_W_REQ: begin
-                        infer_w_rd_addr           <= train_stdp_w_row_base[W_ADDR_W-1:0] + {7'd0, train_stdp_col_idx};
-                        train_stdp_state          <= TSK_SUM_READ_W_WAIT;
+                        // Legacy normalization pass removed for Brian2-aligned STDP.
+                        train_stdp_state <= TSK_READ_W_REQ;
                     end
                     TSK_SUM_READ_W_WAIT: begin
-                        if (train_stdp_col_idx == (N_IN - 1)) begin
-                            train_stdp_row_sum_abs <= train_stdp_row_sum_abs + {16'd0, infer_w_rd_data};
-                            train_stdp_col_idx <= 10'd0;
-                            train_stdp_state <= TSK_READ_W_REQ;
-                        end else begin
-                            train_stdp_row_sum_abs <= train_stdp_row_sum_abs + {16'd0, infer_w_rd_data};
-                            train_stdp_col_idx <= train_stdp_col_idx + 10'd1;
-                            train_stdp_state <= TSK_SUM_READ_W_REQ;
-                        end
+                        train_stdp_state <= TSK_READ_W_REQ;
                     end
                     TSK_READ_W_REQ: begin
                         infer_w_rd_addr           <= train_stdp_w_row_base[W_ADDR_W-1:0] + {7'd0, train_stdp_col_idx};
@@ -3426,34 +3418,11 @@ module top_level(
                         train_stdp_state          <= TSK_READ_BT_WAIT;
                     end
                     TSK_DIV_NORM_START: begin
-                        logic [31:0] denom_q16_tmp;
-                        logic signed [63:0] norm_num_tmp;
-                        denom_q16_tmp = (train_stdp_row_sum_abs == 32'd0) ? 32'd1 : train_stdp_row_sum_abs;
-                        norm_num_tmp = $signed(train_stdp_w_val) * $signed(TRAIN_NORM_Q16);
-                        if (!train_stdp_div_busy) begin
-                            train_stdp_dividend <= norm_num_tmp[31:0];
-                            train_stdp_divisor  <= denom_q16_tmp;
-                            train_stdp_div_valid <= 1'b1;
-                            train_stdp_state <= TSK_DIV_NORM_WAIT;
-                        end
+                        train_stdp_w_norm_q16 <= train_stdp_w_val;
+                        train_stdp_state <= TSK_DIV_DW_PREP;
                     end
                     TSK_DIV_NORM_WAIT: begin
-                        if (train_stdp_div_out_valid) begin
-                            if (train_stdp_div_err) begin
-                                train_stdp_active <= 1'b0;
-                                train_stdp_state  <= TSK_IDLE;
-                                train_stdp_batch_active <= 1'b0;
-                                train_chunk_active <= 1'b0;
-                                train_chunk_state <= TCK_IDLE;
-                                resp_status    <= STATUS_BAD_PACKET;
-                                resp_result    <= 32'sd0;
-                                resp_checksum  <= 8'h00;
-                                response_ready <= 1'b1;
-                            end else begin
-                                train_stdp_w_norm_q16 <= $signed(train_stdp_div_q_holdfix);
-                                train_stdp_state <= TSK_DIV_DW_PREP;
-                            end
-                        end
+                        train_stdp_state <= TSK_DIV_DW_PREP;
                     end
                     TSK_DIV_DW_PREP: begin
                         if ((train_stdp_a_val == 32'sd0) && (train_stdp_bt_val == 32'sd0)) begin
@@ -3464,8 +3433,12 @@ module top_level(
                             train_stdp_dW_q16 <= 32'sd0;
                             train_stdp_state <= TSK_DIV_DW_PIPE;
                         end else begin
-                            train_stdp_pot_mid_prod_q32 <= $signed(TRAIN_LR_P_Q16) * $signed(TRAIN_WMAX_Q16 - train_stdp_w_norm_q16);
-                            train_stdp_dep_mid_prod_q32 <= $signed(TRAIN_LR_M_Q16) * $signed(train_stdp_w_norm_q16);
+                            // Brian2 minimal STDP:
+                            //   on_pre : w -= 0.0001 * post1
+                            //   on_post: w += 0.01   * pre * post2_before
+                            // A and BT already hold the accumulated pre/post trace terms for this batch step.
+                            train_stdp_pot_mid_prod_q32 <= $signed(TRAIN_LR_P_Q16) * 32'sd65536;
+                            train_stdp_dep_mid_prod_q32 <= $signed(TRAIN_LR_M_Q16) * 32'sd65536;
                             train_stdp_state <= TSK_DIV_DW_PREP_MUL;
                         end
                     end
@@ -3524,47 +3497,17 @@ module top_level(
                         train_stdp_state <= TSK_DIV_DW_START;
                     end
                     TSK_DIV_DW_START: begin
-                        // dW is precomputed in TSK_DIV_DW_PREP to shorten state-control timing.
                         if (train_stdp_dW_q16 == 32'sd0) begin
                             train_stdp_w_new <= train_stdp_w_norm_q16;
                             train_stdp_state <= TSK_WRITE_W_REQ;
-                        end else if (!train_stdp_div_busy) begin
-                            train_stdp_dividend <= train_stdp_dW_abs;
-                            train_stdp_divisor  <= (train_stdp_update_nt == 32'd0) ? 32'd1 : train_stdp_update_nt;
-                            train_stdp_div_valid <= 1'b1;
-                            train_stdp_state <= TSK_DIV_DW_WAIT;
+                        end else begin
+                            train_stdp_state <= TSK_DIV_DW_WNEXT;
                         end
                     end
                     TSK_DIV_DW_WAIT: begin
-                        if (train_stdp_div_out_valid) begin
-                            logic signed [31:0] dW_step_q16_tmp;
-                            if (train_stdp_div_err) begin
-                                train_stdp_active <= 1'b0;
-                                train_stdp_state  <= TSK_IDLE;
-                                train_stdp_batch_active <= 1'b0;
-                                train_chunk_active <= 1'b0;
-                                train_chunk_state <= TCK_IDLE;
-                                resp_status    <= STATUS_BAD_PACKET;
-                                resp_result    <= 32'sd0;
-                                resp_checksum  <= 8'h00;
-                                response_ready <= 1'b1;
-                            end else begin
-                                dW_step_q16_tmp = $signed(train_stdp_div_q);
-                                if (train_stdp_dW_q16 < 0)
-                                    dW_step_q16_tmp = -dW_step_q16_tmp;
-                                train_stdp_dW_q16 <= dW_step_q16_tmp;
-                                train_stdp_state <= TSK_DIV_DW_CLIP;
-                            end
-                        end
+                        train_stdp_state <= TSK_DIV_DW_WNEXT;
                     end
                     TSK_DIV_DW_CLIP: begin
-                        logic signed [31:0] dW_clip_q16_tmp;
-                        dW_clip_q16_tmp = train_stdp_dW_q16;
-                        if (dW_clip_q16_tmp > TRAIN_CLIP_DW_Q16)
-                            dW_clip_q16_tmp = TRAIN_CLIP_DW_Q16;
-                        else if (dW_clip_q16_tmp < -TRAIN_CLIP_DW_Q16)
-                            dW_clip_q16_tmp = -TRAIN_CLIP_DW_Q16;
-                        train_stdp_dW_q16 <= dW_clip_q16_tmp;
                         train_stdp_state <= TSK_DIV_DW_WNEXT;
                     end
                     TSK_DIV_DW_WNEXT: begin
@@ -3644,7 +3587,7 @@ module top_level(
                                     train_stdp_w_row_base    <= TRAIN_BASE_W_Q16_WORDS;
                                     train_stdp_a_row_base    <= TRAIN_BASE_A_Q16_WORDS;
                                     train_stdp_bt_col_base   <= TRAIN_BASE_BT_Q16_WORDS;
-                                    train_stdp_state         <= TSK_SUM_READ_W_REQ;
+                                    train_stdp_state         <= TSK_READ_W_REQ;
                                 end
                             end else begin
                                 resp_status    <= STATUS_OK;
