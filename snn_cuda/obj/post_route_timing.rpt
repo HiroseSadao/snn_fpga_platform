@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Fri Mar 20 21:39:56 2026
-| Host         : eecs-digital-03 running 64-bit Ubuntu 24.04.3 LTS
+| Date         : Fri Mar 20 22:51:18 2026
+| Host         : eecs-digital-13 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_timing -file obj/post_route_timing.rpt
 | Design       : top_level
 | Device       : 7s50-csga324
@@ -12,20 +12,20 @@ Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanc
 
 Timing Report
 
-Slack (MET) :             0.197ns  (required time - arrival time)
-  Source:                 batch_img_byte_in_sector_reg[6]/C
+Slack (MET) :             0.032ns  (required time - arrival time)
+  Source:                 batch_img_byte_in_sector_reg[3]/C
                             (rising edge-triggered cell FDRE clocked by clk_passthrough_clk_wiz_0  {rise@0.000ns fall@5.000ns period=10.000ns})
-  Destination:            sd_copy_lba_reg[16]/D
+  Destination:            sd_copy_lba_reg[28]/D
                             (rising edge-triggered cell FDRE clocked by clk_passthrough_clk_wiz_0  {rise@0.000ns fall@5.000ns period=10.000ns})
   Path Group:             clk_passthrough_clk_wiz_0
   Path Type:              Setup (Max at Slow Process Corner)
   Requirement:            10.000ns  (clk_passthrough_clk_wiz_0 rise@10.000ns - clk_passthrough_clk_wiz_0 rise@0.000ns)
-  Data Path Delay:        9.800ns  (logic 5.210ns (53.163%)  route 4.590ns (46.837%))
-  Logic Levels:           18  (CARRY4=12 LUT2=3 LUT4=1 LUT5=1 LUT6=1)
-  Clock Path Skew:        -0.010ns (DCD - SCD + CPR)
-    Destination Clock Delay (DCD):    -1.579ns = ( 8.421 - 10.000 ) 
-    Source Clock Delay      (SCD):    -0.993ns
-    Clock Pessimism Removal (CPR):    0.576ns
+  Data Path Delay:        9.895ns  (logic 5.227ns (52.824%)  route 4.668ns (47.176%))
+  Logic Levels:           20  (CARRY4=13 LUT2=2 LUT3=1 LUT4=1 LUT5=2 LUT6=1)
+  Clock Path Skew:        -0.031ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    -1.580ns = ( 8.420 - 10.000 ) 
+    Source Clock Delay      (SCD):    -0.988ns
+    Clock Pessimism Removal (CPR):    0.561ns
   Clock Uncertainty:      0.074ns  ((TSJ^2 + DJ^2)^1/2) / 2 + PE
     Total System Jitter     (TSJ):    0.071ns
     Discrete Jitter          (DJ):    0.129ns
@@ -43,60 +43,65 @@ Slack (MET) :             0.197ns  (required time - arrival time)
                                                      -6.965    -4.291 r  u_ddr_clk_wiz/mmcm_adv_inst/CLKOUT5
                          net (fo=1, routed)           1.666    -2.625    u_ddr_clk_wiz/clk_passthrough_clk_wiz_0
     BUFGCTRL_X0Y4        BUFG (Prop_bufg_I_O)         0.096    -2.529 r  u_ddr_clk_wiz/clkout6_buf/O
-                         net (fo=15926, routed)       1.536    -0.993    core_clk
-    SLICE_X31Y77         FDRE                                         r  batch_img_byte_in_sector_reg[6]/C
+                         net (fo=16365, routed)       1.541    -0.988    core_clk
+    SLICE_X52Y73         FDRE                                         r  batch_img_byte_in_sector_reg[3]/C
   -------------------------------------------------------------------    -------------------
-    SLICE_X31Y77         FDRE (Prop_fdre_C_Q)         0.419    -0.574 r  batch_img_byte_in_sector_reg[6]/Q
-                         net (fo=4, routed)           0.625     0.051    u_uart_rx/imgload_start_addr_word_reg[29]_i_2_0[6]
-    SLICE_X30Y77         CARRY4 (Prop_carry4_S[3]_CO[3])
-                                                      0.673     0.724 r  u_uart_rx/batch_prefetch_img_byte_in_sector_reg[6]_i_3/CO[3]
-                         net (fo=1, routed)           0.000     0.724    u_sd_controller/batch_prefetch_img_byte_in_sector_reg[9][0]
-    SLICE_X30Y78         CARRY4 (Prop_carry4_CI_CO[3])
-                                                      0.117     0.841 r  u_sd_controller/batch_prefetch_img_byte_in_sector_reg[31]_i_7/CO[3]
-                         net (fo=1, routed)           0.000     0.841    u_sd_controller/batch_prefetch_img_byte_in_sector_reg[31]_i_7_n_0
-    SLICE_X30Y79         CARRY4 (Prop_carry4_CI_CO[3])
-                                                      0.117     0.958 r  u_sd_controller/batch_prefetch_img_byte_in_sector_reg[31]_i_23/CO[3]
-                         net (fo=1, routed)           0.000     0.958    u_sd_controller/batch_prefetch_img_byte_in_sector_reg[31]_i_23_n_0
-    SLICE_X30Y80         CARRY4 (Prop_carry4_CI_CO[3])
-                                                      0.117     1.075 r  u_sd_controller/batch_prefetch_img_byte_in_sector_reg[31]_i_22/CO[3]
-                         net (fo=1, routed)           0.000     1.075    u_sd_controller/batch_prefetch_img_byte_in_sector_reg[31]_i_22_n_0
-    SLICE_X30Y81         CARRY4 (Prop_carry4_CI_CO[3])
-                                                      0.117     1.192 r  u_sd_controller/batch_prefetch_img_byte_in_sector_reg[31]_i_20/CO[3]
-                         net (fo=1, routed)           0.000     1.192    u_sd_controller/batch_prefetch_img_byte_in_sector_reg[31]_i_20_n_0
-    SLICE_X30Y82         CARRY4 (Prop_carry4_CI_O[2])
-                                                      0.239     1.431 f  u_sd_controller/batch_prefetch_img_byte_in_sector_reg[31]_i_19/O[2]
-                         net (fo=1, routed)           0.573     2.004    u_sd_controller/next_img_sector_carry_tmp2[25]
-    SLICE_X29Y80         LUT4 (Prop_lut4_I2_O)        0.301     2.305 f  u_sd_controller/batch_prefetch_img_byte_in_sector[31]_i_15/O
-                         net (fo=1, routed)           0.942     3.247    u_sd_controller/batch_prefetch_img_byte_in_sector[31]_i_15_n_0
-    SLICE_X32Y79         LUT5 (Prop_lut5_I4_O)        0.124     3.371 r  u_sd_controller/batch_prefetch_img_byte_in_sector[31]_i_6/O
-                         net (fo=39, routed)          0.389     3.760    u_uart_rx/batch_prefetch_img_byte_in_sector_reg[5]_0
-    SLICE_X34Y80         LUT2 (Prop_lut2_I1_O)        0.124     3.884 r  u_uart_rx/batch_prefetch_img_sector_off[3]_i_2/O
-                         net (fo=1, routed)           0.000     3.884    u_uart_rx/batch_prefetch_img_sector_off[3]_i_2_n_0
-    SLICE_X34Y80         CARRY4 (Prop_carry4_S[1]_CO[3])
-                                                      0.533     4.417 r  u_uart_rx/batch_prefetch_img_sector_off_reg[3]_i_1/CO[3]
-                         net (fo=1, routed)           0.000     4.417    u_uart_rx/batch_prefetch_img_sector_off_reg[3]_i_1_n_0
-    SLICE_X34Y81         CARRY4 (Prop_carry4_CI_CO[3])
-                                                      0.117     4.534 r  u_uart_rx/batch_prefetch_img_sector_off_reg[7]_i_1/CO[3]
-                         net (fo=1, routed)           0.000     4.534    u_uart_rx/batch_prefetch_img_sector_off_reg[7]_i_1_n_0
-    SLICE_X34Y82         CARRY4 (Prop_carry4_CI_CO[3])
-                                                      0.117     4.651 r  u_uart_rx/batch_prefetch_img_sector_off_reg[11]_i_1/CO[3]
-                         net (fo=1, routed)           0.000     4.651    u_uart_rx/batch_prefetch_img_sector_off_reg[11]_i_1_n_0
-    SLICE_X34Y83         CARRY4 (Prop_carry4_CI_O[1])
-                                                      0.337     4.988 r  u_uart_rx/batch_prefetch_img_sector_off_reg[15]_i_1/O[1]
-                         net (fo=3, routed)           0.811     5.799    u_uart_rx/batch_img_sector_off_reg[31][13]
-    SLICE_X33Y86         LUT2 (Prop_lut2_I1_O)        0.306     6.105 r  u_uart_rx/sd_copy_lba[15]_i_8/O
-                         net (fo=1, routed)           0.000     6.105    u_uart_rx/sd_copy_lba[15]_i_8_n_0
-    SLICE_X33Y86         CARRY4 (Prop_carry4_S[1]_CO[3])
-                                                      0.550     6.655 r  u_uart_rx/sd_copy_lba_reg[15]_i_2/CO[3]
-                         net (fo=1, routed)           0.000     6.655    u_uart_rx/sd_copy_lba_reg[15]_i_2_n_0
-    SLICE_X33Y87         CARRY4 (Prop_carry4_CI_O[0])
-                                                      0.222     6.877 r  u_uart_rx/sd_copy_lba_reg[19]_i_2/O[0]
-                         net (fo=2, routed)           0.679     7.555    u_sd_controller/sd_copy_lba_reg[30][4]
-    SLICE_X30Y87         LUT2 (Prop_lut2_I0_O)        0.325     7.880 r  u_sd_controller/sd_copy_lba[16]_i_2/O
-                         net (fo=1, routed)           0.572     8.452    u_sd_controller/sd_copy_lba[16]_i_2_n_0
-    SLICE_X30Y89         LUT6 (Prop_lut6_I0_O)        0.355     8.807 r  u_sd_controller/sd_copy_lba[16]_i_1/O
-                         net (fo=1, routed)           0.000     8.807    u_sd_controller_n_264
-    SLICE_X30Y89         FDRE                                         r  sd_copy_lba_reg[16]/D
+    SLICE_X52Y73         FDRE (Prop_fdre_C_Q)         0.518    -0.470 r  batch_img_byte_in_sector_reg[3]/Q
+                         net (fo=6, routed)           0.586     0.116    u_uart_rx/batch_prefetch_img_byte_in_sector_reg[31]_0[0]
+    SLICE_X48Y73         CARRY4 (Prop_carry4_S[0]_CO[3])
+                                                      0.656     0.772 r  u_uart_rx/batch_prefetch_img_byte_in_sector_reg[6]_i_3/CO[3]
+                         net (fo=1, routed)           0.000     0.772    u_uart_rx/batch_prefetch_img_byte_in_sector_reg[6]_i_3_n_0
+    SLICE_X48Y74         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     0.886 r  u_uart_rx/batch_prefetch_img_byte_in_sector_reg[31]_i_2/CO[3]
+                         net (fo=1, routed)           0.009     0.895    u_uart_rx/batch_prefetch_img_byte_in_sector_reg[31]_i_2_n_0
+    SLICE_X48Y75         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     1.009 r  u_uart_rx/batch_prefetch_img_byte_in_sector_reg[31]_i_19/CO[3]
+                         net (fo=1, routed)           0.000     1.009    u_uart_rx/batch_prefetch_img_byte_in_sector_reg[31]_i_19_n_0
+    SLICE_X48Y76         CARRY4 (Prop_carry4_CI_O[0])
+                                                      0.222     1.231 f  u_uart_rx/batch_prefetch_img_byte_in_sector_reg[31]_i_18/O[0]
+                         net (fo=1, routed)           0.994     2.225    u_uart_rx/next_img_sector_carry_tmp2[15]
+    SLICE_X53Y76         LUT4 (Prop_lut4_I1_O)        0.299     2.524 f  u_uart_rx/batch_prefetch_img_byte_in_sector[31]_i_12/O
+                         net (fo=1, routed)           0.808     3.332    u_uart_rx/batch_prefetch_img_byte_in_sector[31]_i_12_n_0
+    SLICE_X53Y78         LUT5 (Prop_lut5_I4_O)        0.124     3.456 r  u_uart_rx/batch_prefetch_img_byte_in_sector[31]_i_4/O
+                         net (fo=39, routed)          0.406     3.863    u_uart_rx/batch_prefetch_img_byte_in_sector[31]_i_12_0
+    SLICE_X52Y80         LUT2 (Prop_lut2_I1_O)        0.124     3.987 r  u_uart_rx/batch_prefetch_img_sector_off[3]_i_2/O
+                         net (fo=1, routed)           0.000     3.987    u_uart_rx/batch_prefetch_img_sector_off[3]_i_2_n_0
+    SLICE_X52Y80         CARRY4 (Prop_carry4_S[1]_CO[3])
+                                                      0.533     4.520 r  u_uart_rx/batch_prefetch_img_sector_off_reg[3]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     4.520    u_uart_rx/batch_prefetch_img_sector_off_reg[3]_i_1_n_0
+    SLICE_X52Y81         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.117     4.637 r  u_uart_rx/batch_prefetch_img_sector_off_reg[7]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     4.637    u_uart_rx/batch_prefetch_img_sector_off_reg[7]_i_1_n_0
+    SLICE_X52Y82         CARRY4 (Prop_carry4_CI_O[1])
+                                                      0.337     4.974 r  u_uart_rx/batch_prefetch_img_sector_off_reg[11]_i_1/O[1]
+                         net (fo=4, routed)           0.628     5.601    u_uart_rx/sd_copy_lba1[9]
+    SLICE_X54Y82         LUT2 (Prop_lut2_I1_O)        0.306     5.907 r  u_uart_rx/sd_copy_lba[11]_i_8/O
+                         net (fo=1, routed)           0.000     5.907    u_uart_rx/sd_copy_lba[11]_i_8_n_0
+    SLICE_X54Y82         CARRY4 (Prop_carry4_S[1]_CO[3])
+                                                      0.533     6.440 r  u_uart_rx/sd_copy_lba_reg[11]_i_3/CO[3]
+                         net (fo=1, routed)           0.000     6.440    u_uart_rx/sd_copy_lba_reg[11]_i_3_n_0
+    SLICE_X54Y83         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.117     6.557 r  u_uart_rx/sd_copy_lba_reg[15]_i_3/CO[3]
+                         net (fo=1, routed)           0.000     6.557    u_uart_rx/sd_copy_lba_reg[15]_i_3_n_0
+    SLICE_X54Y84         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.117     6.674 r  u_uart_rx/sd_copy_lba_reg[19]_i_3/CO[3]
+                         net (fo=1, routed)           0.000     6.674    u_uart_rx/sd_copy_lba_reg[19]_i_3_n_0
+    SLICE_X54Y85         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.117     6.791 r  u_uart_rx/sd_copy_lba_reg[23]_i_3/CO[3]
+                         net (fo=1, routed)           0.000     6.791    u_uart_rx/sd_copy_lba_reg[23]_i_3_n_0
+    SLICE_X54Y86         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.117     6.908 r  u_uart_rx/sd_copy_lba_reg[27]_i_3/CO[3]
+                         net (fo=1, routed)           0.000     6.908    u_uart_rx/sd_copy_lba_reg[27]_i_3_n_0
+    SLICE_X54Y87         CARRY4 (Prop_carry4_CI_O[0])
+                                                      0.219     7.127 r  u_uart_rx/sd_copy_lba_reg[31]_i_12/O[0]
+                         net (fo=2, routed)           0.653     7.780    u_uart_rx/sd_copy_lba0[28]
+    SLICE_X55Y81         LUT3 (Prop_lut3_I2_O)        0.295     8.075 r  u_uart_rx/sd_copy_lba[28]_i_4/O
+                         net (fo=1, routed)           0.290     8.365    u_uart_rx/sd_copy_lba[28]_i_4_n_0
+    SLICE_X55Y80         LUT6 (Prop_lut6_I1_O)        0.124     8.489 r  u_uart_rx/sd_copy_lba[28]_i_3/O
+                         net (fo=1, routed)           0.294     8.783    u_sd_controller/sd_copy_lba_reg[28]
+    SLICE_X55Y81         LUT5 (Prop_lut5_I2_O)        0.124     8.907 r  u_sd_controller/sd_copy_lba[28]_i_1/O
+                         net (fo=1, routed)           0.000     8.907    u_sd_controller_n_943
+    SLICE_X55Y81         FDRE                                         r  sd_copy_lba_reg[28]/D
   -------------------------------------------------------------------    -------------------
 
                          (clock clk_passthrough_clk_wiz_0 rise edge)
@@ -109,16 +114,16 @@ Slack (MET) :             0.197ns  (required time - arrival time)
                                                      -7.221     5.311 r  u_ddr_clk_wiz/mmcm_adv_inst/CLKOUT5
                          net (fo=1, routed)           1.587     6.898    u_ddr_clk_wiz/clk_passthrough_clk_wiz_0
     BUFGCTRL_X0Y4        BUFG (Prop_bufg_I_O)         0.091     6.989 r  u_ddr_clk_wiz/clkout6_buf/O
-                         net (fo=15926, routed)       1.433     8.421    core_clk
-    SLICE_X30Y89         FDRE                                         r  sd_copy_lba_reg[16]/C
-                         clock pessimism              0.576     8.997    
-                         clock uncertainty           -0.074     8.923    
-    SLICE_X30Y89         FDRE (Setup_fdre_C_D)        0.081     9.004    sd_copy_lba_reg[16]
+                         net (fo=16365, routed)       1.432     8.420    core_clk
+    SLICE_X55Y81         FDRE                                         r  sd_copy_lba_reg[28]/C
+                         clock pessimism              0.561     8.981    
+                         clock uncertainty           -0.074     8.907    
+    SLICE_X55Y81         FDRE (Setup_fdre_C_D)        0.032     8.939    sd_copy_lba_reg[28]
   -------------------------------------------------------------------
-                         required time                          9.004    
-                         arrival time                          -8.807    
+                         required time                          8.939    
+                         arrival time                          -8.907    
   -------------------------------------------------------------------
-                         slack                                  0.197    
+                         slack                                  0.032    
 
 
 

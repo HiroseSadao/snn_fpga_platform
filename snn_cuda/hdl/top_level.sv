@@ -80,8 +80,8 @@ module top_level(
     localparam logic signed [31:0] FXP_BIAS_LSB = 32'sd512; // 0.0078125 in S16.16
     localparam logic signed [31:0] FXP_ONE = 32'sd65536; // 1.0 in S16.16
     localparam logic signed [31:0] FXP_HALF = 32'sd32768; // 0.5 in S16.16
-    localparam logic signed [31:0] FXP_WEXC = 32'sd147456; // 2.25 in S16.16
-    localparam logic signed [31:0] FXP_INH_COEFF = 32'sd563; // (0.85/99) in S16.16, aligned to mine.py main()
+    localparam logic signed [31:0] FXP_WEXC = 32'sd681574; // 10.4 in S16.16, Brian2 exc->inh weight
+    localparam logic signed [31:0] FXP_INH_COEFF = 32'sd2228; // 17.0 / 500.0 in S16.16, Brian2 inh->exc weight
     localparam logic signed [31:0] FXP_INH_THRESH = -32'sd2621440; // -40.0 in S16.16
     localparam logic signed [31:0] FXP_SCALE_1000 = 32'sd65536000;   // 1000.0 in S16.16 (1/1ms)
     localparam logic signed [31:0] FXP_SCALE_500  = 32'sd32768000;   // 500.0 in S16.16 (1/2ms)
@@ -89,7 +89,7 @@ module top_level(
     localparam logic signed [31:0] FXP_TRACE_POST1_DECAY = 32'sd62339; // exp(-1/20) in S16.16
     localparam logic signed [31:0] FXP_TRACE_POST2_DECAY = 32'sd63917; // exp(-1/40) in S16.16
     localparam logic signed [31:0] FXP_TRACE_EVENT_SET = 32'sd65536;   // 1.0 in S16.16
-    localparam logic signed [31:0] FXP_GEXC_SPIKE = 32'sd147456000;  // 2.25 * 1000 in S16.16
+    localparam logic signed [31:0] FXP_GEXC_SPIKE = 32'sd681574000;  // 10.4 * 1000 in S16.16
     // Step-domain approximations for mine.py neuron dynamics (dt=1ms)
     localparam logic [15:0] EXC_TREF_STEPS = 16'd5;
     localparam logic [15:0] INH_TREF_STEPS = 16'd2;
@@ -403,6 +403,9 @@ module top_level(
     logic [7:0] resp_status;
     logic signed [31:0] resp_result;
     logic [7:0] resp_checksum;
+    logic       uart_resp_pending;
+    logic [7:0] uart_resp_status;
+    logic signed [31:0] uart_resp_result;
     logic [2:0] tx_byte_idx;
     logic [31:0] batch_status_word;
     logic [31:0] batch_summary_word;
@@ -798,6 +801,11 @@ module top_level(
     (* ram_style = "block" *) logic signed [31:0] infer_g_in_delay2 [0:N_NEURONS-1];
     (* ram_style = "block" *) logic signed [31:0] infer_g_in_delay3 [0:N_NEURONS-1];
     (* ram_style = "block" *) logic signed [31:0] infer_g_in_delay4 [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic signed [31:0] infer_g_in_delay5 [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic signed [31:0] infer_g_in_delay6 [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic signed [31:0] infer_g_in_delay7 [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic signed [31:0] infer_g_in_delay8 [0:N_NEURONS-1];
+    (* ram_style = "block" *) logic signed [31:0] infer_g_in_delay9 [0:N_NEURONS-1];
     (* ram_style = "block" *) logic signed [31:0] infer_v_inh_state [0:N_NEURONS-1];
     (* ram_style = "block" *) logic signed [31:0] infer_c_exc_state [0:N_NEURONS-1];
     (* ram_style = "block" *) logic signed [31:0] infer_c_inh_state [0:N_NEURONS-1];
@@ -953,6 +961,11 @@ module top_level(
     logic signed [31:0] infer_delay_pipe_d1;
     logic signed [31:0] infer_delay_pipe_d2;
     logic signed [31:0] infer_delay_pipe_d3;
+    logic signed [31:0] infer_delay_pipe_d4;
+    logic signed [31:0] infer_delay_pipe_d5;
+    logic signed [31:0] infer_delay_pipe_d6;
+    logic signed [31:0] infer_delay_pipe_d7;
+    logic signed [31:0] infer_delay_pipe_d8;
     logic signed [31:0] infer_delay_pipe_delayed_g_in;
     logic [6:0]  infer_commit_idx;
     logic signed [31:0] infer_commit_v_next;
@@ -2115,6 +2128,9 @@ module top_level(
             resp_status       <= STATUS_BAD_PACKET;
             resp_result       <= 32'sd0;
             resp_checksum     <= 8'h00;
+            uart_resp_pending <= 1'b0;
+            uart_resp_status  <= STATUS_BAD_PACKET;
+            uart_resp_result  <= 32'sd0;
             tx_byte_idx       <= 3'd0;
             batch_status_word <= 32'd0;
             batch_summary_word <= 32'd0;
@@ -2509,6 +2525,12 @@ module top_level(
                                        (train_label_stats_active || train_chunk_active) &&
                                        (req_opcode != OP_BATCH_STATUS) &&
                                        (req_opcode != OP_BATCH_READ_SUMMARY);
+            if (response_ready && !uart_resp_pending) begin
+                uart_resp_pending <= 1'b1;
+                uart_resp_status  <= resp_status;
+                uart_resp_result  <= resp_result;
+                response_ready    <= 1'b0;
+            end
             ddr_rsp_toggle_core_sync1 <= ddr_rsp_toggle_ddr;
             ddr_rsp_toggle_core_sync2 <= ddr_rsp_toggle_core_sync1;
             if (sd_copy_resp_pending && !response_ready) begin
@@ -2650,9 +2672,15 @@ module top_level(
                     infer_poisson_num_const_cfg <= POISSON_NUM_CONST;
                 end else begin
                     infer_active       <= 1'b1;
-                    infer_state        <= INFER_INIT_CLEAR;
-                    infer_steps_target <= 32'd350;
-                    infer_step_idx     <= 16'd0;
+                    if (infer_model_state_valid) begin
+                        infer_state        <= INFER_CLEAR_SPIKE_COUNT;
+                        infer_steps_target <= {16'd0, infer_step_idx} + 32'd350;
+                    end else begin
+                        infer_state        <= INFER_INIT_CLEAR;
+                        infer_steps_target <= 32'd350;
+                        infer_step_idx     <= 16'd0;
+                        infer_model_state_valid <= 1'b1;
+                    end
                     infer_neuron_idx   <= 7'd0;
                     infer_input_idx    <= 10'd0;
                     infer_prep_idx     <= 10'd0;
@@ -2668,7 +2696,6 @@ module top_level(
                     infer_pre_active_count <= 10'd0;
                     raw_image0_rd_addr <= 10'd0;
                     infer_poisson_thresh_rd_addr <= 10'd0;
-                    infer_model_state_valid <= 1'b0;
                 end
             end
 
@@ -4565,6 +4592,7 @@ module top_level(
                                         batch_prefetch_issue_pending <= 1'b0;
                                         batch_prefetch_ready <= 1'b0;
                                         batch_prefetch_sample_idx <= 32'd0;
+                                        infer_model_state_valid <= 1'b0;
                                         if (!(batch_cfg0_valid && batch_cfg1_valid)) begin
                                             batch_done <= 1'b1;
                                             batch_error <= 1'b1;
@@ -4924,6 +4952,11 @@ module top_level(
                         infer_g_in_delay2[infer_apply_idx] <= 32'sd0;
                         infer_g_in_delay3[infer_apply_idx] <= 32'sd0;
                         infer_g_in_delay4[infer_apply_idx] <= 32'sd0;
+                        infer_g_in_delay5[infer_apply_idx] <= 32'sd0;
+                        infer_g_in_delay6[infer_apply_idx] <= 32'sd0;
+                        infer_g_in_delay7[infer_apply_idx] <= 32'sd0;
+                        infer_g_in_delay8[infer_apply_idx] <= 32'sd0;
+                        infer_g_in_delay9[infer_apply_idx] <= 32'sd0;
                         infer_v_inh_state[infer_apply_idx] <= FXP_INH_VRESET;
                         infer_c_exc_state[infer_apply_idx] <= 32'sd0;
                         infer_c_inh_state[infer_apply_idx] <= 32'sd0;
@@ -5183,13 +5216,23 @@ module top_level(
                         infer_delay_pipe_d1 <= infer_g_in_delay1[infer_delay_pipe_idx];
                         infer_delay_pipe_d2 <= infer_g_in_delay2[infer_delay_pipe_idx];
                         infer_delay_pipe_d3 <= infer_g_in_delay3[infer_delay_pipe_idx];
-                        infer_delay_pipe_delayed_g_in <= infer_g_in_delay4[infer_delay_pipe_idx];
+                        infer_delay_pipe_d4 <= infer_g_in_delay4[infer_delay_pipe_idx];
+                        infer_delay_pipe_d5 <= infer_g_in_delay5[infer_delay_pipe_idx];
+                        infer_delay_pipe_d6 <= infer_g_in_delay6[infer_delay_pipe_idx];
+                        infer_delay_pipe_d7 <= infer_g_in_delay7[infer_delay_pipe_idx];
+                        infer_delay_pipe_d8 <= infer_g_in_delay8[infer_delay_pipe_idx];
+                        infer_delay_pipe_delayed_g_in <= infer_g_in_delay9[infer_delay_pipe_idx];
                         infer_accum <= 32'sd0;
                         infer_state <= INFER_ACCUM_NEURON_PIPE;
                     end
 
                     INFER_ACCUM_NEURON_PIPE: begin
                         if (infer_delay_pipe_valid) begin
+                            infer_g_in_delay9[infer_delay_pipe_idx] <= infer_delay_pipe_d8;
+                            infer_g_in_delay8[infer_delay_pipe_idx] <= infer_delay_pipe_d7;
+                            infer_g_in_delay7[infer_delay_pipe_idx] <= infer_delay_pipe_d6;
+                            infer_g_in_delay6[infer_delay_pipe_idx] <= infer_delay_pipe_d5;
+                            infer_g_in_delay5[infer_delay_pipe_idx] <= infer_delay_pipe_d4;
                             infer_g_in_delay4[infer_delay_pipe_idx] <= infer_delay_pipe_d3;
                             infer_g_in_delay3[infer_delay_pipe_idx] <= infer_delay_pipe_d2;
                             infer_g_in_delay2[infer_delay_pipe_idx] <= infer_delay_pipe_d1;
@@ -5526,7 +5569,7 @@ module top_level(
                                     infer_evt_winner_idx <= infer_step_winner_idx;
                                     infer_evt_prelist_idx <= 10'd0;
                                     infer_evt_pre_idx <= 10'd0;
-                                    infer_evt_post_idx <= 7'd0;
+                                    infer_evt_post_idx <= infer_step_winner_valid ? infer_step_winner_idx : 7'd0;
                                     infer_evt_post_input_idx <= 10'd0;
                                     infer_evt_trace_val <= 32'sd0;
                                     infer_evt_w_cur <= 32'sd0;
@@ -5709,8 +5752,16 @@ module top_level(
                     end
 
                     INFER_EVT_POST_PTR0_REQ: begin
-                        csr_row_ptr_rd_addr <= infer_evt_winner_idx[ROW_IDX_W:0];
-                        infer_state <= INFER_EVT_POST_PTR0_WAIT;
+                        if (!infer_s_exc[infer_evt_post_idx]) begin
+                            if (infer_evt_post_idx == (N_NEURONS - 1)) begin
+                                infer_state <= INFER_EVT_DONE;
+                            end else begin
+                                infer_evt_post_idx <= infer_evt_post_idx + 7'd1;
+                            end
+                        end else begin
+                            csr_row_ptr_rd_addr <= infer_evt_post_idx[ROW_IDX_W:0];
+                            infer_state <= INFER_EVT_POST_PTR0_WAIT;
+                        end
                     end
 
                     INFER_EVT_POST_PTR0_WAIT: begin
@@ -5719,7 +5770,7 @@ module top_level(
                     end
 
                     INFER_EVT_POST_PTR1_REQ: begin
-                        csr_row_ptr_rd_addr <= infer_evt_winner_idx[ROW_IDX_W:0] + {{ROW_IDX_W{1'b0}}, 1'b1};
+                        csr_row_ptr_rd_addr <= infer_evt_post_idx[ROW_IDX_W:0] + {{ROW_IDX_W{1'b0}}, 1'b1};
                         infer_state <= INFER_EVT_POST_PTR1_WAIT;
                     end
 
@@ -5750,7 +5801,7 @@ module top_level(
 
                     INFER_EVT_POST_TRACE_WAIT: begin
                         infer_evt_trace_val <= $signed(train_xin_rd_data);
-                        infer_evt_post2_before_q <= infer_post2_before[infer_evt_winner_idx];
+                        infer_evt_post2_before_q <= infer_post2_before[infer_evt_post_idx];
                         infer_w_rd_addr <= infer_evt_edge_ptr;
                         infer_state <= INFER_EVT_POST_W_WAIT;
                     end
@@ -5799,7 +5850,12 @@ module top_level(
                             infer_w_wr_data <= w_next_q16[15:0];
                         end
                         if ((infer_evt_edge_idx + {{(EDGE_ADDR_W-1){1'b0}},1'b1}) >= infer_evt_edge_end) begin
-                            infer_state <= INFER_EVT_DONE;
+                            if (infer_evt_post_idx == (N_NEURONS - 1)) begin
+                                infer_state <= INFER_EVT_DONE;
+                            end else begin
+                                infer_evt_post_idx <= infer_evt_post_idx + 7'd1;
+                                infer_state <= INFER_EVT_POST_PTR0_REQ;
+                            end
                         end else begin
                             infer_evt_edge_idx <= infer_evt_edge_idx + {{(EDGE_ADDR_W-1){1'b0}},1'b1};
                             infer_state <= INFER_EVT_POST_EDGE_REQ;
@@ -5967,9 +6023,15 @@ module top_level(
                                     raw_image1_sum_u8 <= 32'd0;
                                 end
                                 infer_active       <= 1'b1;
-                                infer_state        <= INFER_INIT_CLEAR;
-                                infer_steps_target <= 32'd350;
-                                infer_step_idx     <= 16'd0;
+                                if (infer_model_state_valid) begin
+                                    infer_state        <= INFER_CLEAR_SPIKE_COUNT;
+                                    infer_steps_target <= {16'd0, infer_step_idx} + 32'd350;
+                                end else begin
+                                    infer_state        <= INFER_INIT_CLEAR;
+                                    infer_steps_target <= 32'd350;
+                                    infer_step_idx     <= 16'd0;
+                                    infer_model_state_valid <= 1'b1;
+                                end
                                 infer_neuron_idx   <= 7'd0;
                                 infer_input_idx    <= 10'd0;
                                 infer_prep_idx     <= 10'd0;
@@ -5985,7 +6047,6 @@ module top_level(
                                 infer_pre_active_count <= 10'd0;
                                 raw_image0_rd_addr <= 10'd0;
                                 infer_poisson_thresh_rd_addr <= 10'd0;
-                                infer_model_state_valid <= 1'b0;
                             end else begin
                                 logic [31:0] next_img_byte_off_tmp;
                                 logic [31:0] next_img_byte_in_sector_tmp;
@@ -6050,7 +6111,7 @@ module top_level(
             case (tx_state)
                 TX_IDLE: begin
                     tx_byte_idx <= 3'd0;
-                    if (response_ready) begin
+                    if (uart_resp_pending) begin
                         tx_state <= TX_SEND;
                     end
                 end
@@ -6059,12 +6120,12 @@ module top_level(
                     tx_dv <= 1'b1;
                     case (tx_byte_idx)
                         3'd0: tx_byte <= RESP_SYNC;
-                        3'd1: tx_byte <= resp_status;
-                        3'd2: tx_byte <= resp_result[7:0];
-                        3'd3: tx_byte <= resp_result[15:8];
-                        3'd4: tx_byte <= resp_result[23:16];
-                        3'd5: tx_byte <= resp_result[31:24];
-                        3'd6: tx_byte <= calc_resp_checksum(resp_status, resp_result);
+                        3'd1: tx_byte <= uart_resp_status;
+                        3'd2: tx_byte <= uart_resp_result[7:0];
+                        3'd3: tx_byte <= uart_resp_result[15:8];
+                        3'd4: tx_byte <= uart_resp_result[23:16];
+                        3'd5: tx_byte <= uart_resp_result[31:24];
+                        3'd6: tx_byte <= calc_resp_checksum(uart_resp_status, uart_resp_result);
                         default: tx_byte <= 8'h00;
                     endcase
                     tx_state <= TX_WAIT_DONE;
@@ -6073,8 +6134,8 @@ module top_level(
                 TX_WAIT_DONE: begin
                     if (tx_done) begin
                         if (tx_byte_idx == 3'd6) begin
-                            response_ready <= 1'b0;
-                            tx_state       <= TX_IDLE;
+                            uart_resp_pending <= 1'b0;
+                            tx_state          <= TX_IDLE;
                         end else begin
                             tx_byte_idx <= tx_byte_idx + 3'd1;
                             tx_state    <= TX_SEND;
