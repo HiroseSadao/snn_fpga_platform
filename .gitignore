@@ -1,3 +1,4 @@
 .venv/
+.venv_new/
 ubuvenv/
 snn_cuda/brian2_minimal_results/
