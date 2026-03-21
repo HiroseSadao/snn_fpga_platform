@@ -64,8 +64,8 @@ module top_level(
     localparam int N_IN = 784;
     localparam int N_NEURONS = 50;
     localparam int N_WEIGHTS = N_IN * N_NEURONS;
-    // Phase3 sparse connectivity target: keep only 30% of dense edges.
-    localparam int N_EDGES = (N_WEIGHTS * 3) / 10;
+    // Phase E: match Brian2 inp_exc.connect() with full 784x50 connectivity.
+    localparam int N_EDGES = N_WEIGHTS;
     localparam int TRAIN_DENSE_ADDR_W = $clog2(N_WEIGHTS);
     localparam int W_ADDR_W = $clog2(N_EDGES);
     localparam int CSR_ROW_PTR_W = $clog2(N_EDGES + 1);
@@ -1270,7 +1270,8 @@ module top_level(
         .dbiterrb       ()
     );
 
-    // Sparse inference weight table: csr_weight[N_EDGES].
+    // Inference weight table in CSR edge order. Phase E uses dense connectivity
+    // encoded as a full CSR/CSC graph so the existing walkers can stay unchanged.
     xpm_memory_sdpram #(
         .ADDR_WIDTH_A(W_ADDR_W),
         .ADDR_WIDTH_B(W_ADDR_W),
@@ -1278,7 +1279,7 @@ module top_level(
         .BYTE_WRITE_WIDTH_A(16),
         .CLOCKING_MODE("common_clock"),
         .ECC_MODE("no_ecc"),
-        .MEMORY_INIT_FILE("data/csr_weight_q16.mem"),
+        .MEMORY_INIT_FILE("data/dense_weight_q16.mem"),
         .MEMORY_INIT_PARAM("0"),
         .MEMORY_OPTIMIZATION("true"),
         .MEMORY_PRIMITIVE("block"),
@@ -1321,7 +1322,7 @@ module top_level(
         .BYTE_WRITE_WIDTH_A(16),
         .CLOCKING_MODE("common_clock"),
         .ECC_MODE("no_ecc"),
-        .MEMORY_INIT_FILE("data/csr_weight_q16.mem"),
+        .MEMORY_INIT_FILE("data/dense_weight_q16.mem"),
         .MEMORY_INIT_PARAM("0"),
         .MEMORY_OPTIMIZATION("true"),
         .MEMORY_PRIMITIVE("block"),
@@ -1465,7 +1466,7 @@ module top_level(
         .ADDR_WIDTH_A(ROW_IDX_W + 1),
         .AUTO_SLEEP_TIME(0),
         .ECC_MODE("no_ecc"),
-        .MEMORY_INIT_FILE("data/csr_row_ptr.mem"),
+        .MEMORY_INIT_FILE("data/csr_row_ptr_dense.mem"),
         .MEMORY_INIT_PARAM("0"),
         .MEMORY_OPTIMIZATION("true"),
         .MEMORY_PRIMITIVE("block"),
@@ -1497,7 +1498,7 @@ module top_level(
         .ADDR_WIDTH_A(EDGE_ADDR_W),
         .AUTO_SLEEP_TIME(0),
         .ECC_MODE("no_ecc"),
-        .MEMORY_INIT_FILE("data/csr_col_idx.mem"),
+        .MEMORY_INIT_FILE("data/csr_col_idx_dense.mem"),
         .MEMORY_INIT_PARAM("0"),
         .MEMORY_OPTIMIZATION("true"),
         .MEMORY_PRIMITIVE("block"),
@@ -1528,7 +1529,7 @@ module top_level(
         .ADDR_WIDTH_A(EDGE_ADDR_W),
         .AUTO_SLEEP_TIME(0),
         .ECC_MODE("no_ecc"),
-        .MEMORY_INIT_FILE("data/csr_col_idx.mem"),
+        .MEMORY_INIT_FILE("data/csr_col_idx_dense.mem"),
         .MEMORY_INIT_PARAM("0"),
         .MEMORY_OPTIMIZATION("true"),
         .MEMORY_PRIMITIVE("block"),
@@ -1560,7 +1561,7 @@ module top_level(
         .ADDR_WIDTH_A(COL_IDX_W + 1),
         .AUTO_SLEEP_TIME(0),
         .ECC_MODE("no_ecc"),
-        .MEMORY_INIT_FILE("data/csc_col_ptr.mem"),
+        .MEMORY_INIT_FILE("data/csc_col_ptr_dense.mem"),
         .MEMORY_INIT_PARAM("0"),
         .MEMORY_OPTIMIZATION("true"),
         .MEMORY_PRIMITIVE("block"),
@@ -1592,7 +1593,7 @@ module top_level(
         .ADDR_WIDTH_A(EDGE_ADDR_W),
         .AUTO_SLEEP_TIME(0),
         .ECC_MODE("no_ecc"),
-        .MEMORY_INIT_FILE("data/csc_row_idx.mem"),
+        .MEMORY_INIT_FILE("data/csc_row_idx_dense.mem"),
         .MEMORY_INIT_PARAM("0"),
         .MEMORY_OPTIMIZATION("true"),
         .MEMORY_PRIMITIVE("block"),
@@ -1624,7 +1625,7 @@ module top_level(
         .ADDR_WIDTH_A(EDGE_ADDR_W),
         .AUTO_SLEEP_TIME(0),
         .ECC_MODE("no_ecc"),
-        .MEMORY_INIT_FILE("data/csc_edge_idx.mem"),
+        .MEMORY_INIT_FILE("data/csc_edge_idx_dense.mem"),
         .MEMORY_INIT_PARAM("0"),
         .MEMORY_OPTIMIZATION("true"),
         .MEMORY_PRIMITIVE("block"),
