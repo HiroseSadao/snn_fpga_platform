@@ -657,6 +657,14 @@ module top_level(
     logic [W_ADDR_W-1:0] train_rebase_edge_end;
     logic signed [31:0] train_rebase_accum;
     logic [2:0]  train_rebase_phase;
+    logic [9:0]  train_rebase_last_pre_addr;
+    logic        train_rebase_last_pre_fire;
+    logic [TRAIN_DENSE_ADDR_W-1:0] train_rebase_last_weight_addr;
+    logic [15:0] train_rebase_last_weight_data;
+    logic [31:0] train_rebase_phase2_hits;
+    logic [31:0] train_rebase_phase4_hits;
+    logic [31:0] train_rebase_phase6_hits;
+    logic [31:0] train_rebase_edge_advances;
     logic        train_gen_active;
     train_gen_state_t train_gen_state;
     logic [31:0] train_gen_base_word;
@@ -1689,6 +1697,14 @@ module top_level(
                 6'd38: batch_summary_select = {25'd0, train_rebase_neuron_idx};
                 6'd39: batch_summary_select = train_rebase_edge_idx;
                 6'd40: batch_summary_select = train_rebase_edge_end;
+                6'd41: batch_summary_select = {22'd0, train_rebase_last_pre_addr};
+                6'd42: batch_summary_select = {31'd0, train_rebase_last_pre_fire};
+                6'd43: batch_summary_select = train_rebase_last_weight_addr;
+                6'd44: batch_summary_select = {16'd0, train_rebase_last_weight_data};
+                6'd45: batch_summary_select = train_rebase_phase2_hits;
+                6'd46: batch_summary_select = train_rebase_phase4_hits;
+                6'd47: batch_summary_select = train_rebase_phase6_hits;
+                6'd48: batch_summary_select = train_rebase_edge_advances;
                 default: batch_summary_select = 32'd0;
             endcase
         end
@@ -2142,6 +2158,14 @@ module top_level(
             train_rebase_edge_end <= '0;
             train_rebase_accum <= 32'sd0;
             train_rebase_phase <= 3'd0;
+            train_rebase_last_pre_addr <= 10'd0;
+            train_rebase_last_pre_fire <= 1'b0;
+            train_rebase_last_weight_addr <= '0;
+            train_rebase_last_weight_data <= 16'd0;
+            train_rebase_phase2_hits <= 32'd0;
+            train_rebase_phase4_hits <= 32'd0;
+            train_rebase_phase6_hits <= 32'd0;
+            train_rebase_edge_advances <= 32'd0;
             train_gen_active     <= 1'b0;
             train_gen_state      <= TGK_IDLE;
             train_gen_base_word  <= 32'd0;
@@ -3662,6 +3686,14 @@ module top_level(
                         train_rebase_edge_end <= '0;
                         train_rebase_accum <= 32'sd0;
                         train_rebase_phase <= 3'd0;
+                        train_rebase_last_pre_addr <= 10'd0;
+                        train_rebase_last_pre_fire <= 1'b0;
+                        train_rebase_last_weight_addr <= '0;
+                        train_rebase_last_weight_data <= 16'd0;
+                        train_rebase_phase2_hits <= 32'd0;
+                        train_rebase_phase4_hits <= 32'd0;
+                        train_rebase_phase6_hits <= 32'd0;
+                        train_rebase_edge_advances <= 32'd0;
                         train_chunk_state <= TCK_REBASE_GIN_RUN;
                     end
                     TCK_REBASE_GIN_RUN: begin
@@ -3673,6 +3705,7 @@ module top_level(
                         end else if (train_rebase_phase == 3'd1) begin
                             train_rebase_phase <= 3'd2;
                         end else if (train_rebase_phase == 3'd2) begin
+                            train_rebase_phase2_hits <= train_rebase_phase2_hits + 32'd1;
                             if (train_rebase_edge_idx >= train_rebase_edge_end) begin
                                 infer_g_in_state[train_rebase_neuron_idx] <= fxp_mul_s16_16(train_rebase_accum, FXP_SCALE_1000);
                                 if (train_rebase_neuron_idx == (N_NEURONS - 1)) begin
@@ -3683,14 +3716,19 @@ module top_level(
                                     train_rebase_phase <= 3'd0;
                                 end
                             end else begin
+                                train_rebase_last_pre_addr <= train_rebase_edge_idx[9:0];
                                 infer_pre_spike_rd_addr <= train_rebase_edge_idx[9:0];
                                 train_rebase_phase <= 3'd4;
                             end
                         end else if (train_rebase_phase == 3'd3) begin
                             train_rebase_phase <= 3'd4;
                         end else if (train_rebase_phase == 3'd4) begin
+                            train_rebase_phase4_hits <= train_rebase_phase4_hits + 32'd1;
+                            train_rebase_last_pre_addr <= train_rebase_edge_idx[9:0];
+                            train_rebase_last_pre_fire <= infer_pre_spike_rd_data;
                             if (infer_pre_spike_rd_data) begin
                                 infer_w_rd_addr <= dense_weight_addr(train_rebase_neuron_idx, train_rebase_edge_idx[9:0]);
+                                train_rebase_last_weight_addr <= dense_weight_addr(train_rebase_neuron_idx, train_rebase_edge_idx[9:0]);
                                 train_rebase_phase <= 3'd5;
                             end else begin
                                 if ((train_rebase_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1}) >= train_rebase_edge_end) begin
@@ -3698,18 +3736,24 @@ module top_level(
                                 end else begin
                                     train_rebase_edge_idx <= train_rebase_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1};
                                     infer_pre_spike_rd_addr <= train_rebase_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1};
+                                    train_rebase_last_pre_addr <= train_rebase_edge_idx[9:0] + 10'd1;
+                                    train_rebase_edge_advances <= train_rebase_edge_advances + 32'd1;
                                     train_rebase_phase <= 3'd4;
                                 end
                             end
                         end else if (train_rebase_phase == 3'd5) begin
                             train_rebase_phase <= 3'd6;
                         end else begin
+                            train_rebase_phase6_hits <= train_rebase_phase6_hits + 32'd1;
+                            train_rebase_last_weight_data <= infer_w_rd_data_q;
                             train_rebase_accum <= train_rebase_accum + $signed({16'd0, infer_w_rd_data_q});
                             if ((train_rebase_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1}) >= train_rebase_edge_end) begin
                                 train_rebase_phase <= 3'd2;
                             end else begin
                                 train_rebase_edge_idx <= train_rebase_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1};
                                 infer_pre_spike_rd_addr <= train_rebase_edge_idx + {{(W_ADDR_W-1){1'b0}},1'b1};
+                                train_rebase_last_pre_addr <= train_rebase_edge_idx[9:0] + 10'd1;
+                                train_rebase_edge_advances <= train_rebase_edge_advances + 32'd1;
                                 train_rebase_phase <= 3'd4;
                             end
                         end

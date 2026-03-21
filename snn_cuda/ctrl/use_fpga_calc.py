@@ -749,6 +749,14 @@ def fpga_batch_read_debug_state(ser: serial.Serial) -> dict[str, int]:
         "train_rebase_neuron_idx": fpga_batch_read_summary_field_u32(ser, 38),
         "train_rebase_edge_idx": fpga_batch_read_summary_field_u32(ser, 39),
         "train_rebase_edge_end": fpga_batch_read_summary_field_u32(ser, 40),
+        "train_rebase_last_pre_addr": fpga_batch_read_summary_field_u32(ser, 41),
+        "train_rebase_last_pre_fire": fpga_batch_read_summary_field_u32(ser, 42),
+        "train_rebase_last_weight_addr": fpga_batch_read_summary_field_u32(ser, 43),
+        "train_rebase_last_weight_data": fpga_batch_read_summary_field_u32(ser, 44),
+        "train_rebase_phase2_hits": fpga_batch_read_summary_field_u32(ser, 45),
+        "train_rebase_phase4_hits": fpga_batch_read_summary_field_u32(ser, 46),
+        "train_rebase_phase6_hits": fpga_batch_read_summary_field_u32(ser, 47),
+        "train_rebase_edge_advances": fpga_batch_read_summary_field_u32(ser, 48),
     }
 
 
@@ -893,6 +901,14 @@ def fpga_run_batch_with_progress(
                         "train_rebase_neuron_idx": 0,
                         "train_rebase_edge_idx": 0,
                         "train_rebase_edge_end": 0,
+                        "train_rebase_last_pre_addr": 0,
+                        "train_rebase_last_pre_fire": 0,
+                        "train_rebase_last_weight_addr": 0,
+                        "train_rebase_last_weight_data": 0,
+                        "train_rebase_phase2_hits": 0,
+                        "train_rebase_phase4_hits": 0,
+                        "train_rebase_phase6_hits": 0,
+                        "train_rebase_edge_advances": 0,
                     }
                 if done_now > last_done:
                     pbar.update(done_now - last_done)
@@ -912,6 +928,11 @@ def fpga_run_batch_with_progress(
                     f" rph={dbg['train_rebase_phase']}"
                     f" rn={dbg['train_rebase_neuron_idx']}"
                     f" re={dbg['train_rebase_edge_idx']}/{dbg['train_rebase_edge_end']}"
+                    f" rpre={dbg['train_rebase_last_pre_addr']}:{dbg['train_rebase_last_pre_fire']}"
+                    f" rwa=0x{dbg['train_rebase_last_weight_addr']:X}"
+                    f" rwd=0x{dbg['train_rebase_last_weight_data']:04X}"
+                    f" rh={dbg['train_rebase_phase2_hits']}/{dbg['train_rebase_phase4_hits']}/{dbg['train_rebase_phase6_hits']}"
+                    f" rav={dbg['train_rebase_edge_advances']}"
                 )
                 last_progress_poll = now
             if st.done and not st.active:
