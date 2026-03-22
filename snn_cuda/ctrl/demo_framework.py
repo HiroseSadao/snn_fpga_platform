@@ -79,6 +79,8 @@ class FpgaDemoBackend:
             "dataset_name": spec.dataset.name,
             "start_lba": int(spec.dataset.start_lba),
             "seed": int(spec.execution.seed),
+            "train_seed": int(spec.execution.seed if spec.execution.train_seed is None else spec.execution.train_seed),
+            "infer_seed": int((spec.execution.seed + 1) if spec.execution.infer_seed is None else spec.execution.infer_seed),
             "timeout_sec": float(spec.execution.timeout_sec),
             "train_samples": int(spec.execution.train_samples),
             "infer_samples": int(spec.execution.infer_samples),

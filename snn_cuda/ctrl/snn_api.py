@@ -10,6 +10,8 @@ class RunConfig:
     infer_samples: int = 20
     port: str = "COM7"
     seed: int = 0x12345678
+    train_seed: int | None = None
+    infer_seed: int | None = None
     timeout_sec: float = 180.0
     chunk_nsteps: int = 16
     train_e2e_mine_timing: bool = False
@@ -110,8 +112,12 @@ def create_fixed_mnist_stdp_model(
     infer_samples: int = 100,
     timeout_sec: float = 600.0,
     seed: int = 0x12345678,
+    train_seed: int | None = None,
+    infer_seed: int | None = None,
     output_path: str = "ctrl/demo_result.json",
 ) -> SNNModel:
+    train_seed_value = int(seed) if train_seed is None else int(train_seed)
+    infer_seed_value = (int(seed) + 1) if infer_seed is None else int(infer_seed)
     model = SNNModel(
         name=name,
         dataset=DatasetConfig(name="mnist", source="fpga", start_lba=int(start_lba)),
@@ -121,6 +127,8 @@ def create_fixed_mnist_stdp_model(
             infer_samples=int(infer_samples),
             port=port,
             seed=int(seed),
+            train_seed=train_seed_value,
+            infer_seed=infer_seed_value,
             timeout_sec=float(timeout_sec),
         ),
         artifacts=ArtifactConfig(output_path=output_path),

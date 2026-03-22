@@ -50,11 +50,15 @@ class DemoCompilePlan:
     def to_runtime_args(self) -> SimpleNamespace:
         exe = self.spec.execution
         ds = self.spec.dataset
+        train_seed = int(exe.seed if exe.train_seed is None else exe.train_seed)
+        infer_seed = int((exe.seed + 1) if exe.infer_seed is None else exe.infer_seed)
         return SimpleNamespace(
             image_source=ds.source,
             port=exe.port,
             start_lba=int(ds.start_lba),
             seed=int(exe.seed),
+            train_seed=train_seed,
+            infer_seed=infer_seed,
             timeout=float(exe.timeout_sec),
             train_then_infer_train_samples=int(exe.train_samples),
             train_then_infer_infer_samples=int(exe.infer_samples),
@@ -146,6 +150,10 @@ def _build_legacy_cli(spec: DemoModelSpec) -> list[str]:
         str(exe.timeout_sec),
         "--seed",
         hex(exe.seed),
+        "--train-seed",
+        hex(int(exe.seed if exe.train_seed is None else exe.train_seed)),
+        "--infer-seed",
+        hex(int((exe.seed + 1) if exe.infer_seed is None else exe.infer_seed)),
     ]
     if exe.mode == "train-only":
         cmd.append("--batch-train-only")

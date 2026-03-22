@@ -1406,7 +1406,8 @@ def fpga_batch_train_then_infer(
     n_infer = max(1, int(getattr(args, "train_then_infer_infer_samples", 100)))
     start_lba = int(args.start_lba)
     timeout_sec = float(args.timeout)
-    seed = int(args.seed)
+    train_seed = int(getattr(args, "train_seed", getattr(args, "seed", 0x12345678)))
+    infer_seed = int(getattr(args, "infer_seed", (train_seed + 1)))
 
     _, labels_all = load_mnist()
     total_need = n_train + n_infer
@@ -1432,7 +1433,7 @@ def fpga_batch_train_then_infer(
         start_sample_idx=0,
         num_samples=n_train,
         start_lba=start_lba,
-        seed=seed,
+        seed=train_seed,
         timeout_sec=max(60.0, timeout_sec),
         desc=f"batch-train {n_train}",
     )
@@ -1465,7 +1466,7 @@ def fpga_batch_train_then_infer(
         start_sample_idx=n_train,
         num_samples=n_infer,
         start_lba=start_lba,
-        seed=seed,
+        seed=infer_seed,
         timeout_sec=max(60.0, timeout_sec),
         desc=f"batch-infer {n_infer}",
     )
@@ -1491,6 +1492,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--port", type=str, default=SERIAL_PORTNAME)
     parser.add_argument("--start-lba", type=int, default=2048)
     parser.add_argument("--seed", type=lambda x: int(x, 0), default=0x12345678)
+    parser.add_argument("--train-seed", type=lambda x: int(x, 0), default=None)
+    parser.add_argument("--infer-seed", type=lambda x: int(x, 0), default=None)
     parser.add_argument("--timeout", type=float, default=600.0)
     parser.add_argument("--train-then-infer-train-samples", type=int, default=500)
     parser.add_argument("--train-then-infer-infer-samples", type=int, default=100)
