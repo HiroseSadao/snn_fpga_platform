@@ -27,6 +27,9 @@ WRITE_TIMEOUT_SEC = 2.0
 TRANSIENT_RETRY_MAX = 5
 TRANSIENT_RETRY_SLEEP_SEC = 0.003
 TRAIN_KERNEL_TIMEOUT_SEC = 30.0
+LABEL_WRITE_RETRY_MAX = 20
+LABEL_WRITE_RETRY_SLEEP_SEC = 0.01
+LABEL_WRITE_PACE_SEC = 0.002
 
 # Protocol constants
 REQ_SYNC = 0xA5
@@ -296,6 +299,28 @@ def decode_bad_packet_result(result: int) -> str:
             f"label_stats={label_stats_active}, infer={infer_active}, "
             f"req_nargs={req_nargs_dbg}"
         )
+    if reason == 0x42:
+        calib = (u >> 23) & 0x1
+        sd_copy = (u >> 22) & 0x1
+        imgload = (u >> 21) & 0x1
+        imgload_start = (u >> 20) & 0x1
+        ddr_pending = (u >> 19) & 0x1
+        trace_active = (u >> 18) & 0x1
+        stdp_active = (u >> 17) & 0x1
+        stdp_batch = (u >> 16) & 0x1
+        chunk_active = (u >> 15) & 0x1
+        label_stats_active = (u >> 14) & 0x1
+        infer_active = (u >> 13) & 0x1
+        cfg1_valid = (u >> 12) & 0x1
+        cfg0_valid = (u >> 11) & 0x1
+        batch_active = (u >> 10) & 0x1
+        return (
+            "reason=BATCH_START_GATE(0x42), "
+            f"calib={calib}, sd={sd_copy}, imgload={imgload}, imgload_start={imgload_start}, "
+            f"ddr_pending={ddr_pending}, trace={trace_active}, stdp={stdp_active}, "
+            f"stdp_batch={stdp_batch}, chunk={chunk_active}, label_stats={label_stats_active}, "
+            f"infer={infer_active}, cfg1={cfg1_valid}, cfg0={cfg0_valid}, active={batch_active}"
+        )
     if u == 0:
         return "no debug payload (result=0)"
     return f"reason=0x{reason:02X}, opcode=0x{opcode:02X}, arg0_lo16=0x{arg0_lo16:04X}"
@@ -472,6 +497,27 @@ def fpga_read_spike_counts(ser: serial.Serial) -> list[int]:
 def fpga_train_label_stats_reset(ser: serial.Serial) -> None:
     status, result = send_request(ser, OP_TRAIN_LABEL_STATS_RESET, [0, 0], response_timeout=max(10.0, TRAIN_KERNEL_TIMEOUT_SEC))
     require_ok(status, "TRAIN_LABEL_STATS_RESET")
+
+
+def fpga_wait_train_label_stats_idle(
+    ser: serial.Serial,
+    *,
+    timeout_sec: float = 10.0,
+    poll_interval_sec: float = 0.01,
+) -> None:
+    t0 = time.time()
+    last_status: BatchStatus | None = None
+    while True:
+        st = fpga_batch_read_status(ser)
+        last_status = st
+        if not st.train_label_stats_active:
+            return
+        if (time.time() - t0) > float(timeout_sec):
+            raise TimeoutError(
+                "TRAIN_LABEL_STATS_RESET did not become idle"
+                + (f", last_status={last_status}" if last_status is not None else "")
+            )
+        time.sleep(poll_interval_sec)
 
 
 def fpga_train_label_stats_accum(ser: serial.Serial, label: int) -> None:
@@ -741,25 +787,6 @@ def fpga_batch_read_train_detail_breakdown(ser: serial.Serial) -> dict[str, int]
     }
 
 
-def fpga_batch_read_debug_state(ser: serial.Serial) -> dict[str, int]:
-    return {
-        "train_chunk_state": fpga_batch_read_summary_field_u32(ser, 35),
-        "infer_state": fpga_batch_read_summary_field_u32(ser, 36),
-        "train_rebase_phase": fpga_batch_read_summary_field_u32(ser, 37),
-        "train_rebase_neuron_idx": fpga_batch_read_summary_field_u32(ser, 38),
-        "train_rebase_edge_idx": fpga_batch_read_summary_field_u32(ser, 39),
-        "train_rebase_edge_end": fpga_batch_read_summary_field_u32(ser, 40),
-        "train_rebase_last_pre_addr": fpga_batch_read_summary_field_u32(ser, 41),
-        "train_rebase_last_pre_fire": fpga_batch_read_summary_field_u32(ser, 42),
-        "train_rebase_last_weight_addr": fpga_batch_read_summary_field_u32(ser, 43),
-        "train_rebase_last_weight_data": fpga_batch_read_summary_field_u32(ser, 44),
-        "train_rebase_phase2_hits": fpga_batch_read_summary_field_u32(ser, 45),
-        "train_rebase_phase4_hits": fpga_batch_read_summary_field_u32(ser, 46),
-        "train_rebase_phase6_hits": fpga_batch_read_summary_field_u32(ser, 47),
-        "train_rebase_edge_advances": fpga_batch_read_summary_field_u32(ser, 48),
-    }
-
-
 def print_cycle_breakdown(title: str, breakdown: dict[str, int]) -> None:
     total = sum(int(v) for v in breakdown.values())
     print(title)
@@ -793,8 +820,27 @@ def print_train_detail_breakdown(title: str, breakdown: dict[str, int], *, train
 
 
 def fpga_batch_label_write(ser: serial.Serial, sample_idx: int, label: int) -> None:
-    status, value = send_request(ser, OP_BATCH_LABEL_WRITE, [int(sample_idx), int(label)])
-    require_ok(status, f"BATCH_LABEL_WRITE[idx={int(sample_idx)}]")
+    for attempt in range(LABEL_WRITE_RETRY_MAX + 1):
+        try:
+            status, value = send_request(
+                ser,
+                OP_BATCH_LABEL_WRITE,
+                [int(sample_idx), int(label)],
+                response_timeout=max(5.0, TIMEOUT_SEC),
+                transient_retry_max=8,
+                clear_input_buffer=False,
+            )
+            require_ok(status, f"BATCH_LABEL_WRITE[idx={int(sample_idx)}]")
+            time.sleep(LABEL_WRITE_PACE_SEC)
+            return
+        except TimeoutError:
+            if attempt >= LABEL_WRITE_RETRY_MAX:
+                raise
+            time.sleep(LABEL_WRITE_RETRY_SLEEP_SEC)
+        except RuntimeError:
+            if attempt >= LABEL_WRITE_RETRY_MAX:
+                raise
+            time.sleep(LABEL_WRITE_RETRY_SLEEP_SEC)
 
 
 def fpga_batch_preload_labels(
@@ -810,7 +856,12 @@ def fpga_batch_preload_labels(
 
 
 def fpga_batch_assign_write(ser: serial.Serial, neuron_idx: int, label: int) -> None:
-    status, value = send_request(ser, OP_BATCH_ASSIGN_WRITE, [int(neuron_idx), int(label)])
+    status, value = send_request(
+        ser,
+        OP_BATCH_ASSIGN_WRITE,
+        [int(neuron_idx), int(label)],
+        clear_input_buffer=False,
+    )
     require_ok(status, f"BATCH_ASSIGN_WRITE[idx={int(neuron_idx)}]")
 
 
@@ -887,35 +938,17 @@ def fpga_run_batch_with_progress(
             last_status = st
             now = time.time()
             if (now - last_progress_poll) >= 2.0:
-                try:
-                    done_now = fpga_batch_read_summary_field_u32(ser, 4)
-                except TimeoutError:
-                    done_now = last_done
-                try:
-                    dbg = fpga_batch_read_debug_state(ser)
-                except TimeoutError:
-                    dbg = {
-                        "train_chunk_state": 0,
-                        "infer_state": 0,
-                        "train_rebase_phase": 0,
-                        "train_rebase_neuron_idx": 0,
-                        "train_rebase_edge_idx": 0,
-                        "train_rebase_edge_end": 0,
-                        "train_rebase_last_pre_addr": 0,
-                        "train_rebase_last_pre_fire": 0,
-                        "train_rebase_last_weight_addr": 0,
-                        "train_rebase_last_weight_data": 0,
-                        "train_rebase_phase2_hits": 0,
-                        "train_rebase_phase4_hits": 0,
-                        "train_rebase_phase6_hits": 0,
-                        "train_rebase_edge_advances": 0,
-                    }
+                done_now = last_done
                 if done_now > last_done:
                     pbar.update(done_now - last_done)
                     last_done = done_now
                 pbar.set_postfix_str(
                     "phase="
                     f"{st.phase}"
+                    f" act={int(st.active)}"
+                    f" donef={int(st.done)}"
+                    f" err={int(st.has_error)}:{st.error_code}"
+                    f" cfg={int(st.cfg0_valid)}/{int(st.cfg1_valid)}"
                     f" done={done_now}/{int(num_samples)}"
                     f" tch={int(st.train_chunk_active)}"
                     f" inf={int(st.infer_active)}"
@@ -923,16 +956,6 @@ def fpga_run_batch_with_progress(
                     f" bie={int(st.batch_infer_eval_active)}"
                     f" pre={int(st.batch_prefetch_active)}"
                     f" sd={int(st.sd_copy_active)}"
-                    f" tstate={dbg['train_chunk_state']}"
-                    f" istate={dbg['infer_state']}"
-                    f" rph={dbg['train_rebase_phase']}"
-                    f" rn={dbg['train_rebase_neuron_idx']}"
-                    f" re={dbg['train_rebase_edge_idx']}/{dbg['train_rebase_edge_end']}"
-                    f" rpre={dbg['train_rebase_last_pre_addr']}:{dbg['train_rebase_last_pre_fire']}"
-                    f" rwa=0x{dbg['train_rebase_last_weight_addr']:X}"
-                    f" rwd=0x{dbg['train_rebase_last_weight_data']:04X}"
-                    f" rh={dbg['train_rebase_phase2_hits']}/{dbg['train_rebase_phase4_hits']}/{dbg['train_rebase_phase6_hits']}"
-                    f" rav={dbg['train_rebase_edge_advances']}"
                 )
                 last_progress_poll = now
             if st.done and not st.active:
@@ -1044,6 +1067,7 @@ def fpga_train_then_infer_compare_500_100(
     )
 
     fpga_train_label_stats_reset(ser)
+    fpga_wait_train_label_stats_idle(ser)
     pbar_train = tqdm(total=n_train, desc=f"train {n_train}", unit="img", miniters=1, leave=True)
     for sample_idx in range(n_train):
         label = int(labels_all[sample_idx])
@@ -1257,6 +1281,7 @@ def fpga_batch_single_smoke(
     _, labels_all = load_mnist()
     if mode_train:
         fpga_train_label_stats_reset(ser)
+        fpga_wait_train_label_stats_idle(ser)
         fpga_batch_preload_labels(
             ser,
             labels_all,
@@ -1329,6 +1354,7 @@ def fpga_batch_train_only(
 
     print(f"Batch train start: train={n_train}")
     fpga_train_label_stats_reset(ser)
+    fpga_wait_train_label_stats_idle(ser)
     fpga_batch_preload_labels(
         ser,
         labels_all,
@@ -1393,6 +1419,7 @@ def fpga_batch_train_then_infer(
     )
 
     fpga_train_label_stats_reset(ser)
+    fpga_wait_train_label_stats_idle(ser)
     fpga_batch_preload_labels(
         ser,
         labels_all,

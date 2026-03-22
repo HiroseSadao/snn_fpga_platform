@@ -1,8 +1,8 @@
 Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanced Micro Devices, Inc. All Rights Reserved.
 ---------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version : Vivado v.2025.1 (lin64) Build 6140274 Wed May 21 22:58:25 MDT 2025
-| Date         : Sat Mar 21 03:49:25 2026
-| Host         : eecs-digital-04 running 64-bit Ubuntu 24.04.3 LTS
+| Date         : Sun Mar 22 01:03:04 2026
+| Host         : eecs-digital-13 running 64-bit Ubuntu 24.04.3 LTS
 | Command      : report_timing -file obj/post_route_timing.rpt
 | Design       : top_level
 | Device       : 7s50-csga324
@@ -12,19 +12,19 @@ Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2025 Advanc
 
 Timing Report
 
-Slack (MET) :             0.065ns  (required time - arrival time)
-  Source:                 imgload_byte_idx_reg[3]/C
+Slack (MET) :             0.178ns  (required time - arrival time)
+  Source:                 arg0_reg[5]/C
                             (rising edge-triggered cell FDRE clocked by clk_passthrough_clk_wiz_0  {rise@0.000ns fall@5.000ns period=10.000ns})
-  Destination:            resp_result_reg[17]/CE
+  Destination:            resp_result_reg[29]/CE
                             (rising edge-triggered cell FDRE clocked by clk_passthrough_clk_wiz_0  {rise@0.000ns fall@5.000ns period=10.000ns})
   Path Group:             clk_passthrough_clk_wiz_0
   Path Type:              Setup (Max at Slow Process Corner)
   Requirement:            10.000ns  (clk_passthrough_clk_wiz_0 rise@10.000ns - clk_passthrough_clk_wiz_0 rise@0.000ns)
-  Data Path Delay:        9.546ns  (logic 2.628ns (27.529%)  route 6.918ns (72.471%))
-  Logic Levels:           11  (CARRY4=2 LUT4=2 LUT5=1 LUT6=6)
-  Clock Path Skew:        -0.110ns (DCD - SCD + CPR)
-    Destination Clock Delay (DCD):    -1.583ns = ( 8.417 - 10.000 ) 
-    Source Clock Delay      (SCD):    -0.983ns
+  Data Path Delay:        9.440ns  (logic 3.081ns (32.639%)  route 6.359ns (67.361%))
+  Logic Levels:           15  (CARRY4=7 LUT1=1 LUT2=1 LUT4=2 LUT5=1 LUT6=3)
+  Clock Path Skew:        -0.103ns (DCD - SCD + CPR)
+    Destination Clock Delay (DCD):    -1.589ns = ( 8.411 - 10.000 ) 
+    Source Clock Delay      (SCD):    -0.996ns
     Clock Pessimism Removal (CPR):    0.489ns
   Clock Uncertainty:      0.074ns  ((TSJ^2 + DJ^2)^1/2) / 2 + PE
     Total System Jitter     (TSJ):    0.071ns
@@ -43,36 +43,49 @@ Slack (MET) :             0.065ns  (required time - arrival time)
                                                      -6.965    -4.291 r  u_ddr_clk_wiz/mmcm_adv_inst/CLKOUT5
                          net (fo=1, routed)           1.666    -2.625    u_ddr_clk_wiz/clk_passthrough_clk_wiz_0
     BUFGCTRL_X0Y4        BUFG (Prop_bufg_I_O)         0.096    -2.529 r  u_ddr_clk_wiz/clkout6_buf/O
-                         net (fo=16518, routed)       1.546    -0.983    core_clk
-    SLICE_X31Y65         FDRE                                         r  imgload_byte_idx_reg[3]/C
+                         net (fo=15979, routed)       1.533    -0.996    core_clk
+    SLICE_X37Y74         FDRE                                         r  arg0_reg[5]/C
   -------------------------------------------------------------------    -------------------
-    SLICE_X31Y65         FDRE (Prop_fdre_C_Q)         0.419    -0.564 r  imgload_byte_idx_reg[3]/Q
-                         net (fo=14, routed)          1.081     0.517    u_uart_rx/imgload_byte_idx_reg[9]_0[3]
-    SLICE_X30Y66         LUT6 (Prop_lut6_I1_O)        0.299     0.816 r  u_uart_rx/imgload_byte_idx[5]_i_2/O
-                         net (fo=5, routed)           0.421     1.237    u_uart_rx/imgload_byte_idx_reg[5]
-    SLICE_X33Y66         LUT4 (Prop_lut4_I3_O)        0.124     1.361 r  u_uart_rx/raw_image1_sum_u8[31]_i_13/O
-                         net (fo=1, routed)           0.000     1.361    u_uart_rx/raw_image1_sum_u8[31]_i_13_n_0
-    SLICE_X33Y66         CARRY4 (Prop_carry4_S[2]_CO[3])
-                                                      0.398     1.759 r  u_uart_rx/raw_image1_sum_u8_reg[31]_i_5/CO[3]
-                         net (fo=1, routed)           0.000     1.759    u_uart_rx/raw_image1_sum_u8_reg[31]_i_5_n_0
-    SLICE_X33Y67         CARRY4 (Prop_carry4_CI_CO[0])
-                                                      0.271     2.030 r  u_uart_rx/raw_image1_sum_u8_reg[31]_i_4/CO[0]
-                         net (fo=52, routed)          0.348     2.378    u_uart_rx/imgload_byte_idx_reg[7][0]
-    SLICE_X31Y67         LUT6 (Prop_lut6_I4_O)        0.373     2.751 r  u_uart_rx/resp_status[5]_i_29/O
-                         net (fo=19, routed)          0.946     3.697    u_uart_rx/imgload_active_reg
-    SLICE_X36Y69         LUT5 (Prop_lut5_I0_O)        0.124     3.821 f  u_uart_rx/resp_status[7]_i_39/O
-                         net (fo=10, routed)          0.796     4.617    u_uart_rx/resp_status[7]_i_39_n_0
-    SLICE_X40Y67         LUT4 (Prop_lut4_I1_O)        0.124     4.741 f  u_uart_rx/resp_status[7]_i_19/O
-                         net (fo=13, routed)          0.497     5.238    u_uart_rx/batch_active_reg_1
-    SLICE_X40Y69         LUT6 (Prop_lut6_I1_O)        0.124     5.362 f  u_uart_rx/resp_status[7]_i_4/O
-                         net (fo=11, routed)          0.750     6.112    u_uart_rx/resp_status[7]_i_4_n_0
-    SLICE_X49Y70         LUT6 (Prop_lut6_I2_O)        0.124     6.236 r  u_uart_rx/resp_result[31]_i_8/O
-                         net (fo=1, routed)           0.667     6.903    u_uart_rx/resp_result[31]_i_8_n_0
-    SLICE_X49Y70         LUT6 (Prop_lut6_I2_O)        0.124     7.027 f  u_uart_rx/resp_result[31]_i_3/O
-                         net (fo=1, routed)           0.313     7.340    u_uart_rx/resp_result[31]_i_3_n_0
-    SLICE_X51Y69         LUT6 (Prop_lut6_I2_O)        0.124     7.464 r  u_uart_rx/resp_result[31]_i_1/O
-                         net (fo=32, routed)          1.099     8.563    u_uart_rx_n_1343
-    SLICE_X57Y72         FDRE                                         r  resp_result_reg[17]/CE
+    SLICE_X37Y74         FDRE (Prop_fdre_C_Q)         0.456    -0.540 f  arg0_reg[5]/Q
+                         net (fo=60, routed)          0.838     0.298    u_uart_rx/train_chunk_steps_left_reg[5]
+    SLICE_X37Y69         LUT1 (Prop_lut1_I0_O)        0.124     0.422 r  u_uart_rx/imgload_start_addr_word[5]_i_4/O
+                         net (fo=1, routed)           0.000     0.422    u_uart_rx/imgload_start_addr_word[5]_i_4_n_0
+    SLICE_X37Y69         CARRY4 (Prop_carry4_S[1]_CO[3])
+                                                      0.550     0.972 r  u_uart_rx/imgload_start_addr_word_reg[5]_i_2/CO[3]
+                         net (fo=1, routed)           0.000     0.972    u_uart_rx/imgload_start_addr_word_reg[5]_i_2_n_0
+    SLICE_X37Y70         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     1.086 r  u_uart_rx/imgload_start_addr_word_reg[9]_i_2/CO[3]
+                         net (fo=1, routed)           0.000     1.086    u_uart_rx/imgload_start_addr_word_reg[9]_i_2_n_0
+    SLICE_X37Y71         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     1.200 r  u_uart_rx/imgload_start_addr_word_reg[13]_i_2/CO[3]
+                         net (fo=1, routed)           0.000     1.200    u_uart_rx/imgload_start_addr_word_reg[13]_i_2_n_0
+    SLICE_X37Y72         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     1.314 r  u_uart_rx/imgload_start_addr_word_reg[17]_i_2/CO[3]
+                         net (fo=1, routed)           0.000     1.314    u_uart_rx/imgload_start_addr_word_reg[17]_i_2_n_0
+    SLICE_X37Y73         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     1.428 r  u_uart_rx/imgload_start_addr_word_reg[21]_i_2/CO[3]
+                         net (fo=1, routed)           0.000     1.428    u_uart_rx/imgload_start_addr_word_reg[21]_i_2_n_0
+    SLICE_X37Y74         CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.114     1.542 r  u_uart_rx/imgload_start_addr_word_reg[23]_i_2/CO[3]
+                         net (fo=1, routed)           0.009     1.551    u_uart_rx/imgload_start_addr_word_reg[23]_i_2_n_0
+    SLICE_X37Y75         CARRY4 (Prop_carry4_CI_O[1])
+                                                      0.334     1.885 r  u_uart_rx/imgload_start_total_bytes_reg[7]_i_8/O[1]
+                         net (fo=1, routed)           0.993     2.878    u_uart_rx/imgload_start_total_bytes_reg[7]_i_8_n_6
+    SLICE_X39Y79         LUT4 (Prop_lut4_I2_O)        0.303     3.181 r  u_uart_rx/imgload_start_total_bytes[7]_i_7/O
+                         net (fo=1, routed)           0.402     3.584    u_uart_rx/imgload_start_total_bytes[7]_i_7_n_0
+    SLICE_X39Y79         LUT6 (Prop_lut6_I1_O)        0.124     3.708 f  u_uart_rx/imgload_start_total_bytes[7]_i_5/O
+                         net (fo=11, routed)          0.754     4.461    u_uart_rx/response_ready1432_out
+    SLICE_X48Y79         LUT5 (Prop_lut5_I0_O)        0.124     4.585 r  u_uart_rx/resp_result[31]_i_53/O
+                         net (fo=1, routed)           0.563     5.148    u_uart_rx/resp_result[31]_i_53_n_0
+    SLICE_X48Y78         LUT6 (Prop_lut6_I4_O)        0.124     5.272 r  u_uart_rx/resp_result[31]_i_24/O
+                         net (fo=2, routed)           0.607     5.879    u_uart_rx/resp_result[31]_i_24_n_0
+    SLICE_X51Y77         LUT4 (Prop_lut4_I2_O)        0.124     6.003 r  u_uart_rx/resp_result[31]_i_9/O
+                         net (fo=1, routed)           0.309     6.312    u_uart_rx/resp_result[31]_i_9_n_0
+    SLICE_X48Y77         LUT6 (Prop_lut6_I0_O)        0.124     6.436 r  u_uart_rx/resp_result[31]_i_3/O
+                         net (fo=1, routed)           0.790     7.226    u_uart_rx/resp_result[31]_i_3_n_0
+    SLICE_X42Y72         LUT2 (Prop_lut2_I0_O)        0.124     7.350 r  u_uart_rx/resp_result[31]_i_1/O
+                         net (fo=32, routed)          1.094     8.444    resp_result1_out
+    SLICE_X35Y70         FDRE                                         r  resp_result_reg[29]/CE
   -------------------------------------------------------------------    -------------------
 
                          (clock clk_passthrough_clk_wiz_0 rise edge)
@@ -85,16 +98,16 @@ Slack (MET) :             0.065ns  (required time - arrival time)
                                                      -7.221     5.311 r  u_ddr_clk_wiz/mmcm_adv_inst/CLKOUT5
                          net (fo=1, routed)           1.587     6.898    u_ddr_clk_wiz/clk_passthrough_clk_wiz_0
     BUFGCTRL_X0Y4        BUFG (Prop_bufg_I_O)         0.091     6.989 r  u_ddr_clk_wiz/clkout6_buf/O
-                         net (fo=16518, routed)       1.429     8.417    core_clk
-    SLICE_X57Y72         FDRE                                         r  resp_result_reg[17]/C
-                         clock pessimism              0.489     8.907    
-                         clock uncertainty           -0.074     8.833    
-    SLICE_X57Y72         FDRE (Setup_fdre_C_CE)      -0.205     8.628    resp_result_reg[17]
+                         net (fo=15979, routed)       1.423     8.411    core_clk
+    SLICE_X35Y70         FDRE                                         r  resp_result_reg[29]/C
+                         clock pessimism              0.489     8.901    
+                         clock uncertainty           -0.074     8.827    
+    SLICE_X35Y70         FDRE (Setup_fdre_C_CE)      -0.205     8.622    resp_result_reg[29]
   -------------------------------------------------------------------
-                         required time                          8.628    
-                         arrival time                          -8.563    
+                         required time                          8.622    
+                         arrival time                          -8.444    
   -------------------------------------------------------------------
-                         slack                                  0.065    
+                         slack                                  0.178    
 
 
 

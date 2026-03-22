@@ -1,11 +1,14 @@
 {
+  "accuracy": 0.08,
+  "backend": "fpga_uart",
+  "caps_hex": "0x00017F0F",
   "compiler_plan": {
     "batch_train_only": false,
     "batch_train_then_infer": true,
-    "estimated_timeout_sec": 600.0,
-    "expected_image_bytes": 470400,
-    "expected_image_sectors": 919,
-    "expected_total_samples": 600,
+    "estimated_timeout_sec": 900.0,
+    "expected_image_bytes": 1646400,
+    "expected_image_sectors": 3216,
+    "expected_total_samples": 2100,
     "legacy_cli": [
       "python",
       "ctrl/use_fpga_calc.py",
@@ -14,12 +17,12 @@
       "--start-lba",
       "2048",
       "--timeout",
-      "600.0",
+      "900.0",
       "--seed",
       "0x12345678",
       "--batch-train-then-infer",
       "--train-then-infer-train-samples",
-      "500",
+      "2000",
       "--train-then-infer-infer-samples",
       "100"
     ],
@@ -72,9 +75,9 @@
         "mode": "train-then-infer",
         "port": "COM7",
         "seed": 305419896,
-        "timeout_sec": 600.0,
+        "timeout_sec": 900.0,
         "train_e2e_mine_timing": false,
-        "train_samples": 500
+        "train_samples": 2000
       },
       "ir": {
         "backend_name": "fixed_mnist_fpga",
@@ -117,7 +120,7 @@
             "infer_batch",
             "collect_metrics"
           ],
-          "train_samples": 500
+          "train_samples": 2000
         },
         "groups": [
           {
@@ -181,7 +184,25 @@
       "source_kind": "python_model"
     }
   },
-  "error_message": "BATCH_READ_SUMMARY[40]: FPGA rejected packet (BAD_PACKET). BATCH_READ_SUMMARY[40]: opcode=0x44 args=[40, 0] req=[A5 01 44 02 28 00 00 00 00 00 00 00 6F] resp=[5A E1 00 00 00 31 D0] result=0x31000000 retry_attempt=0. decoded=reason=0x31, opcode=0x00, arg0_lo16=0x0000",
-  "error_type": "RuntimeError",
-  "status": "error"
+  "correct": 8,
+  "cycle_breakdown": {
+    "infer_core": 2285463050,
+    "infer_eval": 19100,
+    "label_stats": 0,
+    "load": 30551546,
+    "other": 0,
+    "train_core": 0
+  },
+  "dataset_name": "mnist",
+  "elapsed_cycles": 2316033696,
+  "elapsed_sec": 23.16033696,
+  "infer_samples": 100,
+  "mode": "train-then-infer",
+  "network_name": "mnist_stdp_fixed_demo",
+  "port": "COM7",
+  "seed": 305419896,
+  "start_lba": 2048,
+  "status": "ok",
+  "timeout_sec": 900.0,
+  "train_samples": 2000
 }
