@@ -985,6 +985,7 @@ module top_level(
     logic        infer_skip_init_clear;
     logic        infer_force_no_input;
     logic        infer_model_state_valid;
+    logic        infer_init_preserve_theta;
     logic        memrd_pending;
     logic        memrd_wait;
     memrd_kind_t memrd_kind;
@@ -2300,6 +2301,7 @@ module top_level(
             infer_skip_init_clear <= 1'b0;
             infer_force_no_input  <= 1'b0;
             infer_model_state_valid <= 1'b0;
+            infer_init_preserve_theta <= 1'b0;
             infer_spike_rd_addr <= 7'd0;
             snap_count_we <= 1'b0;
             snap_count_waddr <= '0;
@@ -2532,7 +2534,7 @@ module top_level(
                     infer_poisson_num_const_cfg <= POISSON_NUM_CONST;
                 end else begin
                     infer_active       <= 1'b1;
-                    if (infer_model_state_valid) begin
+                    if (infer_model_state_valid && (batch_processed_samples != 32'd0)) begin
                         infer_state        <= INFER_CLEAR_SPIKE_COUNT;
                         infer_steps_target <= infer_step_idx + 32'd350;
                     end else begin
@@ -2552,6 +2554,7 @@ module top_level(
                     infer_rng_state    <= batch_cfg_seed;
                     infer_skip_init_clear <= 1'b0;
                     infer_force_no_input  <= 1'b0;
+                    infer_init_preserve_theta <= infer_model_state_valid;
                     infer_poisson_num_const_cfg <= POISSON_NUM_CONST;
                     infer_pre_active_count <= 10'd0;
                     raw_image0_rd_addr <= 10'd0;
@@ -4233,9 +4236,10 @@ module top_level(
                                         infer_apply_idx    <= 7'd0;
                                         infer_trace_phase  <= 2'd0;
                                         infer_total_spikes <= 32'd0;
-                                                                                                infer_rng_state    <= arg0[31:0];
+                                        infer_rng_state    <= arg0[31:0];
                                         infer_skip_init_clear <= 1'b0;
                                         infer_force_no_input  <= 1'b0;
+                                        infer_init_preserve_theta <= 1'b0;
                                         infer_poisson_num_const_cfg <= POISSON_NUM_CONST;
                                         infer_pre_active_count <= 10'd0;
                                         raw_image0_rd_addr <= 10'd0;
@@ -4794,7 +4798,9 @@ module top_level(
                     INFER_INIT_CLEAR: begin
                         infer_v_state[infer_apply_idx] <= FXP_EXC_VRESET;
                         infer_g_in_state[infer_apply_idx] <= 32'sd0;
-                        infer_exc_theta[infer_apply_idx] <= 32'sd0;
+                        if (!infer_init_preserve_theta) begin
+                            infer_exc_theta[infer_apply_idx] <= 32'sd0;
+                        end
                         infer_g_in_delay0[infer_apply_idx] <= 32'sd0;
                         infer_g_in_delay1[infer_apply_idx] <= 32'sd0;
                         infer_g_in_delay2[infer_apply_idx] <= 32'sd0;
@@ -5890,7 +5896,7 @@ module top_level(
                                     raw_image1_sum_u8 <= 32'd0;
                                 end
                                 infer_active       <= 1'b1;
-                                if (infer_model_state_valid) begin
+                                if (infer_model_state_valid && (batch_processed_samples != 32'd0)) begin
                                     infer_state        <= INFER_CLEAR_SPIKE_COUNT;
                                     infer_steps_target <= infer_step_idx + 32'd350;
                                 end else begin
@@ -5910,6 +5916,7 @@ module top_level(
                                 infer_rng_state    <= batch_cfg_seed;
                                 infer_skip_init_clear <= 1'b0;
                                 infer_force_no_input  <= 1'b0;
+                                infer_init_preserve_theta <= infer_model_state_valid;
                                 infer_poisson_num_const_cfg <= POISSON_NUM_CONST;
                                 infer_pre_active_count <= 10'd0;
                                 raw_image0_rd_addr <= 10'd0;
