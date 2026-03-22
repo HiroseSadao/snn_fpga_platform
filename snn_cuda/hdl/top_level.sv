@@ -209,6 +209,12 @@ module top_level(
         INFER_PREP_DIV_MUL,
         INFER_PREP_DIV_WAIT,
         INFER_GEN_INPUT_SPIKES,
+        INFER_EVT_ACCUM_CLEAR,
+        INFER_EVT_ACCUM_FETCH,
+        INFER_EVT_ACCUM_ENTRY_WAIT,
+        INFER_EVT_ACCUM_SCAN,
+        INFER_EVT_ACCUM_W_WAIT,
+        INFER_EVT_ACCUM_APPLY,
         INFER_ACCUM_NEURON,
         INFER_ACCUM_NEURON_GIN_MUL,
         INFER_ACCUM_NEURON_GIN_MUL_ROUND,
@@ -980,6 +986,17 @@ module top_level(
     logic [9:0]  infer_pre_spike_rd_addr_lane1;
     logic        infer_pre_spike_rd_data_lane1;
     (* ram_style = "distributed" *) logic [31:0] infer_pre_hist [0:N_IN-1];
+    logic        infer_pre_step_wr_en;
+    logic [12:0] infer_pre_step_wr_addr;
+    logic [9:0]  infer_pre_step_wr_data;
+    logic [12:0] infer_pre_step_rd_addr;
+    logic [9:0]  infer_pre_step_rd_data;
+    logic [9:0]  infer_pre_step_count [0:9];
+    logic [3:0]  infer_delay_age;
+    logic [3:0]  infer_curr_step_slot;
+    logic [9:0]  infer_delay_entry_idx;
+    logic [9:0]  infer_delay_event_pre_idx;
+    logic [6:0]  infer_delay_event_post_idx;
     logic [31:0] infer_dividend;
     logic [31:0] infer_divisor;
     (* use_dsp = "yes" *) logic [63:0] infer_prep_div_prod_q32;
@@ -1044,6 +1061,7 @@ module top_level(
     logic [3:0]  sevenseg_ss1_nibble;
     logic [6:0]  sevenseg_ss0_seg_raw;
     logic [6:0]  sevenseg_ss1_seg_raw;
+    integer infer_delay_i;
 
     assign SD_DQ1 = 1'b1;
     assign SD_DQ2 = 1'b1;
@@ -1300,6 +1318,49 @@ module top_level(
         .regceb         (1'b1),
         .addrb          (infer_pre_rd_addr),
         .doutb          (infer_pre_rd_data),
+        .sbiterrb       (),
+        .dbiterrb       ()
+    );
+
+    xpm_memory_sdpram #(
+        .ADDR_WIDTH_A(13),
+        .ADDR_WIDTH_B(13),
+        .AUTO_SLEEP_TIME(0),
+        .BYTE_WRITE_WIDTH_A(10),
+        .CLOCKING_MODE("common_clock"),
+        .ECC_MODE("no_ecc"),
+        .MEMORY_INIT_FILE("none"),
+        .MEMORY_INIT_PARAM("0"),
+        .MEMORY_OPTIMIZATION("true"),
+        .MEMORY_PRIMITIVE("block"),
+        .MEMORY_SIZE(7840 * 10),
+        .MESSAGE_CONTROL(0),
+        .READ_DATA_WIDTH_B(10),
+        .READ_LATENCY_B(1),
+        .READ_RESET_VALUE_B("0"),
+        .RST_MODE_A("SYNC"),
+        .RST_MODE_B("SYNC"),
+        .SIM_ASSERT_CHK(0),
+        .USE_EMBEDDED_CONSTRAINT(0),
+        .USE_MEM_INIT(0),
+        .WAKEUP_TIME("disable_sleep"),
+        .WRITE_DATA_WIDTH_A(10),
+        .WRITE_MODE_B("read_first")
+    ) u_infer_pre_step_mem (
+        .sleep          (1'b0),
+        .clka           (core_clk),
+        .ena            (infer_pre_step_wr_en),
+        .wea            (infer_pre_step_wr_en),
+        .addra          (infer_pre_step_wr_addr),
+        .dina           (infer_pre_step_wr_data),
+        .injectsbiterra (1'b0),
+        .injectdbiterra (1'b0),
+        .clkb           (core_clk),
+        .rstb           (1'b0),
+        .enb            (1'b1),
+        .regceb         (1'b1),
+        .addrb          (infer_pre_step_rd_addr),
+        .doutb          (infer_pre_step_rd_data),
         .sbiterrb       (),
         .dbiterrb       ()
     );
@@ -1955,6 +2016,12 @@ module top_level(
         begin
             case (state_in)
                 INFER_GEN_INPUT_SPIKES,
+                INFER_EVT_ACCUM_CLEAR,
+                INFER_EVT_ACCUM_FETCH,
+                INFER_EVT_ACCUM_ENTRY_WAIT,
+                INFER_EVT_ACCUM_SCAN,
+                INFER_EVT_ACCUM_W_WAIT,
+                INFER_EVT_ACCUM_APPLY,
                 INFER_ACCUM_NEURON,
                 INFER_ACCUM_NEURON_GIN_MUL,
                 INFER_ACCUM_NEURON_GIN_MUL_ROUND,
@@ -1993,6 +2060,37 @@ module top_level(
                 INFER_WTA_PASS2_WRITE: infer_state_is_accum_core = 1'b1;
                 default: infer_state_is_accum_core = 1'b0;
             endcase
+        end
+    endfunction
+
+    function automatic [12:0] infer_pre_step_base(input logic [3:0] slot_in);
+        begin
+            case (slot_in)
+                4'd0: infer_pre_step_base = 13'd0;
+                4'd1: infer_pre_step_base = 13'd784;
+                4'd2: infer_pre_step_base = 13'd1568;
+                4'd3: infer_pre_step_base = 13'd2352;
+                4'd4: infer_pre_step_base = 13'd3136;
+                4'd5: infer_pre_step_base = 13'd3920;
+                4'd6: infer_pre_step_base = 13'd4704;
+                4'd7: infer_pre_step_base = 13'd5488;
+                4'd8: infer_pre_step_base = 13'd6272;
+                default: infer_pre_step_base = 13'd7056;
+            endcase
+        end
+    endfunction
+
+    function automatic [3:0] infer_slot_for_age(
+        input logic [3:0] curr_slot,
+        input logic [3:0] age
+    );
+        logic [4:0] slot_ext;
+        begin
+            slot_ext = {1'b0, curr_slot} + 5'd10 - {1'b0, age};
+            if (slot_ext >= 5'd10)
+                infer_slot_for_age = slot_ext - 5'd10;
+            else
+                infer_slot_for_age = slot_ext[3:0];
         end
     endfunction
 
@@ -2561,6 +2659,10 @@ module top_level(
             infer_pre_spike_wr_data <= 1'b0;
             infer_pre_spike_rd_addr <= 10'd0;
             infer_pre_spike_rd_addr_lane1 <= 10'd0;
+            infer_pre_step_wr_en <= 1'b0;
+            infer_pre_step_wr_addr <= 13'd0;
+            infer_pre_step_wr_data <= 10'd0;
+            infer_pre_step_rd_addr <= 13'd0;
             infer_w_rd_addr_lane1 <= '0;
             infer_w_rd_data_q_lane1 <= 16'd0;
             infer_accum_pair_count <= 2'd0;
@@ -2570,6 +2672,14 @@ module top_level(
             infer_accum_trace_decay <= 32'sd0;
             infer_accum_trace_prod_q32 <= 64'sd0;
             infer_accum_lane1_fire <= 1'b0;
+            infer_delay_age <= 4'd0;
+            infer_curr_step_slot <= 4'd0;
+            infer_delay_entry_idx <= 10'd0;
+            infer_delay_event_pre_idx <= 10'd0;
+            infer_delay_event_post_idx <= 7'd0;
+            for (infer_delay_i = 0; infer_delay_i < 10; infer_delay_i = infer_delay_i + 1) begin
+                infer_pre_step_count[infer_delay_i] <= 10'd0;
+            end
             memrd_pending <= 1'b0;
             memrd_wait    <= 1'b0;
             memrd_kind    <= MEMRD_NONE;
@@ -2588,6 +2698,7 @@ module top_level(
             infer_poisson_thresh_wr_en <= 1'b0;
             infer_pre_wr_en <= 1'b0;
             infer_pre_spike_wr_en <= 1'b0;
+            infer_pre_step_wr_en <= 1'b0;
             infer_w_wr_en <= 1'b0;
             spike_count_we <= 1'b0;
             snap_count_we <= 1'b0;
@@ -2781,6 +2892,7 @@ module top_level(
                         infer_state        <= INFER_INIT_CLEAR;
                         infer_steps_target <= 32'd350;
                         infer_step_idx     <= 32'd0;
+                        infer_curr_step_slot <= 4'd0;
                         infer_model_state_valid <= 1'b1;
                         infer_clear_pre_hist <= 1'b1;
                     end
@@ -2798,6 +2910,11 @@ module top_level(
                     infer_init_preserve_theta <= infer_model_state_valid;
                     infer_poisson_num_const_cfg <= POISSON_NUM_CONST;
                     infer_pre_active_count <= 10'd0;
+                    if (!(infer_model_state_valid && (batch_processed_samples != 32'd0))) begin
+                        for (infer_delay_i = 0; infer_delay_i < 10; infer_delay_i = infer_delay_i + 1) begin
+                            infer_pre_step_count[infer_delay_i] <= 10'd0;
+                        end
+                    end
                     raw_image0_rd_addr <= 10'd0;
                     infer_poisson_thresh_rd_addr <= 10'd0;
                 end
@@ -5192,6 +5309,7 @@ module top_level(
                             infer_trace_spike_latched <= spike_in_now;
                             if (infer_input_idx == 10'd0) begin
                                 infer_pre_active_count <= 10'd0;
+                                infer_pre_step_count[infer_curr_step_slot] <= 10'd0;
                             end
                             pre_hist_next = {infer_pre_hist[infer_input_idx][30:0], spike_in_now};
                             infer_pre_hist[infer_input_idx] <= pre_hist_next;
@@ -5207,6 +5325,10 @@ module top_level(
                             if (infer_trace_spike_latched) begin
                                 infer_pre_wr_en <= 1'b1;
                                 infer_pre_active_count <= infer_pre_active_count + 10'd1;
+                                infer_pre_step_wr_en <= 1'b1;
+                                infer_pre_step_wr_addr <= infer_pre_step_base(infer_curr_step_slot) + infer_pre_active_count;
+                                infer_pre_step_wr_data <= infer_input_idx;
+                                infer_pre_step_count[infer_curr_step_slot] <= infer_pre_active_count + 10'd1;
                             end
                             infer_trace_phase <= 3'd2;
                         end else if (infer_trace_phase == 3'd2) begin
@@ -5233,12 +5355,66 @@ module top_level(
                                 if (infer_step_idx == 32'd0) begin
                                 end
                                 infer_input_idx <= 10'd0;
-                                infer_state <= INFER_ACCUM_NEURON;
+                                if (TRAIN_ENABLE && train_chunk_active) begin
+                                    infer_state <= INFER_ACCUM_NEURON;
+                                end else begin
+                                    infer_neuron_idx <= 7'd0;
+                                    infer_accum <= 32'sd0;
+                                    infer_delay_age <= 4'd0;
+                                    infer_delay_entry_idx <= 10'd0;
+                                    infer_state <= INFER_EVT_ACCUM_CLEAR;
+                                end
                             end else begin
                                 infer_input_idx <= infer_input_idx + 10'd1;
                                 infer_poisson_thresh_rd_addr <= infer_input_idx + 10'd1;
                             end
                         end
+                    end
+
+                    INFER_EVT_ACCUM_CLEAR: begin
+                        infer_accum <= 32'sd0;
+                        infer_delay_age <= 4'd0;
+                        infer_delay_entry_idx <= 10'd0;
+                        infer_state <= INFER_EVT_ACCUM_FETCH;
+                    end
+
+                    INFER_EVT_ACCUM_FETCH: begin
+                        if (infer_delay_age >= 4'd10) begin
+                            infer_delay_pipe_idx <= infer_neuron_idx;
+                            infer_state <= INFER_ACCUM_NEURON_GIN_MUL;
+                        end else if (infer_delay_entry_idx >= infer_pre_step_count[infer_slot_for_age(infer_curr_step_slot, infer_delay_age)]) begin
+                            infer_delay_age <= infer_delay_age + 4'd1;
+                            infer_delay_entry_idx <= 10'd0;
+                        end else begin
+                            infer_pre_step_rd_addr <= infer_pre_step_base(infer_slot_for_age(infer_curr_step_slot, infer_delay_age))
+                                                    + infer_delay_entry_idx;
+                            infer_state <= INFER_EVT_ACCUM_ENTRY_WAIT;
+                        end
+                    end
+
+                    INFER_EVT_ACCUM_ENTRY_WAIT: begin
+                        infer_delay_event_pre_idx <= infer_pre_step_rd_data;
+                        infer_state <= INFER_EVT_ACCUM_SCAN;
+                    end
+
+                    INFER_EVT_ACCUM_SCAN: begin
+                        if (dense_delay_step(infer_neuron_idx, infer_delay_event_pre_idx) == infer_delay_age) begin
+                            infer_w_rd_addr <= dense_weight_addr(infer_neuron_idx, infer_delay_event_pre_idx);
+                            infer_state <= INFER_EVT_ACCUM_W_WAIT;
+                        end else begin
+                            infer_delay_entry_idx <= infer_delay_entry_idx + 10'd1;
+                            infer_state <= INFER_EVT_ACCUM_FETCH;
+                        end
+                    end
+
+                    INFER_EVT_ACCUM_W_WAIT: begin
+                        infer_state <= INFER_EVT_ACCUM_APPLY;
+                    end
+
+                    INFER_EVT_ACCUM_APPLY: begin
+                        infer_accum <= infer_accum + $signed({16'd0, infer_w_rd_data});
+                        infer_delay_entry_idx <= infer_delay_entry_idx + 10'd1;
+                        infer_state <= INFER_EVT_ACCUM_FETCH;
                     end
 
                     INFER_ACCUM_NEURON: begin
@@ -5386,8 +5562,12 @@ module top_level(
 
                     INFER_ACCUM_NEURON_GIN_COMB: begin
                         logic signed [31:0] g_in_state_next;
-                        g_in_state_next = $signed(($signed(infer_g_in_state[infer_delay_pipe_idx]) * $signed(FXP_INPUT_G_DECAY)) >>> 16)
-                                       + $signed(infer_delay_pipe_mul_term);
+                        if (TRAIN_ENABLE && train_chunk_active) begin
+                            g_in_state_next = $signed(($signed(infer_g_in_state[infer_delay_pipe_idx]) * $signed(FXP_INPUT_G_DECAY)) >>> 16)
+                                           + $signed(infer_delay_pipe_mul_term);
+                        end else begin
+                            g_in_state_next = infer_delay_pipe_mul_term;
+                        end
                         infer_g_in_state[infer_delay_pipe_idx] <= g_in_state_next;
                         infer_delay_pipe_g_in_curr <= g_in_state_next;
                         infer_delay_pipe_d0 <= infer_g_in_delay0[infer_delay_pipe_idx];
@@ -5545,7 +5725,14 @@ module top_level(
                             infer_state <= INFER_APPLY_WTA;
                         end else begin
                             infer_neuron_idx <= infer_commit_idx + 7'd1;
-                            infer_state <= INFER_ACCUM_NEURON;
+                            if (TRAIN_ENABLE && train_chunk_active) begin
+                                infer_state <= INFER_ACCUM_NEURON;
+                            end else begin
+                                infer_accum <= 32'sd0;
+                                infer_delay_age <= 4'd0;
+                                infer_delay_entry_idx <= 10'd0;
+                                infer_state <= INFER_EVT_ACCUM_FETCH;
+                            end
                         end
                     end
 
@@ -5797,6 +5984,7 @@ module top_level(
                                     // Match mine.py tcount semantics: increment at end of each processed step,
                                     // including the terminal step.
                                     infer_step_idx <= infer_step_idx + 32'd1;
+                                    infer_curr_step_slot <= (infer_curr_step_slot == 4'd9) ? 4'd0 : (infer_curr_step_slot + 4'd1);
 	                                infer_active <= 1'b0;
 	                                infer_state <= INFER_IDLE;
                                     infer_skip_init_clear <= 1'b0;
@@ -5820,6 +6008,7 @@ module top_level(
                                     end
 	                            end else begin
 	                                    infer_step_idx <= infer_step_idx + 32'd1;
+                                        infer_curr_step_slot <= (infer_curr_step_slot == 4'd9) ? 4'd0 : (infer_curr_step_slot + 4'd1);
 	                                    infer_state <= INFER_GEN_INPUT_SPIKES;
                                         infer_trace_phase <= 2'd0;
 	                            end
@@ -6114,6 +6303,7 @@ module top_level(
                         if (infer_trace_wait_last_step) begin
                             infer_trace_wait_last_step <= 1'b0;
                             infer_step_idx <= infer_step_idx + 32'd1;
+                            infer_curr_step_slot <= (infer_curr_step_slot == 4'd9) ? 4'd0 : (infer_curr_step_slot + 4'd1);
                             infer_active <= 1'b0;
                             infer_state <= INFER_IDLE;
                             infer_skip_init_clear <= 1'b0;
@@ -6136,6 +6326,7 @@ module top_level(
                             end
                         end else begin
                             infer_step_idx <= infer_step_idx + 32'd1;
+                            infer_curr_step_slot <= (infer_curr_step_slot == 4'd9) ? 4'd0 : (infer_curr_step_slot + 4'd1);
                             infer_state <= INFER_GEN_INPUT_SPIKES;
                             infer_trace_phase <= 3'd0;
                         end
