@@ -30,7 +30,11 @@ module top_level(
     output logic [15:0] led,
     output logic [2:0] rgb0,
     output logic [2:0] rgb1,
-    output logic [2:0] pmoda
+    output logic [2:0] pmoda,
+    output logic [3:0] ss0_an,
+    output logic [3:0] ss1_an,
+    output logic [6:0] ss0_c,
+    output logic [6:0] ss1_c
 );
 
     localparam int CLKS_PER_BIT = 868; // 100_000_000 / 115_200 ~= 868
@@ -81,7 +85,10 @@ module top_level(
     localparam logic signed [31:0] FXP_ONE = 32'sd65536; // 1.0 in S16.16
     localparam logic signed [31:0] FXP_HALF = 32'sd32768; // 0.5 in S16.16
     localparam logic signed [31:0] FXP_WEXC = 32'sd681574; // 10.4 in S16.16, Brian2 exc->inh weight
-    localparam logic signed [31:0] FXP_INH_COEFF = 32'sd2228; // 17.0 / 500.0 in S16.16, Brian2 inh->exc weight
+    localparam logic signed [31:0] FXP_INH_COEFF = 32'sd2228; // legacy aggregated-WTA coefficient (unused in explicit inh->exc path)
+    localparam logic signed [31:0] FXP_GE_DECAY_1MS = 32'sd24109; // exp(-1/1ms) with tau_ge=1ms
+    localparam logic signed [31:0] FXP_GI_DECAY_2MS = 32'sd39750; // exp(-1/2ms) with tau_gi=2ms
+    localparam logic signed [31:0] FXP_GI_SPIKE = 32'sd1114112; // 17.0 in S16.16, Brian2 inh->exc weight
     localparam logic signed [31:0] FXP_INH_THRESH = -32'sd2621440; // -40.0 in S16.16
     localparam logic signed [31:0] FXP_SCALE_1000 = 32'sd65536000;   // 1000.0 in S16.16 (1/1ms)
     localparam logic signed [31:0] FXP_SCALE_500  = 32'sd32768000;   // 500.0 in S16.16 (1/2ms)
@@ -157,6 +164,8 @@ module top_level(
     localparam logic [31:0] IMG_STAGING_BASE_WORD = TRAIN_BASE_PRELIST_WORK_WORDS + 32'd262144; // +1MiB bytes margin
     // Dedicated batch-image cache region in DDR. Batch train/infer preloads the requested range here once.
     localparam logic [31:0] IMG_CACHE_BASE_WORD   = IMG_STAGING_BASE_WORD + 32'd262144; // +1MiB bytes margin
+    localparam logic [31:0] IMG_CACHE_WORD_LIMIT  = DDR_ADDR_WORD_LIMIT - IMG_CACHE_BASE_WORD;
+    localparam logic [31:0] IMG_CACHE_SECTOR_LIMIT = (IMG_CACHE_WORD_LIMIT + 32'd127) >> 7;
     // STDP tile kernel (phase1) fixed-point params, q16.16.
     localparam logic signed [31:0] TRAIN_WMAX_Q16    = 32'sd65535; // ~1.0, max representable with stored UQ0.16 weights
     localparam logic signed [31:0] TRAIN_WMIN_Q16    = 32'sd0;
@@ -206,6 +215,7 @@ module top_level(
         INFER_ACCUM_NEURON_GIN_COMB,
         INFER_ACCUM_NEURON_PIPE,
         INFER_NEURON_DV_PRE,
+        INFER_NEURON_DV_DRIVE_PRE,
         INFER_NEURON_DV_DRIVE,
         INFER_NEURON_DV_SYN,
         INFER_NEURON_DV_SYN_ROUND,
@@ -216,6 +226,8 @@ module top_level(
         INFER_NEURON_COMMIT,
         INFER_NEURON_WRITE,
         INFER_APPLY_WTA,
+        INFER_APPLY_WTA_GE_MUL,
+        INFER_APPLY_WTA_GE_ROUND,
         INFER_APPLY_WTA_PRE,
         INFER_APPLY_WTA_PRE_MUL,
         INFER_APPLY_WTA_PRE_ROUND,
@@ -227,6 +239,10 @@ module top_level(
         INFER_APPLY_WTA_INH_POST,
         INFER_APPLY_WTA_ACCUM,
         INFER_WTA_PASS2_PRE,
+        INFER_WTA_PASS2_DECAY_MUL,
+        INFER_WTA_PASS2_DECAY_ROUND,
+        INFER_WTA_PASS2_ADD_MUL,
+        INFER_WTA_PASS2_ADD_ROUND,
         INFER_WTA_PASS2,
         INFER_WTA_PASS2_WRITE,
         INFER_EVT_PRE_PRELIST_REQ,
@@ -252,9 +268,11 @@ module top_level(
         INFER_EVT_POST_EDGE_REQ,
         INFER_EVT_POST_EDGE_WAIT,
         INFER_EVT_POST_TRACE_REQ,
+        INFER_EVT_POST_TRACE_PRE,
         INFER_EVT_POST_TRACE_WAIT,
         INFER_EVT_POST_W_WAIT,
         INFER_EVT_POST_APPLY,
+        INFER_EVT_POST_APPLY_PRE,
         INFER_EVT_POST_APPLY_MUL1,
         INFER_EVT_POST_APPLY_MUL2,
         INFER_EVT_POST_APPLY_CLIP,
@@ -523,6 +541,8 @@ module top_level(
     logic [9:0]  raw_image1_capture_idx;
     logic [31:0] raw_image0_sum_u8;
     logic [31:0] raw_image1_sum_u8;
+    logic        raw_image0_nonzero;
+    logic        raw_image1_nonzero;
     logic [9:0]  raw_image0_rd_addr;
     logic [7:0]  raw_image0_rd_data;
     logic [7:0]  raw_image1_rd_data;
@@ -554,6 +574,7 @@ module top_level(
     logic signed [31:0] infer_done_resp_result;
     logic        raw_image_compute_valid;
     logic [31:0] raw_image_compute_sum_u8;
+    logic        raw_image_compute_nonzero;
     logic [7:0]  raw_image_compute_rd_data;
     logic        raw_image_fill_valid;
     (* ram_style = "block" *) logic [7:0] batch_label_mem [0:RAW1_NUM_IMAGES-1];
@@ -821,6 +842,7 @@ module top_level(
     (* ram_style = "block" *) logic signed [31:0] infer_g_exc_delay0 [0:N_NEURONS-1];
     (* ram_style = "block" *) logic signed [31:0] infer_g_exc_delay1 [0:N_NEURONS-1];
     logic        infer_s_exc [0:N_NEURONS-1];
+    logic        infer_s_inh [0:N_NEURONS-1];
     localparam int SPIKE_CNT_ADDR_W = 7;
     logic        spike_count_we;
     logic [SPIKE_CNT_ADDR_W-1:0] spike_count_waddr;
@@ -867,9 +889,18 @@ module top_level(
     logic signed [31:0] infer_sum_c_inh;
     logic signed [31:0] infer_pass2_diff_c_inh;
     logic signed [31:0] infer_pass2_g_inh_next;
+    logic signed [31:0] infer_pass2_g_inh_cur;
+    logic signed [31:0] infer_pass2_g_inh_decay;
+    logic signed [31:0] infer_pass2_g_inh_add;
+    (* use_dsp = "yes" *) logic signed [63:0] infer_pass2_g_inh_decay_prod_q32;
+    (* use_dsp = "yes" *) logic signed [63:0] infer_pass2_g_inh_add_prod_q32;
     logic signed [31:0] infer_apply_c_inh_next;
     logic signed [31:0] infer_apply_v_inh_write;
     logic signed [31:0] infer_apply_v_inh_cur;
+    logic signed [31:0] infer_apply_c_exc_cur;
+    logic signed [31:0] infer_apply_c_exc_decay;
+    logic signed [31:0] infer_apply_c_exc_next;
+    logic signed [31:0] infer_apply_c_exc_spike_add;
     logic signed [31:0] infer_apply_c_inh_cur;
     logic [15:0] infer_apply_inh_last_spike;
     logic signed [31:0] infer_apply_delayed_g_exc;
@@ -879,6 +910,7 @@ module top_level(
     logic signed [31:0] infer_apply_leak_dt_inh;
     (* use_dsp = "yes" *) logic signed [63:0] infer_apply_exc_drive_prod_q32;
     (* use_dsp = "yes" *) logic signed [63:0] infer_apply_leak_prod_q32;
+    (* use_dsp = "yes" *) logic signed [63:0] infer_apply_c_exc_decay_prod_q32;
     logic signed [31:0] infer_apply_i_syn_exc_mul_a;
     logic signed [31:0] infer_apply_i_syn_exc_mul_b;
     logic signed [31:0] infer_apply_i_syn_exc_step_inh;
@@ -898,6 +930,7 @@ module top_level(
     logic [6:0]  infer_evt_winner_idx;
     logic signed [31:0] infer_evt_trace_val;
     logic signed [31:0] infer_evt_post2_before_q;
+    logic signed [31:0] infer_evt_post2_before_qq;
     logic signed [31:0] infer_evt_w_cur;
     logic signed [31:0] infer_evt_mid_q16;
     (* use_dsp = "yes" *) logic signed [63:0] infer_evt_term_prod_q32;
@@ -907,6 +940,8 @@ module top_level(
     logic [EDGE_ADDR_W-1:0] infer_evt_edge_idx;
     logic [EDGE_ADDR_W-1:0] infer_evt_edge_end;
     logic [EDGE_ADDR_W-1:0] infer_evt_edge_ptr;
+    logic [31:0] infer_evt_pre_hist_q;
+    logic [3:0]  infer_evt_delay_q;
     logic [1:0]  infer_accum_pair_count;
     logic        infer_accum_lane0_fire;
     logic        infer_accum_lane1_fire;
@@ -933,7 +968,7 @@ module top_level(
     logic        infer_pre_spike_rd_data;
     logic [9:0]  infer_pre_spike_rd_addr_lane1;
     logic        infer_pre_spike_rd_data_lane1;
-    (* ram_style = "distributed" *) logic [9:0] infer_pre_hist [0:N_IN-1];
+    (* ram_style = "distributed" *) logic [31:0] infer_pre_hist [0:N_IN-1];
     logic [31:0] infer_dividend;
     logic [31:0] infer_divisor;
     (* use_dsp = "yes" *) logic [63:0] infer_prep_div_prod_q32;
@@ -992,6 +1027,12 @@ module top_level(
     logic        memrd_pending;
     logic        memrd_wait;
     memrd_kind_t memrd_kind;
+    logic [15:0] sevenseg_refresh_ctr;
+    logic [1:0]  sevenseg_digit_sel;
+    logic [3:0]  sevenseg_ss0_nibble;
+    logic [3:0]  sevenseg_ss1_nibble;
+    logic [6:0]  sevenseg_ss0_seg_raw;
+    logic [6:0]  sevenseg_ss1_seg_raw;
 
     assign SD_DQ1 = 1'b1;
     assign SD_DQ2 = 1'b1;
@@ -1003,11 +1044,62 @@ module top_level(
     assign led = {ddr_calib_complete, ddr_clk_wiz_locked, 14'd0};
     assign pmoda = {rgb0[0], rgb0[1], rgb0[2]};
 
+    bto7s u_ss0_dec (
+        .x(sevenseg_ss0_nibble),
+        .s(sevenseg_ss0_seg_raw)
+    );
+
+    bto7s u_ss1_dec (
+        .x(sevenseg_ss1_nibble),
+        .s(sevenseg_ss1_seg_raw)
+    );
+
+    always_comb begin
+        sevenseg_digit_sel = sevenseg_refresh_ctr[15:14];
+        case (sevenseg_digit_sel)
+            2'd0: begin
+                sevenseg_ss0_nibble = batch_processed_samples[3:0];
+                sevenseg_ss1_nibble = batch_processed_samples[19:16];
+                ss0_an = 4'b1110;
+                ss1_an = 4'b1110;
+            end
+            2'd1: begin
+                sevenseg_ss0_nibble = batch_processed_samples[7:4];
+                sevenseg_ss1_nibble = batch_processed_samples[23:20];
+                ss0_an = 4'b1101;
+                ss1_an = 4'b1101;
+            end
+            2'd2: begin
+                sevenseg_ss0_nibble = batch_processed_samples[11:8];
+                sevenseg_ss1_nibble = batch_processed_samples[27:24];
+                ss0_an = 4'b1011;
+                ss1_an = 4'b1011;
+            end
+            default: begin
+                sevenseg_ss0_nibble = batch_processed_samples[15:12];
+                sevenseg_ss1_nibble = batch_processed_samples[31:28];
+                ss0_an = 4'b0111;
+                ss1_an = 4'b0111;
+            end
+        endcase
+        // Board segments are active-low, decoder outputs active-high.
+        ss0_c = ~sevenseg_ss0_seg_raw;
+        ss1_c = ~sevenseg_ss1_seg_raw;
+    end
+
     always_ff @(posedge clk_100mhz_buf) begin
         if (btn[0]) begin
             clk_div <= 2'b00;
         end else begin
             clk_div <= clk_div + 2'b01;
+        end
+    end
+
+    always_ff @(posedge core_clk) begin
+        if (btn[0]) begin
+            sevenseg_refresh_ctr <= 16'd0;
+        end else begin
+            sevenseg_refresh_ctr <= sevenseg_refresh_ctr + 16'd1;
         end
     end
 
@@ -1139,11 +1231,13 @@ module top_level(
         if (batch_active) begin
             raw_image_compute_valid = batch_compute_buf_sel ? raw_image1_valid : raw_image0_valid;
             raw_image_compute_sum_u8 = batch_compute_buf_sel ? raw_image1_sum_u8 : raw_image0_sum_u8;
+            raw_image_compute_nonzero = batch_compute_buf_sel ? raw_image1_nonzero : raw_image0_nonzero;
             raw_image_compute_rd_data = batch_compute_buf_sel ? raw_image1_rd_data : raw_image0_rd_data;
             raw_image_fill_valid = batch_fill_buf_sel ? raw_image1_valid : raw_image0_valid;
         end else begin
             raw_image_compute_valid = raw_image0_valid;
             raw_image_compute_sum_u8 = raw_image0_sum_u8;
+            raw_image_compute_nonzero = raw_image0_nonzero;
             raw_image_compute_rd_data = raw_image0_rd_data;
             raw_image_fill_valid = raw_image0_valid;
         end
@@ -1740,6 +1834,59 @@ module top_level(
         end
     endfunction
 
+    function automatic logic signed [31:0] delayed_pre_trace_from_hist(
+        input logic [31:0] hist_in,
+        input logic [3:0]  delay_step
+    );
+        integer raw_age;
+        integer trace_age;
+        logic found;
+        begin
+            delayed_pre_trace_from_hist = 32'sd0;
+            found = 1'b0;
+            for (raw_age = 0; raw_age < 32; raw_age = raw_age + 1) begin
+                if (!found && (raw_age >= delay_step) && hist_in[raw_age]) begin
+                    trace_age = raw_age - delay_step;
+                    case (trace_age)
+                        0: delayed_pre_trace_from_hist = 32'sd65536;
+                        1: delayed_pre_trace_from_hist = 32'sd62340;
+                        2: delayed_pre_trace_from_hist = 32'sd59299;
+                        3: delayed_pre_trace_from_hist = 32'sd56407;
+                        4: delayed_pre_trace_from_hist = 32'sd53656;
+                        5: delayed_pre_trace_from_hist = 32'sd51039;
+                        6: delayed_pre_trace_from_hist = 32'sd48550;
+                        7: delayed_pre_trace_from_hist = 32'sd46182;
+                        8: delayed_pre_trace_from_hist = 32'sd43930;
+                        9: delayed_pre_trace_from_hist = 32'sd41788;
+                        10: delayed_pre_trace_from_hist = 32'sd39750;
+                        11: delayed_pre_trace_from_hist = 32'sd37811;
+                        12: delayed_pre_trace_from_hist = 32'sd35967;
+                        13: delayed_pre_trace_from_hist = 32'sd34213;
+                        14: delayed_pre_trace_from_hist = 32'sd32544;
+                        15: delayed_pre_trace_from_hist = 32'sd30957;
+                        16: delayed_pre_trace_from_hist = 32'sd29447;
+                        17: delayed_pre_trace_from_hist = 32'sd28011;
+                        18: delayed_pre_trace_from_hist = 32'sd26645;
+                        19: delayed_pre_trace_from_hist = 32'sd25345;
+                        20: delayed_pre_trace_from_hist = 32'sd24109;
+                        21: delayed_pre_trace_from_hist = 32'sd22934;
+                        22: delayed_pre_trace_from_hist = 32'sd21815;
+                        23: delayed_pre_trace_from_hist = 32'sd20751;
+                        24: delayed_pre_trace_from_hist = 32'sd19739;
+                        25: delayed_pre_trace_from_hist = 32'sd18776;
+                        26: delayed_pre_trace_from_hist = 32'sd17861;
+                        27: delayed_pre_trace_from_hist = 32'sd16990;
+                        28: delayed_pre_trace_from_hist = 32'sd16161;
+                        29: delayed_pre_trace_from_hist = 32'sd15373;
+                        30: delayed_pre_trace_from_hist = 32'sd14623;
+                        default: delayed_pre_trace_from_hist = 32'sd13910;
+                    endcase
+                    found = 1'b1;
+                end
+            end
+        end
+    endfunction
+
     function automatic logic infer_state_is_evt_pre(input infer_state_t state_in);
         begin
             case (state_in)
@@ -1774,9 +1921,11 @@ module top_level(
                 INFER_EVT_POST_EDGE_REQ,
                 INFER_EVT_POST_EDGE_WAIT,
                 INFER_EVT_POST_TRACE_REQ,
+                INFER_EVT_POST_TRACE_PRE,
                 INFER_EVT_POST_TRACE_WAIT,
                 INFER_EVT_POST_W_WAIT,
                 INFER_EVT_POST_APPLY,
+                INFER_EVT_POST_APPLY_PRE,
                 INFER_EVT_POST_APPLY_MUL1,
                 INFER_EVT_POST_APPLY_MUL2,
                 INFER_EVT_POST_APPLY_CLIP,
@@ -1796,6 +1945,7 @@ module top_level(
                 INFER_ACCUM_NEURON_GIN_COMB,
                 INFER_ACCUM_NEURON_PIPE,
                 INFER_NEURON_DV_PRE,
+                INFER_NEURON_DV_DRIVE_PRE,
                 INFER_NEURON_DV_DRIVE,
                 INFER_NEURON_DV_SYN,
                 INFER_NEURON_DV_SYN_ROUND,
@@ -1806,6 +1956,8 @@ module top_level(
                 INFER_NEURON_COMMIT,
                 INFER_NEURON_WRITE,
                 INFER_APPLY_WTA,
+                INFER_APPLY_WTA_GE_MUL,
+                INFER_APPLY_WTA_GE_ROUND,
                 INFER_APPLY_WTA_PRE,
                 INFER_APPLY_WTA_PRE_MUL,
                 INFER_APPLY_WTA_PRE_ROUND,
@@ -1817,6 +1969,10 @@ module top_level(
                 INFER_APPLY_WTA_INH_POST,
                 INFER_APPLY_WTA_ACCUM,
                 INFER_WTA_PASS2_PRE,
+                INFER_WTA_PASS2_DECAY_MUL,
+                INFER_WTA_PASS2_DECAY_ROUND,
+                INFER_WTA_PASS2_ADD_MUL,
+                INFER_WTA_PASS2_ADD_ROUND,
                 INFER_WTA_PASS2,
                 INFER_WTA_PASS2_WRITE: infer_state_is_accum_core = 1'b1;
                 default: infer_state_is_accum_core = 1'b0;
@@ -2071,6 +2227,8 @@ module top_level(
             raw_image1_capture_idx <= 10'd0;
             raw_image0_sum_u8   <= 32'd0;
             raw_image1_sum_u8   <= 32'd0;
+            raw_image0_nonzero  <= 1'b0;
+            raw_image1_nonzero  <= 1'b0;
             raw_image0_rd_addr  <= 10'd0;
             raw_image0_wr_en    <= 1'b0;
             raw_image0_wr_addr  <= 10'd0;
@@ -2303,8 +2461,17 @@ module top_level(
             infer_apply_xpost2_prod <= 64'sd0;
             infer_apply_xpost2_decay <= 32'sd0;
             infer_apply_xpost2_next <= 32'sd0;
+            infer_apply_c_exc_cur <= 32'sd0;
+            infer_apply_c_exc_decay <= 32'sd0;
+            infer_apply_c_exc_next <= 32'sd0;
+            infer_apply_c_exc_spike_add <= 32'sd0;
             infer_sum_c_inh     <= 32'sd0;
             infer_pass2_g_inh_next <= 32'sd0;
+            infer_pass2_g_inh_cur <= 32'sd0;
+            infer_pass2_g_inh_decay <= 32'sd0;
+            infer_pass2_g_inh_add <= 32'sd0;
+            infer_pass2_g_inh_decay_prod_q32 <= 64'sd0;
+            infer_pass2_g_inh_add_prod_q32 <= 64'sd0;
             infer_step_winner_valid <= 1'b0;
             infer_step_winner_idx <= 7'd0;
             infer_trace_wait_last_step <= 1'b0;
@@ -2316,6 +2483,7 @@ module top_level(
             infer_evt_winner_idx <= 7'd0;
             infer_evt_trace_val <= 32'sd0;
             infer_evt_post2_before_q <= 32'sd0;
+            infer_evt_post2_before_qq <= 32'sd0;
             infer_evt_w_cur <= 32'sd0;
             infer_evt_mid_q16 <= 32'sd0;
             infer_evt_term_prod_q32 <= 64'sd0;
@@ -2325,9 +2493,12 @@ module top_level(
             infer_evt_edge_idx <= '0;
             infer_evt_edge_end <= '0;
             infer_evt_edge_ptr <= '0;
+            infer_evt_pre_hist_q <= 32'd0;
+            infer_evt_delay_q <= 4'd0;
             infer_total_spikes  <= 32'd0;
             infer_rng_state     <= 32'd0;
             infer_rng_mul_prod_q32 <= 64'd0;
+            infer_apply_c_exc_decay_prod_q32 <= 64'sd0;
             infer_poisson_num_const_cfg <= POISSON_NUM_CONST;
             infer_dividend      <= 32'd0;
             infer_divisor       <= 32'd1;
@@ -2516,10 +2687,12 @@ module top_level(
                     raw_image0_valid <= 1'b0;
                     raw_image0_capture_idx <= 10'd0;
                     raw_image0_sum_u8 <= 32'd0;
+                    raw_image0_nonzero <= 1'b0;
                 end else begin
                     raw_image1_valid <= 1'b0;
                     raw_image1_capture_idx <= 10'd0;
                     raw_image1_sum_u8 <= 32'd0;
+                    raw_image1_nonzero <= 1'b0;
                 end
                 raw_bytes_per_image <= {22'd0, imgload_start_total_bytes};
             end
@@ -2542,10 +2715,12 @@ module top_level(
                     raw_image0_valid <= 1'b0;
                     raw_image0_capture_idx <= 10'd0;
                     raw_image0_sum_u8 <= 32'd0;
+                    raw_image0_nonzero <= 1'b0;
                 end else begin
                     raw_image1_valid <= 1'b0;
                     raw_image1_capture_idx <= 10'd0;
                     raw_image1_sum_u8 <= 32'd0;
+                    raw_image1_nonzero <= 1'b0;
                 end
             end
 
@@ -2685,10 +2860,12 @@ module top_level(
                     raw_image0_valid <= 1'b0;
                     raw_image0_capture_idx <= 10'd0;
                     raw_image0_sum_u8 <= 32'd0;
+                    raw_image0_nonzero <= 1'b0;
                 end else begin
                     raw_image1_valid <= 1'b0;
                     raw_image1_capture_idx <= 10'd0;
                     raw_image1_sum_u8 <= 32'd0;
+                    raw_image1_nonzero <= 1'b0;
                 end
             end
 
@@ -3082,10 +3259,12 @@ module top_level(
                             raw_image0_valid <= 1'b1;
                             raw_image0_capture_idx <= imgload_byte_idx + 10'd1;
                             raw_image0_sum_u8 <= imgload_sum_u8_accum + {24'd0, imgload_curr_byte};
+                            raw_image0_nonzero <= ((imgload_sum_u8_accum + {24'd0, imgload_curr_byte}) != 32'd0);
                         end else begin
                             raw_image1_valid <= 1'b1;
                             raw_image1_capture_idx <= imgload_byte_idx + 10'd1;
                             raw_image1_sum_u8 <= imgload_sum_u8_accum + {24'd0, imgload_curr_byte};
+                            raw_image1_nonzero <= ((imgload_sum_u8_accum + {24'd0, imgload_curr_byte}) != 32'd0);
                         end
                         if (batch_prefetch_active && (imgload_target_buf_sel == batch_fill_buf_sel)) begin
                             batch_prefetch_active <= 1'b0;
@@ -3559,7 +3738,7 @@ module top_level(
                                 train_mem_init_state  <= TMI_A_WRITE_REQ;
                                 train_mem_init_idx    <= '0;
                             end
-                        end else if (raw_image_compute_valid && (raw_bytes_per_image == 32'd784) && (raw_image_compute_sum_u8 != 32'd0)) begin
+                        end else if (raw_image_compute_valid && (raw_bytes_per_image == 32'd784) && raw_image_compute_nonzero) begin
                             infer_active       <= 1'b1;
                             if (train_chunk_retry_continue_infer) begin
                                 // mine.py retry keeps neuron/synapse/RNG state and only reruns an inj window.
@@ -3658,7 +3837,7 @@ module top_level(
                         end
                     end
                     TCK_BLANK_INFER_START: begin
-                        if (raw_image_compute_valid && (raw_bytes_per_image == 32'd784) && (raw_image_compute_sum_u8 != 32'd0)) begin
+                        if (raw_image_compute_valid && (raw_bytes_per_image == 32'd784) && raw_image_compute_nonzero) begin
                             infer_active       <= 1'b1;
                             infer_state        <= INFER_GEN_INPUT_SPIKES; // blank: continue existing state, skip clear/threshold prep
                             // Keep infer_step_idx continuous across inj->blank, so blank duration
@@ -3815,6 +3994,7 @@ module top_level(
                                     raw_image0_valid <= 1'b0;
                                     raw_image0_capture_idx <= 10'd0;
                                     raw_image0_sum_u8 <= 32'd0;
+                                    raw_image0_nonzero <= 1'b0;
                                 end
                             end
                         end else begin
@@ -3997,6 +4177,7 @@ module top_level(
                                     raw_image0_valid <= 1'b0;
                                     raw_image0_capture_idx <= 10'd0;
                                     raw_image0_sum_u8 <= 32'd0;
+                                    raw_image0_nonzero <= 1'b0;
                                 end else begin
                                     logic [31:0] next_img_byte_off_tmp;
                                     logic [31:0] next_img_byte_in_sector_tmp;
@@ -4030,6 +4211,7 @@ module top_level(
                                     raw_image0_valid <= 1'b0;
                                     raw_image0_capture_idx <= 10'd0;
                                     raw_image0_sum_u8 <= 32'd0;
+                                    raw_image0_nonzero <= 1'b0;
                                 end
                             end
                         end else begin
@@ -4252,6 +4434,7 @@ module top_level(
                                         raw_image0_valid <= 1'b0;
                                         raw_image0_capture_idx <= 10'd0;
                                         raw_image0_sum_u8 <= 32'd0;
+                                        raw_image0_nonzero <= 1'b0;
                                         raw_bytes_per_image <= arg1;
                                     end else begin
                                         resp_status    <= STATUS_BAD_PACKET;
@@ -4264,7 +4447,7 @@ module top_level(
                                     // arg0 = seed, arg1 = steps (>0); no STDP, no label accumulation.
                                     if ((req_nargs == 8'd2) &&
                                         (arg1 > 0) && (arg1 <= 32'sd65535) &&
-                                        raw_image_compute_valid && (raw_bytes_per_image == 32'd784) && (raw_image_compute_sum_u8 != 32'd0) &&
+                                        raw_image_compute_valid && (raw_bytes_per_image == 32'd784) && raw_image_compute_nonzero &&
                                         !ddr_req_pending_core &&
                                         !train_trace_active && !train_stdp_active && !train_gen_active &&
                                         !train_label_stats_active && !train_chunk_active && !infer_active) begin
@@ -4350,7 +4533,7 @@ module top_level(
                                         batch_cfg_start_sectors_needed <= (cfg_start_byte_in_sector_tmp + RAW1_BYTES_PER_IMAGE + 32'd511) >> 9;
                                         batch_cfg_cache_total_sectors <= cfg_cache_total_sectors_tmp;
                                         batch_cfg_cache_total_words <= cfg_cache_total_words_tmp;
-                                        batch_cfg_cache_fits <= ((IMG_CACHE_BASE_WORD + cfg_cache_total_words_tmp) < DDR_ADDR_WORD_LIMIT);
+                                        batch_cfg_cache_fits <= (cfg_cache_total_sectors_tmp < IMG_CACHE_SECTOR_LIMIT);
                                         batch_cfg0_valid <= 1'b1;
                                         batch_done <= 1'b0;
                                         batch_error <= 1'b0;
@@ -4384,7 +4567,7 @@ module top_level(
                                         batch_cfg_num_samples_bytes <= cfg_num_samples_bytes_tmp;
                                         batch_cfg_cache_total_sectors <= cfg_cache_total_sectors_tmp;
                                         batch_cfg_cache_total_words <= cfg_cache_total_words_tmp;
-                                        batch_cfg_cache_fits <= ((IMG_CACHE_BASE_WORD + cfg_cache_total_words_tmp) < DDR_ADDR_WORD_LIMIT);
+                                        batch_cfg_cache_fits <= (cfg_cache_total_sectors_tmp < IMG_CACHE_SECTOR_LIMIT);
                                         batch_cfg1_valid <= 1'b1;
                                         batch_done <= 1'b0;
                                         batch_error <= 1'b0;
@@ -4536,6 +4719,7 @@ module top_level(
                                                 raw_image0_valid <= 1'b0;
                                                 raw_image0_capture_idx <= 10'd0;
                                                 raw_image0_sum_u8 <= 32'd0;
+                                                raw_image0_nonzero <= 1'b0;
                                                 resp_result <= 32'd0;
                                                 resp_status <= STATUS_OK;
                                         end else begin
@@ -4863,6 +5047,7 @@ module top_level(
                         infer_g_exc_delay0[infer_apply_idx] <= 32'sd0;
                         infer_g_exc_delay1[infer_apply_idx] <= 32'sd0;
                         infer_s_exc[infer_apply_idx] <= 1'b0;
+                        infer_s_inh[infer_apply_idx] <= 1'b0;
                         infer_exc_last_spike_step[infer_apply_idx] <= LAST_SPIKE_INIT_STEP;
                         infer_inh_last_spike_step[infer_apply_idx] <= LAST_SPIKE_INIT_STEP;
                         if (infer_apply_idx == (N_NEURONS - 1)) begin
@@ -4916,7 +5101,7 @@ module top_level(
                     INFER_PREP_DIV_WAIT: begin
                         if (infer_div_out_valid) begin
                             if (infer_clear_pre_hist) begin
-                                infer_pre_hist[infer_prep_idx] <= 10'd0;
+                                infer_pre_hist[infer_prep_idx] <= 32'd0;
                             end
                             if (infer_div_q[31:12] != 0) begin
                                 infer_poisson_thresh_wr_data <= RNG_MAX;
@@ -4953,7 +5138,7 @@ module top_level(
 
                     INFER_GEN_INPUT_SPIKES: begin
                         logic spike_in_now;
-                        logic [9:0] pre_hist_next;
+                        logic [31:0] pre_hist_next;
                         if (infer_trace_phase == 2'd0) begin
                             // Keep prelist write address/data updates unconditional in this phase
                             // to avoid deep CE gating on infer_pre_wr_* registers.
@@ -4971,7 +5156,7 @@ module top_level(
                             if (infer_input_idx == 10'd0) begin
                                 infer_pre_active_count <= 10'd0;
                             end
-                            pre_hist_next = {infer_pre_hist[infer_input_idx][8:0], spike_in_now};
+                            pre_hist_next = {infer_pre_hist[infer_input_idx][30:0], spike_in_now};
                             infer_pre_hist[infer_input_idx] <= pre_hist_next;
                             train_xin_rd_addr <= infer_input_idx;
                             infer_trace_phase <= 3'd1;
@@ -5169,6 +5354,11 @@ module top_level(
                         infer_eval_eexc_minus_v <= (FXP_EXC_EEXC - infer_eval_v_cur);
                         infer_eval_einh_minus_v <= (FXP_EXC_EINH - infer_eval_v_cur);
                         infer_eval_vrest_minus_v <= (FXP_EXC_VREST - infer_eval_v_cur);
+                        infer_state <= INFER_NEURON_DV_DRIVE_PRE;
+                    end
+
+                    INFER_NEURON_DV_DRIVE_PRE: begin
+                        infer_eval_exc_refractory_ok <= ((infer_step_idx[15:0] - infer_eval_last_spike_step) > EXC_TREF_STEPS);
                         infer_state <= INFER_NEURON_DV_DRIVE;
                     end
 
@@ -5176,13 +5366,9 @@ module top_level(
                         logic signed [31:0] exc_drive_dt;
                         logic signed [31:0] inh_drive_dt;
                         logic signed [31:0] leak_dt;
-                        logic exc_refractory_ok;
-
-                        exc_refractory_ok = ((infer_step_idx[15:0] - infer_eval_last_spike_step) > EXC_TREF_STEPS);
                         exc_drive_dt = fxp_mul_s16_16(infer_eval_eexc_minus_v, FXP_EXC_DT_OVER_TCM);
                         inh_drive_dt = fxp_mul_s16_16(infer_eval_einh_minus_v, FXP_EXC_DT_OVER_TCM);
                         leak_dt = fxp_mul_s16_16(infer_eval_vrest_minus_v, FXP_EXC_DT_OVER_TCM);
-                        infer_eval_exc_refractory_ok <= exc_refractory_ok;
                         infer_eval_exc_drive_dt <= exc_drive_dt;
                         infer_eval_inh_drive_dt <= inh_drive_dt;
                         infer_eval_leak_dt <= leak_dt;
@@ -5285,9 +5471,6 @@ module top_level(
                     end
 
 	                    INFER_APPLY_WTA: begin
-	                        logic signed [31:0] g_exc_new;
-	                        logic signed [31:0] delayed_g_exc;
-                            logic signed [31:0] c_exc_next;
                             if (infer_trace_phase == 2'd0) begin
                                 train_xexc_rd_addr <= infer_apply_idx;
                                 train_xpost2_rd_addr <= infer_apply_idx;
@@ -5333,21 +5516,35 @@ module top_level(
                                 train_xpost2_wr_addr <= infer_apply_idx;
                                 train_xpost2_wr_data <= infer_apply_xpost2_next;
 
-                                // Match mine.py exc_synapse(td=1ms, dt=1ms): c_exc = 1000*s_exc (no decay carry).
-                                c_exc_next = infer_trace_spike_latched ? FXP_SCALE_1000 : 32'sd0;
-                                infer_c_exc_state[infer_apply_idx] <= c_exc_next;
-	                            g_exc_new = fxp_mul_s16_16(c_exc_next, FXP_WEXC);
-	                            delayed_g_exc = infer_g_exc_delay1[infer_apply_idx];
-	                            infer_g_exc_delay1[infer_apply_idx] <= infer_g_exc_delay0[infer_apply_idx];
-	                            infer_g_exc_delay0[infer_apply_idx] <= g_exc_new;
-                                infer_apply_delayed_g_exc <= delayed_g_exc;
+                                infer_apply_c_exc_cur <= infer_c_exc_state[infer_apply_idx];
+                                infer_apply_c_exc_spike_add <= infer_trace_spike_latched ? FXP_WEXC : 32'sd0;
                                 infer_apply_v_inh_cur <= infer_v_inh_state[infer_apply_idx];
-                                infer_apply_c_inh_cur <= infer_c_inh_state[infer_apply_idx];
                                 infer_apply_inh_last_spike <= infer_inh_last_spike_step[infer_apply_idx];
                                 infer_trace_phase <= 3'd0;
-                                infer_state <= INFER_APPLY_WTA_PRE;
+                                infer_state <= INFER_APPLY_WTA_GE_MUL;
                             end
 	                    end
+
+                        INFER_APPLY_WTA_GE_MUL: begin
+                            infer_apply_c_exc_decay_prod_q32 <= $signed(infer_apply_c_exc_cur) * $signed(FXP_GE_DECAY_1MS);
+                            infer_state <= INFER_APPLY_WTA_GE_ROUND;
+                        end
+
+                        INFER_APPLY_WTA_GE_ROUND: begin
+                            logic signed [31:0] g_exc_decay_rounded;
+                            logic signed [31:0] g_exc_next_local;
+                            if (infer_apply_c_exc_decay_prod_q32 >= 0) begin
+                                g_exc_decay_rounded = $signed((infer_apply_c_exc_decay_prod_q32 + 64'sd32768) >>> 16);
+                            end else begin
+                                g_exc_decay_rounded = $signed((infer_apply_c_exc_decay_prod_q32 - 64'sd32768) >>> 16);
+                            end
+                            g_exc_next_local = g_exc_decay_rounded + infer_apply_c_exc_spike_add;
+                            infer_apply_c_exc_decay <= g_exc_decay_rounded;
+                            infer_apply_c_exc_next <= g_exc_next_local;
+                            infer_c_exc_state[infer_apply_idx] <= g_exc_next_local;
+                            infer_apply_delayed_g_exc <= g_exc_next_local;
+                            infer_state <= INFER_APPLY_WTA_PRE;
+                        end
 
 	                    INFER_APPLY_WTA_PRE: begin
                             infer_apply_inh_refractory_ok <= ((infer_step_idx[15:0] - infer_apply_inh_last_spike) > INH_TREF_STEPS);
@@ -5409,26 +5606,22 @@ module top_level(
 	                    INFER_APPLY_WTA_INH_POST: begin
                             logic signed [31:0] v_inh_next;
 	                        logic s_inh_now;
-	                        logic signed [31:0] c_inh_next;
                             v_inh_next = infer_apply_inh_refractory_ok ? infer_apply_v_inh_prop : infer_apply_v_inh_cur;
 	                        s_inh_now = (v_inh_next > FXP_INH_THRESH);
                             infer_apply_s_inh_now <= s_inh_now;
                             infer_apply_v_inh_write <= s_inh_now ? FXP_INH_VRESET : v_inh_next;
-	                        c_inh_next = $signed(infer_apply_c_inh_cur) >>> 1;
-	                        if (s_inh_now) begin
-	                            c_inh_next = c_inh_next + FXP_SCALE_500;
-	                        end
-                            infer_apply_c_inh_next <= c_inh_next;
+                            infer_apply_c_inh_next <= 32'sd0;
                             infer_state <= INFER_APPLY_WTA_ACCUM;
                         end
 
 	                    INFER_APPLY_WTA_ACCUM: begin
                             infer_v_inh_state[infer_apply_idx] <= infer_apply_v_inh_write;
-                            infer_c_inh_state[infer_apply_idx] <= infer_apply_c_inh_next;
+                            infer_c_inh_state[infer_apply_idx] <= 32'sd0;
+                            infer_s_inh[infer_apply_idx] <= infer_apply_s_inh_now;
                             if (infer_apply_s_inh_now) begin
                                 infer_inh_last_spike_step[infer_apply_idx] <= infer_step_idx[15:0];
                             end
-	                        infer_sum_c_inh <= infer_sum_c_inh + infer_apply_c_inh_next;
+	                        infer_sum_c_inh <= infer_sum_c_inh + (infer_apply_s_inh_now ? 32'sd1 : 32'sd0);
 	                        if (infer_apply_idx == (N_NEURONS - 1)) begin
 	                            infer_apply_idx <= 7'd0;
                                 infer_step_winner_valid <= 1'b0;
@@ -5446,13 +5639,44 @@ module top_level(
                                 infer_step_winner_valid <= 1'b1;
                                 infer_step_winner_idx   <= infer_apply_idx;
                             end
-	                        diff_c_inh = infer_sum_c_inh - infer_c_inh_state[infer_apply_idx];
+	                        diff_c_inh = infer_sum_c_inh - (infer_s_inh[infer_apply_idx] ? 32'sd1 : 32'sd0);
 	                        if (diff_c_inh < 0) begin
 	                            diff_c_inh = 32'sd0;
 	                        end
                             infer_pass2_diff_c_inh <= diff_c_inh;
-                            infer_state <= INFER_WTA_PASS2;
+                            infer_pass2_g_inh_cur <= infer_g_inh_state[infer_apply_idx];
+                            infer_state <= INFER_WTA_PASS2_DECAY_MUL;
 	                    end
+
+                        INFER_WTA_PASS2_DECAY_MUL: begin
+                            infer_pass2_g_inh_decay_prod_q32 <= $signed(infer_pass2_g_inh_cur) * $signed(FXP_GI_DECAY_2MS);
+                            infer_state <= INFER_WTA_PASS2_DECAY_ROUND;
+                        end
+
+                        INFER_WTA_PASS2_DECAY_ROUND: begin
+                            logic signed [31:0] g_inh_decay_rounded;
+                            if (infer_pass2_g_inh_decay_prod_q32 >= 0) begin
+                                g_inh_decay_rounded = $signed((infer_pass2_g_inh_decay_prod_q32 + 64'sd32768) >>> 16);
+                            end else begin
+                                g_inh_decay_rounded = $signed((infer_pass2_g_inh_decay_prod_q32 - 64'sd32768) >>> 16);
+                            end
+                            infer_pass2_g_inh_decay <= g_inh_decay_rounded;
+                            infer_state <= INFER_WTA_PASS2_ADD_MUL;
+                        end
+
+                        INFER_WTA_PASS2_ADD_MUL: begin
+                            infer_pass2_g_inh_add_prod_q32 <= $signed(infer_pass2_diff_c_inh) * $signed(FXP_GI_SPIKE);
+                            infer_state <= INFER_WTA_PASS2_ADD_ROUND;
+                        end
+
+                        INFER_WTA_PASS2_ADD_ROUND: begin
+                            if (infer_pass2_g_inh_add_prod_q32 >= 0) begin
+                                infer_pass2_g_inh_add <= $signed((infer_pass2_g_inh_add_prod_q32 + 64'sd32768) >>> 16);
+                            end else begin
+                                infer_pass2_g_inh_add <= $signed((infer_pass2_g_inh_add_prod_q32 - 64'sd32768) >>> 16);
+                            end
+                            infer_state <= INFER_WTA_PASS2;
+                        end
 
 	                    INFER_WTA_PASS2: begin
                             logic run_online_trace_now;
@@ -5461,7 +5685,7 @@ module top_level(
                                                     (train_chunk_mode == 3'd3) &&
                                                     !infer_force_no_input);
                             step_last_now = ((infer_step_idx + 32'd1) >= infer_steps_target);
-	                        infer_pass2_g_inh_next <= fxp_mul_s16_16(infer_pass2_diff_c_inh, FXP_INH_COEFF);
+	                        infer_pass2_g_inh_next <= infer_pass2_g_inh_decay + infer_pass2_g_inh_add;
                             infer_state <= INFER_WTA_PASS2_WRITE;
 	                    end
 
@@ -5731,12 +5955,17 @@ module top_level(
                     end
 
                     INFER_EVT_POST_TRACE_REQ: begin
-                        train_xin_rd_addr <= infer_evt_post_input_idx;
+                        infer_evt_pre_hist_q <= infer_pre_hist[infer_evt_post_input_idx];
+                        infer_evt_delay_q <= dense_delay_step(infer_evt_post_idx, infer_evt_post_input_idx);
+                        infer_state <= INFER_EVT_POST_TRACE_PRE;
+                    end
+
+                    INFER_EVT_POST_TRACE_PRE: begin
                         infer_state <= INFER_EVT_POST_TRACE_WAIT;
                     end
 
                     INFER_EVT_POST_TRACE_WAIT: begin
-                        infer_evt_trace_val <= $signed(train_xin_rd_data);
+                        infer_evt_trace_val <= delayed_pre_trace_from_hist(infer_evt_pre_hist_q, infer_evt_delay_q);
                         infer_evt_post2_before_q <= infer_post2_before[infer_evt_post_idx];
                         infer_w_rd_addr <= infer_evt_edge_ptr;
                         infer_state <= INFER_EVT_POST_W_WAIT;
@@ -5749,11 +5978,16 @@ module top_level(
 
                     INFER_EVT_POST_APPLY: begin
                         infer_evt_mid_q16 <= fxp_mul_s16_16(TRAIN_LR_P_Q16, infer_evt_trace_val);
+                        infer_evt_post2_before_qq <= infer_evt_post2_before_q;
+                        infer_state <= INFER_EVT_POST_APPLY_PRE;
+                    end
+
+                    INFER_EVT_POST_APPLY_PRE: begin
                         infer_state <= INFER_EVT_POST_APPLY_MUL1;
                     end
 
                     INFER_EVT_POST_APPLY_MUL1: begin
-                        infer_evt_term_prod_q32 <= $signed(infer_evt_mid_q16) * $signed(infer_evt_post2_before_q);
+                        infer_evt_term_prod_q32 <= $signed(infer_evt_mid_q16) * $signed(infer_evt_post2_before_qq);
                         infer_state <= INFER_EVT_POST_APPLY_MUL2;
                     end
 
@@ -5933,10 +6167,12 @@ module top_level(
                                     raw_image0_valid <= 1'b0;
                                     raw_image0_capture_idx <= 10'd0;
                                     raw_image0_sum_u8 <= 32'd0;
+                                    raw_image0_nonzero <= 1'b0;
                                 end else begin
                                     raw_image1_valid <= 1'b0;
                                     raw_image1_capture_idx <= 10'd0;
                                     raw_image1_sum_u8 <= 32'd0;
+                                    raw_image1_nonzero <= 1'b0;
                                 end
                             end else if (batch_prefetch_ready && (batch_prefetch_sample_idx == (batch_current_sample_idx + 32'd1))) begin
                                 batch_phase <= BATCH_PHASE_RUNNING;
@@ -5951,10 +6187,12 @@ module top_level(
                                     raw_image0_valid <= 1'b0;
                                     raw_image0_capture_idx <= 10'd0;
                                     raw_image0_sum_u8 <= 32'd0;
+                                    raw_image0_nonzero <= 1'b0;
                                 end else begin
                                     raw_image1_valid <= 1'b0;
                                     raw_image1_capture_idx <= 10'd0;
                                     raw_image1_sum_u8 <= 32'd0;
+                                    raw_image1_nonzero <= 1'b0;
                                 end
                                 infer_active       <= 1'b1;
                                 if (infer_model_state_valid && (batch_processed_samples != 32'd0)) begin
@@ -6018,10 +6256,12 @@ module top_level(
                                     raw_image0_valid <= 1'b0;
                                     raw_image0_capture_idx <= 10'd0;
                                     raw_image0_sum_u8 <= 32'd0;
+                                    raw_image0_nonzero <= 1'b0;
                                 end else begin
                                     raw_image1_valid <= 1'b0;
                                     raw_image1_capture_idx <= 10'd0;
                                     raw_image1_sum_u8 <= 32'd0;
+                                    raw_image1_nonzero <= 1'b0;
                                 end
                             end
                         end
