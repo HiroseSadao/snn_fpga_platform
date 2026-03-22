@@ -303,6 +303,7 @@ module top_level(
         TMI_A_WRITE_WAIT,
         TMI_BT_WRITE_REQ,
         TMI_BT_WRITE_WAIT,
+        TMI_XPRE_CLEAR,
         TMI_DONE
     } train_mem_init_state_t;
     typedef enum logic [4:0] {
@@ -812,7 +813,7 @@ module top_level(
     logic [9:0]  infer_input_idx;
     logic [9:0]  infer_prep_idx;
     logic signed [31:0] infer_accum;
-    logic [2:0]  infer_accum_weight_phase;
+    logic [3:0]  infer_accum_weight_phase;
     logic [W_ADDR_W-1:0] infer_w_rd_addr;
     logic [15:0] infer_w_rd_data;
     logic [15:0] infer_w_rd_data_q;
@@ -822,6 +823,12 @@ module top_level(
     logic        infer_w_wr_en;
     logic [W_ADDR_W-1:0] infer_w_wr_addr;
     logic [15:0] infer_w_wr_data;
+    logic        infer_pre_trace_wr_en;
+    logic [TRAIN_DENSE_ADDR_W-1:0] infer_pre_trace_wr_addr;
+    logic signed [31:0] infer_pre_trace_wr_data;
+    logic [TRAIN_DENSE_ADDR_W-1:0] infer_pre_trace_rd_addr;
+    logic signed [31:0] infer_pre_trace_rd_data;
+    (* ram_style = "block" *) logic signed [31:0] infer_pre_trace_mem [0:N_WEIGHTS-1];
     (* ram_style = "block" *) logic signed [31:0] infer_g_in_state [0:N_NEURONS-1];
     (* ram_style = "block" *) logic signed [31:0] infer_v_state [0:N_NEURONS-1];
     (* ram_style = "block" *) logic signed [31:0] infer_exc_theta [0:N_NEURONS-1];
@@ -944,6 +951,10 @@ module top_level(
     logic [3:0]  infer_evt_delay_q;
     logic [1:0]  infer_accum_pair_count;
     logic        infer_accum_lane0_fire;
+    logic [W_ADDR_W-1:0] infer_accum_edge_ptr_q;
+    logic signed [31:0] infer_accum_trace_cur;
+    logic signed [31:0] infer_accum_trace_decay;
+    (* use_dsp = "yes" *) logic signed [63:0] infer_accum_trace_prod_q32;
     logic        infer_accum_lane1_fire;
     logic [31:0] infer_total_spikes;
     logic [31:0] infer_rng_state;
@@ -1213,6 +1224,11 @@ module top_level(
             train_xin_wr_data_pipe <= train_xin_wr_data;
         end
         train_xin_rd_data <= train_xin_mem[train_xin_rd_addr];
+
+        if (infer_pre_trace_wr_en) begin
+            infer_pre_trace_mem[infer_pre_trace_wr_addr] <= infer_pre_trace_wr_data;
+        end
+        infer_pre_trace_rd_data <= infer_pre_trace_mem[infer_pre_trace_rd_addr];
 
         if (train_xexc_wr_en) begin
             train_xexc_mem[train_xexc_wr_addr] <= train_xexc_wr_data;
@@ -2444,11 +2460,16 @@ module top_level(
             infer_input_idx     <= 10'd0;
             infer_prep_idx      <= 10'd0;
             infer_accum         <= 32'sd0;
-            infer_accum_weight_phase <= 3'd0;
+            infer_accum_weight_phase <= 4'd0;
             infer_w_rd_addr     <= '0;
             infer_w_wr_en       <= 1'b0;
             infer_w_wr_addr     <= '0;
             infer_w_wr_data     <= 16'd0;
+            infer_pre_trace_wr_en <= 1'b0;
+            infer_pre_trace_wr_addr <= '0;
+            infer_pre_trace_wr_data <= 32'sd0;
+            infer_pre_trace_rd_addr <= '0;
+            infer_pre_trace_rd_data <= 32'sd0;
             spike_count_we      <= 1'b0;
             spike_count_waddr   <= '0;
             spike_count_wdata   <= 16'd0;
@@ -2544,6 +2565,10 @@ module top_level(
             infer_w_rd_data_q_lane1 <= 16'd0;
             infer_accum_pair_count <= 2'd0;
             infer_accum_lane0_fire <= 1'b0;
+            infer_accum_edge_ptr_q <= '0;
+            infer_accum_trace_cur <= 32'sd0;
+            infer_accum_trace_decay <= 32'sd0;
+            infer_accum_trace_prod_q32 <= 64'sd0;
             infer_accum_lane1_fire <= 1'b0;
             memrd_pending <= 1'b0;
             memrd_wait    <= 1'b0;
@@ -2569,6 +2594,7 @@ module top_level(
             train_xin_wr_en <= 1'b0;
             train_xexc_wr_en <= 1'b0;
             train_xpost2_wr_en <= 1'b0;
+            infer_pre_trace_wr_en <= 1'b0;
             batch_status_word <= {
                 batch_phase,
                 batch_error_code,
@@ -3001,7 +3027,8 @@ module top_level(
                             end
                             TMI_BT_WRITE_WAIT: begin
                                 if (train_mem_init_idx == (N_WEIGHTS - 1)) begin
-                                    train_mem_init_state <= TMI_DONE;
+                                    train_mem_init_idx   <= '0;
+                                    train_mem_init_state <= TMI_XPRE_CLEAR;
                                 end else begin
                                     train_mem_init_idx   <= train_mem_init_idx + {{(TRAIN_DENSE_ADDR_W-1){1'b0}}, 1'b1};
                                     train_mem_init_state <= TMI_BT_WRITE_REQ;
@@ -4099,6 +4126,16 @@ module top_level(
                         ddr_req_word_count_core   <= 3'd1;
                         ddr_req_toggle_core       <= ~ddr_req_toggle_core;
                         train_mem_init_state      <= TMI_BT_WRITE_WAIT;
+                    end
+                    TMI_XPRE_CLEAR: begin
+                        infer_pre_trace_wr_en <= 1'b1;
+                        infer_pre_trace_wr_addr <= train_mem_init_idx;
+                        infer_pre_trace_wr_data <= 32'sd0;
+                        if (train_mem_init_idx == (N_WEIGHTS - 1)) begin
+                            train_mem_init_state <= TMI_DONE;
+                        end else begin
+                            train_mem_init_idx <= train_mem_init_idx + {{(TRAIN_DENSE_ADDR_W-1){1'b0}}, 1'b1};
+                        end
                     end
                     TMI_DONE: begin
                         train_mem_init_active <= 1'b0;
@@ -5207,58 +5244,100 @@ module top_level(
                     INFER_ACCUM_NEURON: begin
                         // Event-driven accumulation over the full row. With dense
                         // connectivity, pre indices are implicit 0..N_IN-1.
-                        if (infer_accum_weight_phase == 3'd0) begin
+                        if (infer_accum_weight_phase == 4'd0) begin
                             infer_evt_edge_idx <= '0;
                             infer_evt_edge_end <= N_IN[EDGE_ADDR_W-1:0];
-                            if (N_IN > 1) begin
+                            if (TRAIN_ENABLE && train_chunk_active) begin
+                                infer_accum_pair_count <= 2'd1;
+                            end else if (N_IN > 1) begin
                                 infer_accum_pair_count <= 2'd2;
                             end else begin
                                 infer_accum_pair_count <= 2'd1;
                             end
-                            infer_accum_weight_phase <= 3'd4;
-                        end else if (infer_accum_weight_phase == 3'd1) begin
-                            infer_accum_weight_phase <= 3'd2;
-                        end else if (infer_accum_weight_phase == 3'd2) begin
+                            infer_accum_weight_phase <= 4'd4;
+                        end else if (infer_accum_weight_phase == 4'd1) begin
+                            infer_accum_weight_phase <= 4'd2;
+                        end else if (infer_accum_weight_phase == 4'd2) begin
                             if (infer_evt_edge_idx >= infer_evt_edge_end) begin
                                 infer_delay_pipe_valid <= 1'b1;
                                 infer_delay_pipe_idx <= infer_neuron_idx;
-                                infer_accum_weight_phase <= 3'd0;
+                                infer_accum_weight_phase <= 4'd0;
                                 infer_state <= INFER_ACCUM_NEURON_GIN_MUL;
                             end else begin
-                                if ((infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}}, 1'b1}) < infer_evt_edge_end) begin
-                                    infer_accum_pair_count <= 2'd2;
-                                end else begin
+                                if ((TRAIN_ENABLE && train_chunk_active) || !((infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}}, 1'b1}) < infer_evt_edge_end)) begin
                                     infer_accum_pair_count <= 2'd1;
+                                end else begin
+                                    infer_accum_pair_count <= 2'd2;
                                 end
-                                infer_accum_weight_phase <= 3'd4;
+                                infer_accum_weight_phase <= 4'd4;
                             end
-                        end else if (infer_accum_weight_phase == 3'd3) begin
-                            infer_accum_weight_phase <= 3'd4;
-                        end else if (infer_accum_weight_phase == 3'd4) begin
+                        end else if (infer_accum_weight_phase == 4'd3) begin
+                            infer_accum_weight_phase <= 4'd4;
+                        end else if (infer_accum_weight_phase == 4'd4) begin
                             logic lane0_fire_now;
                             logic lane1_fire_now;
                             logic [9:0] lane1_pre_idx;
                             lane0_fire_now = infer_pre_hist[infer_evt_edge_idx[9:0]][dense_delay_step(infer_neuron_idx, infer_evt_edge_idx[9:0])];
                             lane1_fire_now = 1'b0;
                             lane1_pre_idx = (infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}}, 1'b1});
-                            if (infer_accum_pair_count == 2'd2) begin
+                            if (!(TRAIN_ENABLE && train_chunk_active) && (infer_accum_pair_count == 2'd2)) begin
                                 lane1_fire_now = infer_pre_hist[lane1_pre_idx][dense_delay_step(infer_neuron_idx, lane1_pre_idx)];
                             end
                             infer_accum_lane0_fire <= lane0_fire_now;
-                            infer_accum_lane1_fire <= lane1_fire_now;
-                            if (lane0_fire_now) begin
-                                infer_w_rd_addr <= dense_weight_addr(infer_neuron_idx, infer_evt_edge_idx[9:0]);
+                            if (TRAIN_ENABLE && train_chunk_active) begin
+                                infer_accum_lane1_fire <= 1'b0;
+                                infer_accum_edge_ptr_q <= dense_weight_addr(infer_neuron_idx, infer_evt_edge_idx[9:0]);
+                                infer_pre_trace_rd_addr <= dense_weight_addr(infer_neuron_idx, infer_evt_edge_idx[9:0]);
+                                if (lane0_fire_now) begin
+                                    infer_w_rd_addr <= dense_weight_addr(infer_neuron_idx, infer_evt_edge_idx[9:0]);
+                                end
+                            end else begin
+                                infer_accum_lane1_fire <= lane1_fire_now;
+                                if (lane0_fire_now) begin
+                                    infer_w_rd_addr <= dense_weight_addr(infer_neuron_idx, infer_evt_edge_idx[9:0]);
+                                end
+                                if (lane1_fire_now) begin
+                                    infer_w_rd_addr_lane1 <= dense_weight_addr(
+                                        infer_neuron_idx,
+                                        infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}}, 1'b1}
+                                    );
+                                end
                             end
-                            if (lane1_fire_now) begin
-                                infer_w_rd_addr_lane1 <= dense_weight_addr(
-                                    infer_neuron_idx,
-                                    infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}}, 1'b1}
-                                );
-                            end
-                            infer_accum_weight_phase <= 3'd5;
-                        end else if (infer_accum_weight_phase == 3'd5) begin
+                            infer_accum_weight_phase <= 4'd5;
+                        end else if (infer_accum_weight_phase == 4'd5) begin
                             // weight BRAM read latency fill cycle.
-                            infer_accum_weight_phase <= 3'd6;
+                            infer_accum_weight_phase <= (TRAIN_ENABLE && train_chunk_active) ? 4'd6 : 4'd9;
+                        end else if (infer_accum_weight_phase == 4'd6) begin
+                            infer_accum_trace_cur <= infer_pre_trace_rd_data;
+                            infer_accum_trace_prod_q32 <= $signed(infer_pre_trace_rd_data) * $signed(FXP_TRACE_PRE_DECAY);
+                            infer_accum_weight_phase <= 4'd7;
+                        end else if (infer_accum_weight_phase == 4'd7) begin
+                            if (infer_accum_trace_prod_q32 >= 0) begin
+                                infer_accum_trace_decay <= $signed((infer_accum_trace_prod_q32 + 64'sd32768) >>> 16);
+                            end else begin
+                                infer_accum_trace_decay <= $signed((infer_accum_trace_prod_q32 - 64'sd32768) >>> 16);
+                            end
+                            infer_accum_weight_phase <= 4'd8;
+                        end else if (infer_accum_weight_phase == 4'd8) begin
+                            logic signed [31:0] accum_delta_q16;
+                            logic [EDGE_ADDR_W-1:0] infer_evt_edge_next;
+                            accum_delta_q16 = infer_accum_lane0_fire ? $signed({16'd0, infer_w_rd_data_q}) : 32'sd0;
+                            infer_pre_trace_wr_en <= 1'b1;
+                            infer_pre_trace_wr_addr <= infer_accum_edge_ptr_q;
+                            infer_pre_trace_wr_data <= infer_accum_lane0_fire ? FXP_TRACE_EVENT_SET : infer_accum_trace_decay;
+                            infer_accum <= infer_accum + accum_delta_q16;
+                            infer_evt_edge_next = infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}}, infer_accum_pair_count};
+                            infer_accum_lane0_fire <= 1'b0;
+                            if (infer_evt_edge_next >= infer_evt_edge_end) begin
+                                infer_delay_pipe_valid <= 1'b1;
+                                infer_delay_pipe_idx <= infer_neuron_idx;
+                                infer_accum_weight_phase <= 4'd0;
+                                infer_state <= INFER_ACCUM_NEURON_GIN_MUL;
+                            end else begin
+                                infer_evt_edge_idx <= infer_evt_edge_next;
+                                infer_accum_pair_count <= 2'd1;
+                                infer_accum_weight_phase <= 4'd4;
+                            end
                         end else begin
                             logic signed [31:0] accum_delta_q16;
                             logic [EDGE_ADDR_W-1:0] infer_evt_edge_next;
@@ -5276,7 +5355,7 @@ module top_level(
                             if (infer_evt_edge_next >= infer_evt_edge_end) begin
                                 infer_delay_pipe_valid <= 1'b1;
                                 infer_delay_pipe_idx <= infer_neuron_idx;
-                                infer_accum_weight_phase <= 3'd0;
+                                infer_accum_weight_phase <= 4'd0;
                                 infer_state <= INFER_ACCUM_NEURON_GIN_MUL;
                             end else begin
                                 infer_evt_edge_idx <= infer_evt_edge_next;
@@ -5285,7 +5364,7 @@ module top_level(
                                 end else begin
                                     infer_accum_pair_count <= 2'd1;
                                 end
-                                infer_accum_weight_phase <= 3'd4;
+                                infer_accum_weight_phase <= 4'd4;
                             end
                         end
                     end
@@ -5947,6 +6026,7 @@ module top_level(
                     INFER_EVT_POST_EDGE_REQ: begin
                         infer_evt_post_input_idx <= infer_evt_edge_idx[9:0];
                         infer_evt_edge_ptr <= dense_weight_addr(infer_evt_post_idx, infer_evt_edge_idx[9:0]);
+                        infer_pre_trace_rd_addr <= dense_weight_addr(infer_evt_post_idx, infer_evt_edge_idx[9:0]);
                         infer_state <= INFER_EVT_POST_EDGE_WAIT;
                     end
 
@@ -5955,8 +6035,6 @@ module top_level(
                     end
 
                     INFER_EVT_POST_TRACE_REQ: begin
-                        infer_evt_pre_hist_q <= infer_pre_hist[infer_evt_post_input_idx];
-                        infer_evt_delay_q <= dense_delay_step(infer_evt_post_idx, infer_evt_post_input_idx);
                         infer_state <= INFER_EVT_POST_TRACE_PRE;
                     end
 
@@ -5965,7 +6043,7 @@ module top_level(
                     end
 
                     INFER_EVT_POST_TRACE_WAIT: begin
-                        infer_evt_trace_val <= delayed_pre_trace_from_hist(infer_evt_pre_hist_q, infer_evt_delay_q);
+                        infer_evt_trace_val <= infer_pre_trace_rd_data;
                         infer_evt_post2_before_q <= infer_post2_before[infer_evt_post_idx];
                         infer_w_rd_addr <= infer_evt_edge_ptr;
                         infer_state <= INFER_EVT_POST_W_WAIT;

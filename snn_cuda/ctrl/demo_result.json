@@ -1,5 +1,5 @@
 {
-  "accuracy": 0.08,
+  "accuracy": 0.12,
   "backend": "fpga_uart",
   "caps_hex": "0x00017F0F",
   "compiler_plan": {
@@ -190,18 +190,18 @@
       "source_kind": "python_model"
     }
   },
-  "correct": 8,
+  "correct": 12,
   "cycle_breakdown": {
     "infer_core": 2297713050,
     "infer_eval": 19100,
     "label_stats": 0,
-    "load": 30538372,
+    "load": 30535837,
     "other": 0,
     "train_core": 0
   },
   "dataset_name": "mnist",
-  "elapsed_cycles": 2328270522,
-  "elapsed_sec": 23.28270522,
+  "elapsed_cycles": 2328267987,
+  "elapsed_sec": 23.28267987,
   "infer_samples": 100,
   "infer_seed": 305419897,
   "mode": "train-then-infer",
