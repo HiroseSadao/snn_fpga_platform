@@ -254,6 +254,7 @@ module top_level(
         INFER_EVT_PRE_EDGE_REQ,
         INFER_EVT_PRE_EDGE_WAIT,
         INFER_EVT_PRE_TRACE_REQ,
+        INFER_EVT_PRE_TRACE_PRE,
         INFER_EVT_PRE_TRACE_WAIT,
         INFER_EVT_PRE_W_WAIT,
         INFER_EVT_PRE_APPLY,
@@ -949,6 +950,7 @@ module top_level(
     logic [EDGE_ADDR_W-1:0] infer_evt_edge_ptr;
     logic [31:0] infer_evt_pre_hist_q;
     logic [3:0]  infer_evt_delay_q;
+    logic [15:0] infer_evt_age_q;
     logic [1:0]  infer_accum_pair_count;
     logic        infer_accum_lane0_fire;
     logic [W_ADDR_W-1:0] infer_accum_edge_ptr_q;
@@ -1903,6 +1905,154 @@ module top_level(
         end
     endfunction
 
+    function automatic logic signed [31:0] trace_decay_tau20(
+        input logic [15:0] age_steps
+    );
+        begin
+            case (age_steps)
+                16'd0: trace_decay_tau20 = 32'sd65536;
+                16'd1: trace_decay_tau20 = 32'sd62340;
+                16'd2: trace_decay_tau20 = 32'sd59299;
+                16'd3: trace_decay_tau20 = 32'sd56407;
+                16'd4: trace_decay_tau20 = 32'sd53656;
+                16'd5: trace_decay_tau20 = 32'sd51039;
+                16'd6: trace_decay_tau20 = 32'sd48550;
+                16'd7: trace_decay_tau20 = 32'sd46182;
+                16'd8: trace_decay_tau20 = 32'sd43930;
+                16'd9: trace_decay_tau20 = 32'sd41788;
+                16'd10: trace_decay_tau20 = 32'sd39750;
+                16'd11: trace_decay_tau20 = 32'sd37811;
+                16'd12: trace_decay_tau20 = 32'sd35967;
+                16'd13: trace_decay_tau20 = 32'sd34213;
+                16'd14: trace_decay_tau20 = 32'sd32544;
+                16'd15: trace_decay_tau20 = 32'sd30957;
+                16'd16: trace_decay_tau20 = 32'sd29447;
+                16'd17: trace_decay_tau20 = 32'sd28011;
+                16'd18: trace_decay_tau20 = 32'sd26645;
+                16'd19: trace_decay_tau20 = 32'sd25345;
+                16'd20: trace_decay_tau20 = 32'sd24109;
+                16'd21: trace_decay_tau20 = 32'sd22934;
+                16'd22: trace_decay_tau20 = 32'sd21815;
+                16'd23: trace_decay_tau20 = 32'sd20751;
+                16'd24: trace_decay_tau20 = 32'sd19739;
+                16'd25: trace_decay_tau20 = 32'sd18776;
+                16'd26: trace_decay_tau20 = 32'sd17861;
+                16'd27: trace_decay_tau20 = 32'sd16990;
+                16'd28: trace_decay_tau20 = 32'sd16161;
+                16'd29: trace_decay_tau20 = 32'sd15373;
+                16'd30: trace_decay_tau20 = 32'sd14623;
+                16'd31: trace_decay_tau20 = 32'sd13910;
+                16'd32: trace_decay_tau20 = 32'sd13231;
+                16'd33: trace_decay_tau20 = 32'sd12586;
+                16'd34: trace_decay_tau20 = 32'sd11972;
+                16'd35: trace_decay_tau20 = 32'sd11388;
+                16'd36: trace_decay_tau20 = 32'sd10833;
+                16'd37: trace_decay_tau20 = 32'sd10305;
+                16'd38: trace_decay_tau20 = 32'sd9802;
+                16'd39: trace_decay_tau20 = 32'sd9324;
+                16'd40: trace_decay_tau20 = 32'sd8869;
+                16'd41: trace_decay_tau20 = 32'sd8437;
+                16'd42: trace_decay_tau20 = 32'sd8025;
+                16'd43: trace_decay_tau20 = 32'sd7634;
+                16'd44: trace_decay_tau20 = 32'sd7262;
+                16'd45: trace_decay_tau20 = 32'sd6907;
+                16'd46: trace_decay_tau20 = 32'sd6571;
+                16'd47: trace_decay_tau20 = 32'sd6250;
+                16'd48: trace_decay_tau20 = 32'sd5945;
+                16'd49: trace_decay_tau20 = 32'sd5655;
+                16'd50: trace_decay_tau20 = 32'sd5380;
+                16'd51: trace_decay_tau20 = 32'sd5117;
+                16'd52: trace_decay_tau20 = 32'sd4868;
+                16'd53: trace_decay_tau20 = 32'sd4630;
+                16'd54: trace_decay_tau20 = 32'sd4404;
+                16'd55: trace_decay_tau20 = 32'sd4190;
+                16'd56: trace_decay_tau20 = 32'sd3985;
+                16'd57: trace_decay_tau20 = 32'sd3791;
+                16'd58: trace_decay_tau20 = 32'sd3606;
+                16'd59: trace_decay_tau20 = 32'sd3430;
+                16'd60: trace_decay_tau20 = 32'sd3263;
+                16'd61: trace_decay_tau20 = 32'sd3104;
+                16'd62: trace_decay_tau20 = 32'sd2952;
+                16'd63: trace_decay_tau20 = 32'sd2808;
+                default: trace_decay_tau20 = 32'sd0;
+            endcase
+        end
+    endfunction
+
+    function automatic logic signed [31:0] trace_decay_tau40(
+        input logic [15:0] age_steps
+    );
+        begin
+            case (age_steps)
+                16'd0: trace_decay_tau40 = 32'sd65536;
+                16'd1: trace_decay_tau40 = 32'sd63918;
+                16'd2: trace_decay_tau40 = 32'sd62340;
+                16'd3: trace_decay_tau40 = 32'sd60801;
+                16'd4: trace_decay_tau40 = 32'sd59299;
+                16'd5: trace_decay_tau40 = 32'sd57835;
+                16'd6: trace_decay_tau40 = 32'sd56407;
+                16'd7: trace_decay_tau40 = 32'sd55015;
+                16'd8: trace_decay_tau40 = 32'sd53656;
+                16'd9: trace_decay_tau40 = 32'sd52332;
+                16'd10: trace_decay_tau40 = 32'sd51039;
+                16'd11: trace_decay_tau40 = 32'sd49779;
+                16'd12: trace_decay_tau40 = 32'sd48550;
+                16'd13: trace_decay_tau40 = 32'sd47352;
+                16'd14: trace_decay_tau40 = 32'sd46182;
+                16'd15: trace_decay_tau40 = 32'sd45042;
+                16'd16: trace_decay_tau40 = 32'sd43930;
+                16'd17: trace_decay_tau40 = 32'sd42845;
+                16'd18: trace_decay_tau40 = 32'sd41788;
+                16'd19: trace_decay_tau40 = 32'sd40756;
+                16'd20: trace_decay_tau40 = 32'sd39750;
+                16'd21: trace_decay_tau40 = 32'sd38768;
+                16'd22: trace_decay_tau40 = 32'sd37811;
+                16'd23: trace_decay_tau40 = 32'sd36877;
+                16'd24: trace_decay_tau40 = 32'sd35967;
+                16'd25: trace_decay_tau40 = 32'sd35079;
+                16'd26: trace_decay_tau40 = 32'sd34213;
+                16'd27: trace_decay_tau40 = 32'sd33368;
+                16'd28: trace_decay_tau40 = 32'sd32544;
+                16'd29: trace_decay_tau40 = 32'sd31741;
+                16'd30: trace_decay_tau40 = 32'sd30957;
+                16'd31: trace_decay_tau40 = 32'sd30193;
+                16'd32: trace_decay_tau40 = 32'sd29447;
+                16'd33: trace_decay_tau40 = 32'sd28720;
+                16'd34: trace_decay_tau40 = 32'sd28011;
+                16'd35: trace_decay_tau40 = 32'sd27319;
+                16'd36: trace_decay_tau40 = 32'sd26645;
+                16'd37: trace_decay_tau40 = 32'sd25987;
+                16'd38: trace_decay_tau40 = 32'sd25345;
+                16'd39: trace_decay_tau40 = 32'sd24720;
+                16'd40: trace_decay_tau40 = 32'sd24109;
+                16'd41: trace_decay_tau40 = 32'sd23514;
+                16'd42: trace_decay_tau40 = 32'sd22934;
+                16'd43: trace_decay_tau40 = 32'sd22367;
+                16'd44: trace_decay_tau40 = 32'sd21815;
+                16'd45: trace_decay_tau40 = 32'sd21276;
+                16'd46: trace_decay_tau40 = 32'sd20751;
+                16'd47: trace_decay_tau40 = 32'sd20239;
+                16'd48: trace_decay_tau40 = 32'sd19739;
+                16'd49: trace_decay_tau40 = 32'sd19252;
+                16'd50: trace_decay_tau40 = 32'sd18776;
+                16'd51: trace_decay_tau40 = 32'sd18313;
+                16'd52: trace_decay_tau40 = 32'sd17861;
+                16'd53: trace_decay_tau40 = 32'sd17420;
+                16'd54: trace_decay_tau40 = 32'sd16990;
+                16'd55: trace_decay_tau40 = 32'sd16570;
+                16'd56: trace_decay_tau40 = 32'sd16161;
+                16'd57: trace_decay_tau40 = 32'sd15762;
+                16'd58: trace_decay_tau40 = 32'sd15373;
+                16'd59: trace_decay_tau40 = 32'sd14993;
+                16'd60: trace_decay_tau40 = 32'sd14623;
+                16'd61: trace_decay_tau40 = 32'sd14262;
+                16'd62: trace_decay_tau40 = 32'sd13910;
+                16'd63: trace_decay_tau40 = 32'sd13566;
+                default: trace_decay_tau40 = 32'sd0;
+            endcase
+        end
+    endfunction
+
     function automatic logic infer_state_is_evt_pre(input infer_state_t state_in);
         begin
             case (state_in)
@@ -1915,6 +2065,7 @@ module top_level(
                 INFER_EVT_PRE_EDGE_REQ,
                 INFER_EVT_PRE_EDGE_WAIT,
                 INFER_EVT_PRE_TRACE_REQ,
+                INFER_EVT_PRE_TRACE_PRE,
                 INFER_EVT_PRE_TRACE_WAIT,
                 INFER_EVT_PRE_W_WAIT,
                 INFER_EVT_PRE_APPLY,
@@ -2516,6 +2667,7 @@ module top_level(
             infer_evt_edge_ptr <= '0;
             infer_evt_pre_hist_q <= 32'd0;
             infer_evt_delay_q <= 4'd0;
+            infer_evt_age_q <= 16'd0;
             infer_total_spikes  <= 32'd0;
             infer_rng_state     <= 32'd0;
             infer_rng_mul_prod_q32 <= 64'd0;
@@ -3840,7 +3992,11 @@ module top_level(
                             if (response_ready && (resp_status == STATUS_OK)) begin
                                 response_ready <= 1'b0;
                             end
-                            train_chunk_state <= TCK_SNAP_COPY_INIT;
+                            // Brian2 flows continuously from the active window into the
+                            // rest window. Active-window spike counts are already mirrored
+                            // into snap_count during the active phase, so no extra snapshot
+                            // or g_in rebase step is needed here.
+                            train_chunk_state <= TCK_BLANK_INFER_START;
                         end
                     end
                     TCK_SNAP_COPY_INIT: begin
@@ -5099,6 +5255,12 @@ module top_level(
                         spike_count_we <= 1'b1;
                         spike_count_waddr <= infer_apply_idx;
                         spike_count_wdata <= 16'd0;
+                        // Keep a separate active-window spike snapshot for label stats so
+                        // training can flow directly into the blank interval without a
+                        // post-active copy pass.
+                        snap_count_we <= 1'b1;
+                        snap_count_waddr <= infer_apply_idx;
+                        snap_count_wdata <= 16'd0;
                         if (infer_apply_idx == (N_NEURONS - 1)) begin
                             infer_apply_idx <= 7'd0;
                             infer_prep_idx <= 10'd0;
@@ -5529,6 +5691,11 @@ module top_level(
                             spike_count_we <= 1'b1;
                             spike_count_waddr <= infer_commit_idx;
                             spike_count_wdata <= infer_spike_rd_data + 16'd1;
+                            if (train_chunk_active && !infer_force_no_input) begin
+                                snap_count_we <= 1'b1;
+                                snap_count_waddr <= infer_commit_idx;
+                                snap_count_wdata <= infer_spike_rd_data + 16'd1;
+                            end
                             infer_total_spikes <= infer_total_spikes + 32'd1;
                             infer_exc_last_spike_step[infer_commit_idx] <= infer_step_idx[15:0];
                             infer_s_exc[infer_commit_idx] <= 1'b1;
@@ -5760,9 +5927,11 @@ module top_level(
 	                    INFER_WTA_PASS2: begin
                             logic run_online_trace_now;
                             logic step_last_now;
+                            // Brian2 keeps neuron/synapse dynamics active during the 150 ms
+                            // rest interval. Keep online trace/STDP running here as well;
+                            // infer_force_no_input only suppresses new input spikes.
                             run_online_trace_now = (TRAIN_ENABLE && train_chunk_active &&
-                                                    (train_chunk_mode == 3'd3) &&
-                                                    !infer_force_no_input);
+                                                    (train_chunk_mode == 3'd3));
                             step_last_now = ((infer_step_idx + 32'd1) >= infer_steps_target);
 	                        infer_pass2_g_inh_next <= infer_pass2_g_inh_decay + infer_pass2_g_inh_add;
                             infer_state <= INFER_WTA_PASS2_WRITE;
@@ -5771,9 +5940,11 @@ module top_level(
 	                    INFER_WTA_PASS2_WRITE: begin
                             logic run_online_trace_now;
                             logic step_last_now;
+                            // Brian2 keeps neuron/synapse dynamics active during the 150 ms
+                            // rest interval. Keep online trace/STDP running here as well;
+                            // infer_force_no_input only suppresses new input spikes.
                             run_online_trace_now = (TRAIN_ENABLE && train_chunk_active &&
-                                                    (train_chunk_mode == 3'd3) &&
-                                                    !infer_force_no_input);
+                                                    (train_chunk_mode == 3'd3));
                             step_last_now = ((infer_step_idx + 32'd1) >= infer_steps_target);
 	                        infer_g_inh_state[infer_apply_idx] <= infer_pass2_g_inh_next;
 
@@ -5783,7 +5954,9 @@ module top_level(
                                     infer_evt_winner_idx <= infer_step_winner_idx;
                                     infer_evt_prelist_idx <= 10'd0;
                                     infer_evt_pre_idx <= 10'd0;
-                                    infer_evt_post_idx <= infer_step_winner_valid ? infer_step_winner_idx : 7'd0;
+                                    // Run post-event STDP over every excitatory neuron that spiked
+                                    // this step, not just the first detected winner.
+                                    infer_evt_post_idx <= 7'd0;
                                     infer_evt_post_input_idx <= 10'd0;
                                     infer_evt_trace_val <= 32'sd0;
                                     infer_evt_w_cur <= 32'sd0;
@@ -5915,11 +6088,16 @@ module top_level(
                     end
 
                     INFER_EVT_PRE_TRACE_REQ: begin
+                        infer_evt_age_q <= infer_step_idx[15:0] - infer_exc_last_spike_step[infer_evt_post_idx];
+                        infer_state <= INFER_EVT_PRE_TRACE_PRE;
+                    end
+
+                    INFER_EVT_PRE_TRACE_PRE: begin
+                        infer_evt_trace_val <= trace_decay_tau20(infer_evt_age_q);
                         infer_state <= INFER_EVT_PRE_TRACE_WAIT;
                     end
 
                     INFER_EVT_PRE_TRACE_WAIT: begin
-                        infer_evt_trace_val <= infer_post1_before[infer_evt_post_idx];
                         infer_w_rd_addr <= infer_evt_edge_ptr;
                         infer_state <= INFER_EVT_PRE_W_WAIT;
                     end
@@ -6035,16 +6213,19 @@ module top_level(
                     end
 
                     INFER_EVT_POST_TRACE_REQ: begin
+                        infer_evt_pre_hist_q <= infer_pre_hist[infer_evt_post_input_idx];
+                        infer_evt_delay_q <= dense_delay_step(infer_evt_post_idx, infer_evt_post_input_idx);
+                        infer_evt_age_q <= infer_step_idx[15:0] - infer_exc_last_spike_step[infer_evt_post_idx];
                         infer_state <= INFER_EVT_POST_TRACE_PRE;
                     end
 
                     INFER_EVT_POST_TRACE_PRE: begin
+                        infer_evt_trace_val <= delayed_pre_trace_from_hist(infer_evt_pre_hist_q, infer_evt_delay_q);
+                        infer_evt_post2_before_q <= trace_decay_tau40(infer_evt_age_q);
                         infer_state <= INFER_EVT_POST_TRACE_WAIT;
                     end
 
                     INFER_EVT_POST_TRACE_WAIT: begin
-                        infer_evt_trace_val <= infer_pre_trace_rd_data;
-                        infer_evt_post2_before_q <= infer_post2_before[infer_evt_post_idx];
                         infer_w_rd_addr <= infer_evt_edge_ptr;
                         infer_state <= INFER_EVT_POST_W_WAIT;
                     end

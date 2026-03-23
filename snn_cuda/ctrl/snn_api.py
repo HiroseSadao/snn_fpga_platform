@@ -108,7 +108,7 @@ def create_fixed_mnist_stdp_model(
     name: str = "diehl_cook_fpga_demo",
     port: str = "COM7",
     start_lba: int = 2048,
-    train_samples: int = 2000,
+    train_samples: int = 1000,
     infer_samples: int = 100,
     timeout_sec: float = 7200.0,
     seed: int = 0x12345678,
@@ -173,7 +173,7 @@ def create_fixed_mnist_stdp_model(
         dst="inh",
         pattern="one_to_one",
         learning_rule="fixed_exc_inh",
-        delay_steps=2,
+        delay_steps=0,
     )
     model.add_synapse_group(
         name="inh_to_exc",

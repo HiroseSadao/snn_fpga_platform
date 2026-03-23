@@ -8,7 +8,7 @@ def build_model():
         name="mnist_stdp_fixed_demo",
         port="COM7",
         start_lba=2048,
-        train_samples=2000,
+        train_samples=1000,
         infer_samples=100,
         timeout_sec=7200.0,
         seed=0x12345678,

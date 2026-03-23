@@ -1,14 +1,14 @@
 {
-  "accuracy": 0.08,
+  "accuracy": 0.12,
   "backend": "fpga_uart",
   "caps_hex": "0x00017F0F",
   "compiler_plan": {
     "batch_train_only": false,
     "batch_train_then_infer": true,
     "estimated_timeout_sec": 7200.0,
-    "expected_image_bytes": 1646400,
-    "expected_image_sectors": 3216,
-    "expected_total_samples": 2100,
+    "expected_image_bytes": 862400,
+    "expected_image_sectors": 1685,
+    "expected_total_samples": 1100,
     "legacy_cli": [
       "python",
       "ctrl/use_fpga_calc.py",
@@ -26,7 +26,7 @@
       "0x12345679",
       "--batch-train-then-infer",
       "--train-then-infer-train-samples",
-      "2000",
+      "1000",
       "--train-then-infer-infer-samples",
       "100"
     ],
@@ -82,7 +82,7 @@
         "seed": 305419896,
         "timeout_sec": 7200.0,
         "train_e2e_mine_timing": false,
-        "train_samples": 2000,
+        "train_samples": 1000,
         "train_seed": 305419896
       },
       "ir": {
@@ -97,7 +97,7 @@
             "src": "input"
           },
           {
-            "delay_steps": 2,
+            "delay_steps": 0,
             "dst": "inh",
             "learning_rule": "fixed_exc_inh",
             "name": "exc_to_inh",
@@ -126,7 +126,7 @@
             "infer_batch",
             "collect_metrics"
           ],
-          "train_samples": 2000
+          "train_samples": 1000
         },
         "groups": [
           {
@@ -190,18 +190,18 @@
       "source_kind": "python_model"
     }
   },
-  "correct": 8,
+  "correct": 12,
   "cycle_breakdown": {
     "infer_core": 2297713050,
     "infer_eval": 19100,
     "label_stats": 0,
-    "load": 30539874,
+    "load": 30538309,
     "other": 0,
     "train_core": 0
   },
   "dataset_name": "mnist",
-  "elapsed_cycles": 2328272024,
-  "elapsed_sec": 23.28272024,
+  "elapsed_cycles": 2328270459,
+  "elapsed_sec": 23.28270459,
   "infer_samples": 100,
   "infer_seed": 305419897,
   "mode": "train-then-infer",
@@ -211,6 +211,6 @@
   "start_lba": 2048,
   "status": "ok",
   "timeout_sec": 7200.0,
-  "train_samples": 2000,
+  "train_samples": 1000,
   "train_seed": 305419896
 }
