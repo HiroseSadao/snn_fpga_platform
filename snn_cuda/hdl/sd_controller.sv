@@ -68,6 +68,7 @@ module sd_controller(
     reg sclk_sig = 0;
     reg [55:0] cmd_out;
     reg [7:0] recv_data;
+    wire [7:0] recv_data_holdfix;
     reg cmd_mode = 1;
     reg [7:0] data_sig = 8'hFF;
     
@@ -78,6 +79,19 @@ module sd_controller(
     reg [4:0] extra_next_state;
     reg high_capacity;
     wire [31:0] read_addr = high_capacity ? address : (address << 9);
+
+    genvar recv_hold_i;
+    generate
+        for (recv_hold_i = 0; recv_hold_i < 8; recv_hold_i = recv_hold_i + 1) begin : g_recv_holdfix
+            (* keep = "true", dont_touch = "true" *)
+            LUT1 #(
+                .INIT(2'b10)
+            ) u_lut1_holdfix (
+                .I0(recv_data[recv_hold_i]),
+                .O(recv_data_holdfix[recv_hold_i])
+            );
+        end
+    endgenerate
     
     reg [26:0] boot_counter = 27'd100_000_000;
     always @(posedge clk) begin
@@ -199,7 +213,7 @@ module sd_controller(
                     sclk_sig <= ~sclk_sig;
                 end
                 READ_BLOCK_DATA: begin
-                    dout <= recv_data;
+                    dout <= recv_data_holdfix;
                     byte_available <= 1;
                     if (byte_counter == 0) begin
                         bit_counter <= 7;

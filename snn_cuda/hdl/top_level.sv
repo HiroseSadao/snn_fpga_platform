@@ -217,6 +217,7 @@ module top_level(
         INFER_NEURON_DV_PRE,
         INFER_NEURON_DV_DRIVE_PRE,
         INFER_NEURON_DV_DRIVE,
+        INFER_NEURON_DV_DRIVE_ROUND,
         INFER_NEURON_DV_SYN,
         INFER_NEURON_DV_SYN_ROUND,
         INFER_NEURON_VNEXT,
@@ -999,6 +1000,9 @@ module top_level(
     logic signed [31:0] infer_eval_exc_drive_dt;
     logic signed [31:0] infer_eval_inh_drive_dt;
     logic signed [31:0] infer_eval_leak_dt;
+    (* use_dsp = "yes" *) logic signed [63:0] infer_eval_exc_drive_prod_q32;
+    (* use_dsp = "yes" *) logic signed [63:0] infer_eval_inh_drive_prod_q32;
+    (* use_dsp = "yes" *) logic signed [63:0] infer_eval_leak_prod_q32;
     logic signed [31:0] infer_eval_i_syn_exc_step;
     logic signed [31:0] infer_eval_i_syn_inh_step;
     (* use_dsp = "yes" *) logic signed [63:0] infer_eval_i_syn_exc_prod_q32;
@@ -1823,32 +1827,28 @@ module top_level(
         input logic [6:0] post_idx,
         input logic [9:0] pre_idx
     );
-        logic [3:0] h;
+        logic [4:0] h;
         begin
-            // Fixed pseudo-random per-synapse delay in [0, 9] to approximate
-            // Brian2's one-time random delay assignment.
-            h[0] = pre_idx[0] ^ pre_idx[4] ^ post_idx[0] ^ post_idx[4];
-            h[1] = pre_idx[1] ^ pre_idx[5] ^ post_idx[1] ^ post_idx[5];
-            h[2] = pre_idx[2] ^ pre_idx[6] ^ post_idx[2] ^ post_idx[0];
-            h[3] = pre_idx[3] ^ pre_idx[7] ^ post_idx[3] ^ post_idx[1];
-            case (h)
-                4'h0: dense_delay_step = 4'd0;
-                4'h1: dense_delay_step = 4'd1;
-                4'h2: dense_delay_step = 4'd2;
-                4'h3: dense_delay_step = 4'd3;
-                4'h4: dense_delay_step = 4'd4;
-                4'h5: dense_delay_step = 4'd5;
-                4'h6: dense_delay_step = 4'd6;
-                4'h7: dense_delay_step = 4'd7;
-                4'h8: dense_delay_step = 4'd8;
-                4'h9: dense_delay_step = 4'd9;
-                4'hA: dense_delay_step = 4'd0;
-                4'hB: dense_delay_step = 4'd2;
-                4'hC: dense_delay_step = 4'd4;
-                4'hD: dense_delay_step = 4'd6;
-                4'hE: dense_delay_step = 4'd8;
-                default: dense_delay_step = 4'd9;
-            endcase
+            // Brian2 assigns one random delay per synapse. We keep the FPGA path
+            // deterministic, but derive a seed-dependent pseudo-random delay from
+            // the active batch seed plus the synapse indices, then fold it to 0..9.
+            h = pre_idx[4:0]
+              ^ pre_idx[9:5]
+              ^ {post_idx[4:0]}
+              ^ {3'd0, post_idx[6:5]}
+              ^ batch_cfg_seed[4:0]
+              ^ batch_cfg_seed[9:5]
+              ^ batch_cfg_seed[14:10]
+              ^ batch_cfg_seed[19:15]
+              ^ batch_cfg_seed[24:20]
+              ^ batch_cfg_seed[29:25]
+              ^ {3'd0, batch_cfg_seed[31:30]};
+            if (h >= 5'd20)
+                dense_delay_step = h - 5'd20;
+            else if (h >= 5'd10)
+                dense_delay_step = h - 5'd10;
+            else
+                dense_delay_step = h[3:0];
         end
     endfunction
 
@@ -1902,6 +1902,22 @@ module top_level(
                     found = 1'b1;
                 end
             end
+        end
+    endfunction
+
+    function automatic logic signed [31:0] count_other_inh_spikes(
+        input logic [6:0] exc_idx
+    );
+        integer inh_idx;
+        logic signed [31:0] spike_count;
+        begin
+            spike_count = 32'sd0;
+            for (inh_idx = 0; inh_idx < N_NEURONS; inh_idx = inh_idx + 1) begin
+                if ((inh_idx[6:0] != exc_idx) && infer_s_inh[inh_idx]) begin
+                    spike_count = spike_count + 32'sd1;
+                end
+            end
+            count_other_inh_spikes = spike_count;
         end
     endfunction
 
@@ -2114,6 +2130,7 @@ module top_level(
                 INFER_NEURON_DV_PRE,
                 INFER_NEURON_DV_DRIVE_PRE,
                 INFER_NEURON_DV_DRIVE,
+                INFER_NEURON_DV_DRIVE_ROUND,
                 INFER_NEURON_DV_SYN,
                 INFER_NEURON_DV_SYN_ROUND,
                 INFER_NEURON_VNEXT,
@@ -2672,6 +2689,9 @@ module top_level(
             infer_rng_state     <= 32'd0;
             infer_rng_mul_prod_q32 <= 64'd0;
             infer_apply_c_exc_decay_prod_q32 <= 64'sd0;
+            infer_eval_exc_drive_prod_q32 <= 64'sd0;
+            infer_eval_inh_drive_prod_q32 <= 64'sd0;
+            infer_eval_leak_prod_q32 <= 64'sd0;
             infer_poisson_num_const_cfg <= POISSON_NUM_CONST;
             infer_dividend      <= 32'd0;
             infer_divisor       <= 32'd1;
@@ -2944,7 +2964,9 @@ module top_level(
                     infer_apply_idx    <= 7'd0;
                     infer_trace_phase  <= 2'd0;
                     infer_total_spikes <= 32'd0;
-                    infer_rng_state    <= batch_cfg_seed;
+                    if (!infer_model_state_valid) begin
+                        infer_rng_state <= batch_cfg_seed;
+                    end
                     infer_skip_init_clear <= 1'b0;
                     infer_force_no_input  <= 1'b0;
                     infer_init_preserve_theta <= infer_model_state_valid;
@@ -3960,8 +3982,8 @@ module top_level(
                                 infer_apply_idx    <= 7'd0;
                                 infer_sum_c_inh    <= 32'd0;
                                 infer_total_spikes <= 32'd0;
-                                                                        if (!infer_model_state_valid) begin
-                                    infer_rng_state <= 32'h12345678;
+                                if (!infer_model_state_valid) begin
+                                    infer_rng_state <= batch_cfg_seed;
                                 end
                                 infer_pre_active_count <= 10'd0;
                                 raw_image0_rd_addr <= 10'd0;
@@ -5604,15 +5626,28 @@ module top_level(
                     end
 
                     INFER_NEURON_DV_DRIVE: begin
-                        logic signed [31:0] exc_drive_dt;
-                        logic signed [31:0] inh_drive_dt;
-                        logic signed [31:0] leak_dt;
-                        exc_drive_dt = fxp_mul_s16_16(infer_eval_eexc_minus_v, FXP_EXC_DT_OVER_TCM);
-                        inh_drive_dt = fxp_mul_s16_16(infer_eval_einh_minus_v, FXP_EXC_DT_OVER_TCM);
-                        leak_dt = fxp_mul_s16_16(infer_eval_vrest_minus_v, FXP_EXC_DT_OVER_TCM);
-                        infer_eval_exc_drive_dt <= exc_drive_dt;
-                        infer_eval_inh_drive_dt <= inh_drive_dt;
-                        infer_eval_leak_dt <= leak_dt;
+                        infer_eval_exc_drive_prod_q32 <= $signed(infer_eval_eexc_minus_v) * $signed(FXP_EXC_DT_OVER_TCM);
+                        infer_eval_inh_drive_prod_q32 <= $signed(infer_eval_einh_minus_v) * $signed(FXP_EXC_DT_OVER_TCM);
+                        infer_eval_leak_prod_q32 <= $signed(infer_eval_vrest_minus_v) * $signed(FXP_EXC_DT_OVER_TCM);
+                        infer_state <= INFER_NEURON_DV_DRIVE_ROUND;
+                    end
+
+                    INFER_NEURON_DV_DRIVE_ROUND: begin
+                        if (infer_eval_exc_drive_prod_q32 >= 0) begin
+                            infer_eval_exc_drive_dt <= $signed((infer_eval_exc_drive_prod_q32 + 64'sd32768) >>> 16);
+                        end else begin
+                            infer_eval_exc_drive_dt <= $signed((infer_eval_exc_drive_prod_q32 - 64'sd32768) >>> 16);
+                        end
+                        if (infer_eval_inh_drive_prod_q32 >= 0) begin
+                            infer_eval_inh_drive_dt <= $signed((infer_eval_inh_drive_prod_q32 + 64'sd32768) >>> 16);
+                        end else begin
+                            infer_eval_inh_drive_dt <= $signed((infer_eval_inh_drive_prod_q32 - 64'sd32768) >>> 16);
+                        end
+                        if (infer_eval_leak_prod_q32 >= 0) begin
+                            infer_eval_leak_dt <= $signed((infer_eval_leak_prod_q32 + 64'sd32768) >>> 16);
+                        end else begin
+                            infer_eval_leak_dt <= $signed((infer_eval_leak_prod_q32 - 64'sd32768) >>> 16);
+                        end
                         infer_state <= INFER_NEURON_DV_SYN;
                     end
 
@@ -5714,61 +5749,16 @@ module top_level(
                             infer_neuron_idx <= infer_commit_idx + 7'd1;
                             infer_state <= INFER_ACCUM_NEURON;
                         end
-                    end
+	                    end
 
 	                    INFER_APPLY_WTA: begin
-                            if (infer_trace_phase == 2'd0) begin
-                                train_xexc_rd_addr <= infer_apply_idx;
-                                train_xpost2_rd_addr <= infer_apply_idx;
-                                infer_trace_spike_latched <= infer_s_exc[infer_apply_idx];
-                                infer_trace_phase <= 2'd1;
-                            end else if (infer_trace_phase == 2'd1) begin
-                                infer_trace_phase <= 2'd2;
-                            end else if (infer_trace_phase == 2'd2) begin
-                                infer_apply_xexc_trace_q <= $signed(train_xexc_rd_data);
-                                infer_apply_xpost2_trace_q <= $signed(train_xpost2_rd_data);
-                                infer_post1_before[infer_apply_idx] <= $signed(train_xexc_rd_data);
-                                infer_post2_before[infer_apply_idx] <= $signed(train_xpost2_rd_data);
-                                infer_trace_phase <= 3'd3;
-                            end else if (infer_trace_phase == 3'd3) begin
-                                infer_apply_xexc_prod <= $signed(infer_apply_xexc_trace_q) * $signed(FXP_TRACE_POST1_DECAY);
-                                infer_apply_xpost2_prod <= $signed(infer_apply_xpost2_trace_q) * $signed(FXP_TRACE_POST2_DECAY);
-                                infer_trace_phase <= 3'd4;
-                            end else if (infer_trace_phase == 3'd4) begin
-                                if (infer_apply_xexc_prod >= 0) begin
-                                    infer_apply_xexc_decay <= $signed((infer_apply_xexc_prod + 64'sd32768) >>> 16);
-                                end else begin
-                                    infer_apply_xexc_decay <= $signed((infer_apply_xexc_prod - 64'sd32768) >>> 16);
-                                end
-                                if (infer_apply_xpost2_prod >= 0) begin
-                                    infer_apply_xpost2_decay <= $signed((infer_apply_xpost2_prod + 64'sd32768) >>> 16);
-                                end else begin
-                                    infer_apply_xpost2_decay <= $signed((infer_apply_xpost2_prod - 64'sd32768) >>> 16);
-                                end
-                                infer_trace_phase <= 3'd5;
-                            end else if (infer_trace_phase == 3'd5) begin
-                                infer_apply_xexc_next <= infer_trace_spike_latched
-                                                       ? FXP_TRACE_EVENT_SET
-                                                       : infer_apply_xexc_decay;
-                                infer_apply_xpost2_next <= infer_trace_spike_latched
-                                                         ? FXP_TRACE_EVENT_SET
-                                                         : infer_apply_xpost2_decay;
-                                infer_trace_phase <= 3'd6;
-                            end else begin
-                                train_xexc_wr_en <= 1'b1;
-                                train_xexc_wr_addr <= infer_apply_idx;
-                                train_xexc_wr_data <= infer_apply_xexc_next;
-                                train_xpost2_wr_en <= 1'b1;
-                                train_xpost2_wr_addr <= infer_apply_idx;
-                                train_xpost2_wr_data <= infer_apply_xpost2_next;
-
-                                infer_apply_c_exc_cur <= infer_c_exc_state[infer_apply_idx];
-                                infer_apply_c_exc_spike_add <= infer_trace_spike_latched ? FXP_WEXC : 32'sd0;
-                                infer_apply_v_inh_cur <= infer_v_inh_state[infer_apply_idx];
-                                infer_apply_inh_last_spike <= infer_inh_last_spike_step[infer_apply_idx];
-                                infer_trace_phase <= 3'd0;
-                                infer_state <= INFER_APPLY_WTA_GE_MUL;
-                            end
+                            infer_trace_spike_latched <= infer_s_exc[infer_apply_idx];
+                            infer_apply_c_exc_cur <= infer_c_exc_state[infer_apply_idx];
+                            infer_apply_c_exc_spike_add <= infer_s_exc[infer_apply_idx] ? FXP_WEXC : 32'sd0;
+                            infer_apply_v_inh_cur <= infer_v_inh_state[infer_apply_idx];
+                            infer_apply_inh_last_spike <= infer_inh_last_spike_step[infer_apply_idx];
+                            infer_trace_phase <= 3'd0;
+                            infer_state <= INFER_APPLY_WTA_GE_MUL;
 	                    end
 
                         INFER_APPLY_WTA_GE_MUL: begin
@@ -5880,16 +5870,13 @@ module top_level(
 	                    end
 
 	                    INFER_WTA_PASS2_PRE: begin
-	                        logic signed [31:0] diff_c_inh;
+	                        logic signed [31:0] inh_spike_count;
                             if (!infer_step_winner_valid && infer_s_exc[infer_apply_idx]) begin
                                 infer_step_winner_valid <= 1'b1;
                                 infer_step_winner_idx   <= infer_apply_idx;
                             end
-	                        diff_c_inh = infer_sum_c_inh - (infer_s_inh[infer_apply_idx] ? 32'sd1 : 32'sd0);
-	                        if (diff_c_inh < 0) begin
-	                            diff_c_inh = 32'sd0;
-	                        end
-                            infer_pass2_diff_c_inh <= diff_c_inh;
+                            inh_spike_count = count_other_inh_spikes(infer_apply_idx);
+                            infer_pass2_diff_c_inh <= inh_spike_count;
                             infer_pass2_g_inh_cur <= infer_g_inh_state[infer_apply_idx];
                             infer_state <= INFER_WTA_PASS2_DECAY_MUL;
 	                    end
@@ -6473,7 +6460,9 @@ module top_level(
                                 infer_apply_idx    <= 7'd0;
                                 infer_trace_phase  <= 2'd0;
                                 infer_total_spikes <= 32'd0;
-                                infer_rng_state    <= batch_cfg_seed;
+                                if (!infer_model_state_valid) begin
+                                    infer_rng_state <= batch_cfg_seed;
+                                end
                                 infer_skip_init_clear <= 1'b0;
                                 infer_force_no_input  <= 1'b0;
                                 infer_init_preserve_theta <= infer_model_state_valid;

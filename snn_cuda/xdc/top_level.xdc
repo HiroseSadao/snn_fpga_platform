@@ -16,8 +16,8 @@ set_max_delay -datapath_only 6 \
 # DDR PHY reset fanout goes to many SERDES RST pins; treat min-delay on this
 # asynchronous-style reset network as false for hold analysis.
 set_false_path -hold \
-    -from [get_pins -hier -quiet *u_ddr3_top/ddr3_phy_inst/sync_rst_reg/Q] \
-    -to   [get_pins -hier -quiet *u_ddr3_top/ddr3_phy_inst/*SERDESE2*/RST]
+    -from [get_pins -hier -regexp {.*u_ddr3_top/ddr3_phy_inst/sync_rst_reg/Q$}] \
+    -to   [get_pins -hier -regexp {.*u_ddr3_top/ddr3_phy_inst/.*/RST$}]
 
 
 # Set Bank 0 voltage
