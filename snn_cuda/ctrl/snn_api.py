@@ -165,7 +165,7 @@ def create_fixed_mnist_stdp_model(
         dst="exc",
         pattern="dense",
         learning_rule="stdp_input_exc",
-        delay_steps=5,
+        delay_steps=10,
     )
     model.add_synapse_group(
         name="exc_to_inh",

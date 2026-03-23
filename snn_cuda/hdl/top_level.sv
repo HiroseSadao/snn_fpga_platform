@@ -102,8 +102,10 @@ module top_level(
     localparam logic [15:0] INH_TREF_STEPS = 16'd2;
     localparam logic [15:0] LAST_SPIKE_INIT_STEP = 16'h8000;
     localparam logic signed [31:0] FXP_THETA_PLUS = 32'sd3277;   // approx 0.05 in S16.16
-    localparam logic signed [31:0] FXP_THETA_DECAY = 32'sd65535; // ~1.0 (dt/tc_theta is tiny)
     localparam logic signed [31:0] FXP_THETA_MAX = 32'sd2293760; // 35.0 in S16.16
+    localparam logic signed [63:0] FXP_THETA_PLUS_Q32 = 64'sd214748365;    // 0.05 in S16.32
+    localparam logic signed [63:0] FXP_THETA_MAX_Q32  = 64'sd150323855360; // 35.0 in S16.32
+    localparam logic [31:0] THETA_TAU_MS = 32'd10000000;
     localparam logic signed [31:0] FXP_THRESH_BASE = -32'sd3407872; // -52.0 in S16.16 (DiehlAndCook init_vthr)
     localparam logic signed [31:0] FXP_EXC_VREST = -32'sd4259840;   // -65.0 in S16.16
     localparam logic signed [31:0] FXP_EXC_VRESET = -32'sd4259840;  // -65.0 in S16.16
@@ -552,6 +554,7 @@ module top_level(
     logic        raw_image0_wr_en;
     logic [9:0]  raw_image0_wr_addr;
     logic [7:0]  raw_image0_wr_data;
+    wire  [7:0]  raw_image0_wr_data_holdfix;
     (* ram_style = "block" *) logic [7:0] raw_image0_mem [0:N_IN-1];
     (* ram_style = "block" *) logic [7:0] raw_image1_mem [0:N_IN-1];
     logic        batch_compute_buf_sel;
@@ -831,9 +834,11 @@ module top_level(
     logic [TRAIN_DENSE_ADDR_W-1:0] infer_pre_trace_rd_addr;
     logic signed [31:0] infer_pre_trace_rd_data;
     (* ram_style = "block" *) logic signed [31:0] infer_pre_trace_mem [0:N_WEIGHTS-1];
+    (* rom_style = "distributed" *) logic [3:0] infer_delay_step_mem [0:N_WEIGHTS-1];
     (* ram_style = "block" *) logic signed [31:0] infer_g_in_state [0:N_NEURONS-1];
     (* ram_style = "block" *) logic signed [31:0] infer_v_state [0:N_NEURONS-1];
     (* ram_style = "block" *) logic signed [31:0] infer_exc_theta [0:N_NEURONS-1];
+    logic signed [63:0] infer_exc_theta_q32 [0:N_NEURONS-1];
     (* ram_style = "block" *) logic signed [31:0] infer_g_in_delay0 [0:N_NEURONS-1];
     (* ram_style = "block" *) logic signed [31:0] infer_g_in_delay1 [0:N_NEURONS-1];
     (* ram_style = "block" *) logic signed [31:0] infer_g_in_delay2 [0:N_NEURONS-1];
@@ -955,6 +960,11 @@ module top_level(
     logic [1:0]  infer_accum_pair_count;
     logic        infer_accum_lane0_fire;
     logic [W_ADDR_W-1:0] infer_accum_edge_ptr_q;
+    logic [15:0] infer_accum_last_spike_step_q;
+    logic signed [31:0] infer_accum_w_cur_q16;
+    logic signed [31:0] infer_accum_post1_q16;
+    logic signed [31:0] infer_accum_dep_term_q16;
+    logic signed [31:0] infer_accum_w_next_q16;
     logic signed [31:0] infer_accum_trace_cur;
     logic signed [31:0] infer_accum_trace_decay;
     (* use_dsp = "yes" *) logic signed [63:0] infer_accum_trace_prod_q32;
@@ -995,6 +1005,7 @@ module top_level(
     logic [6:0]  infer_eval_idx;
     logic signed [31:0] infer_eval_v_cur;
     logic signed [31:0] infer_eval_theta_cur;
+    logic signed [63:0] infer_eval_theta_q32_cur;
     logic signed [31:0] infer_eval_g_inh_cur;
     logic signed [31:0] infer_eval_delayed_g_in;
     logic signed [31:0] infer_eval_exc_drive_dt;
@@ -1032,8 +1043,9 @@ module top_level(
     logic signed [31:0] infer_commit_v_next;
     logic signed [31:0] infer_commit_thresh;
     logic signed [31:0] infer_commit_theta_next;
-    logic signed [31:0] infer_commit_theta_decay;
-    (* use_dsp = "yes" *) logic signed [63:0] infer_commit_theta_prod;
+    logic signed [63:0] infer_commit_theta_next_q32;
+    logic signed [63:0] infer_commit_theta_decay_q32;
+    logic signed [63:0] infer_commit_theta_delta_q32;
     logic        infer_commit_spike_now;
     logic        infer_skip_init_clear;
     logic        infer_force_no_input;
@@ -1060,6 +1072,23 @@ module top_level(
     assign rgb1 = 3'b000;
     assign led = {ddr_calib_complete, ddr_clk_wiz_locked, 14'd0};
     assign pmoda = {rgb0[0], rgb0[1], rgb0[2]};
+
+    genvar raw_image_hold_i;
+    generate
+        for (raw_image_hold_i = 0; raw_image_hold_i < 8; raw_image_hold_i = raw_image_hold_i + 1) begin : g_raw_image_wr_holdfix
+            (* keep = "true", dont_touch = "true" *)
+            LUT1 #(
+                .INIT(2'b10)
+            ) u_lut1_holdfix (
+                .I0(raw_image0_wr_data[raw_image_hold_i]),
+                .O(raw_image0_wr_data_holdfix[raw_image_hold_i])
+            );
+        end
+    endgenerate
+
+    initial begin
+        $readmemh("data/dense_delay_step.mem", infer_delay_step_mem);
+    end
 
     bto7s u_ss0_dec (
         .x(sevenseg_ss0_nibble),
@@ -1190,10 +1219,10 @@ module top_level(
         infer_w_rd_data_q_lane1 <= infer_w_rd_data_lane1;
 
         if (raw_image0_wr_en && !imgload_target_buf_sel) begin
-            raw_image0_mem[raw_image0_wr_addr] <= raw_image0_wr_data;
+            raw_image0_mem[raw_image0_wr_addr] <= raw_image0_wr_data_holdfix;
         end
         if (raw_image0_wr_en && imgload_target_buf_sel) begin
-            raw_image1_mem[raw_image0_wr_addr] <= raw_image0_wr_data;
+            raw_image1_mem[raw_image0_wr_addr] <= raw_image0_wr_data_holdfix;
         end
         raw_image0_rd_data <= raw_image0_mem[raw_image0_rd_addr];
         raw_image1_rd_data <= raw_image1_mem[raw_image0_rd_addr];
@@ -1823,88 +1852,6 @@ module top_level(
         end
     endfunction
 
-    function automatic [3:0] dense_delay_step(
-        input logic [6:0] post_idx,
-        input logic [9:0] pre_idx
-    );
-        logic [4:0] h;
-        begin
-            // Brian2 assigns one random delay per synapse. We keep the FPGA path
-            // deterministic, but derive a seed-dependent pseudo-random delay from
-            // the active batch seed plus the synapse indices, then fold it to 0..9.
-            h = pre_idx[4:0]
-              ^ pre_idx[9:5]
-              ^ {post_idx[4:0]}
-              ^ {3'd0, post_idx[6:5]}
-              ^ batch_cfg_seed[4:0]
-              ^ batch_cfg_seed[9:5]
-              ^ batch_cfg_seed[14:10]
-              ^ batch_cfg_seed[19:15]
-              ^ batch_cfg_seed[24:20]
-              ^ batch_cfg_seed[29:25]
-              ^ {3'd0, batch_cfg_seed[31:30]};
-            if (h >= 5'd20)
-                dense_delay_step = h - 5'd20;
-            else if (h >= 5'd10)
-                dense_delay_step = h - 5'd10;
-            else
-                dense_delay_step = h[3:0];
-        end
-    endfunction
-
-    function automatic logic signed [31:0] delayed_pre_trace_from_hist(
-        input logic [31:0] hist_in,
-        input logic [3:0]  delay_step
-    );
-        integer raw_age;
-        integer trace_age;
-        logic found;
-        begin
-            delayed_pre_trace_from_hist = 32'sd0;
-            found = 1'b0;
-            for (raw_age = 0; raw_age < 32; raw_age = raw_age + 1) begin
-                if (!found && (raw_age >= delay_step) && hist_in[raw_age]) begin
-                    trace_age = raw_age - delay_step;
-                    case (trace_age)
-                        0: delayed_pre_trace_from_hist = 32'sd65536;
-                        1: delayed_pre_trace_from_hist = 32'sd62340;
-                        2: delayed_pre_trace_from_hist = 32'sd59299;
-                        3: delayed_pre_trace_from_hist = 32'sd56407;
-                        4: delayed_pre_trace_from_hist = 32'sd53656;
-                        5: delayed_pre_trace_from_hist = 32'sd51039;
-                        6: delayed_pre_trace_from_hist = 32'sd48550;
-                        7: delayed_pre_trace_from_hist = 32'sd46182;
-                        8: delayed_pre_trace_from_hist = 32'sd43930;
-                        9: delayed_pre_trace_from_hist = 32'sd41788;
-                        10: delayed_pre_trace_from_hist = 32'sd39750;
-                        11: delayed_pre_trace_from_hist = 32'sd37811;
-                        12: delayed_pre_trace_from_hist = 32'sd35967;
-                        13: delayed_pre_trace_from_hist = 32'sd34213;
-                        14: delayed_pre_trace_from_hist = 32'sd32544;
-                        15: delayed_pre_trace_from_hist = 32'sd30957;
-                        16: delayed_pre_trace_from_hist = 32'sd29447;
-                        17: delayed_pre_trace_from_hist = 32'sd28011;
-                        18: delayed_pre_trace_from_hist = 32'sd26645;
-                        19: delayed_pre_trace_from_hist = 32'sd25345;
-                        20: delayed_pre_trace_from_hist = 32'sd24109;
-                        21: delayed_pre_trace_from_hist = 32'sd22934;
-                        22: delayed_pre_trace_from_hist = 32'sd21815;
-                        23: delayed_pre_trace_from_hist = 32'sd20751;
-                        24: delayed_pre_trace_from_hist = 32'sd19739;
-                        25: delayed_pre_trace_from_hist = 32'sd18776;
-                        26: delayed_pre_trace_from_hist = 32'sd17861;
-                        27: delayed_pre_trace_from_hist = 32'sd16990;
-                        28: delayed_pre_trace_from_hist = 32'sd16161;
-                        29: delayed_pre_trace_from_hist = 32'sd15373;
-                        30: delayed_pre_trace_from_hist = 32'sd14623;
-                        default: delayed_pre_trace_from_hist = 32'sd13910;
-                    endcase
-                    found = 1'b1;
-                end
-            end
-        end
-    endfunction
-
     function automatic logic signed [31:0] count_other_inh_spikes(
         input logic [6:0] exc_idx
     );
@@ -1921,151 +1868,92 @@ module top_level(
         end
     endfunction
 
+    function automatic logic signed [31:0] fxp_mul_trace_q16(
+        input logic signed [31:0] a_q16,
+        input logic signed [31:0] b_q16
+    );
+        logic signed [63:0] prod_q32;
+        begin
+            prod_q32 = $signed(a_q16) * $signed(b_q16);
+            if (prod_q32 >= 0)
+                fxp_mul_trace_q16 = $signed((prod_q32 + 64'sd32768) >>> 16);
+            else
+                fxp_mul_trace_q16 = $signed((prod_q32 - 64'sd32768) >>> 16);
+        end
+    endfunction
+
     function automatic logic signed [31:0] trace_decay_tau20(
         input logic [15:0] age_steps
     );
+        logic signed [31:0] decay_q16;
         begin
-            case (age_steps)
-                16'd0: trace_decay_tau20 = 32'sd65536;
-                16'd1: trace_decay_tau20 = 32'sd62340;
-                16'd2: trace_decay_tau20 = 32'sd59299;
-                16'd3: trace_decay_tau20 = 32'sd56407;
-                16'd4: trace_decay_tau20 = 32'sd53656;
-                16'd5: trace_decay_tau20 = 32'sd51039;
-                16'd6: trace_decay_tau20 = 32'sd48550;
-                16'd7: trace_decay_tau20 = 32'sd46182;
-                16'd8: trace_decay_tau20 = 32'sd43930;
-                16'd9: trace_decay_tau20 = 32'sd41788;
-                16'd10: trace_decay_tau20 = 32'sd39750;
-                16'd11: trace_decay_tau20 = 32'sd37811;
-                16'd12: trace_decay_tau20 = 32'sd35967;
-                16'd13: trace_decay_tau20 = 32'sd34213;
-                16'd14: trace_decay_tau20 = 32'sd32544;
-                16'd15: trace_decay_tau20 = 32'sd30957;
-                16'd16: trace_decay_tau20 = 32'sd29447;
-                16'd17: trace_decay_tau20 = 32'sd28011;
-                16'd18: trace_decay_tau20 = 32'sd26645;
-                16'd19: trace_decay_tau20 = 32'sd25345;
-                16'd20: trace_decay_tau20 = 32'sd24109;
-                16'd21: trace_decay_tau20 = 32'sd22934;
-                16'd22: trace_decay_tau20 = 32'sd21815;
-                16'd23: trace_decay_tau20 = 32'sd20751;
-                16'd24: trace_decay_tau20 = 32'sd19739;
-                16'd25: trace_decay_tau20 = 32'sd18776;
-                16'd26: trace_decay_tau20 = 32'sd17861;
-                16'd27: trace_decay_tau20 = 32'sd16990;
-                16'd28: trace_decay_tau20 = 32'sd16161;
-                16'd29: trace_decay_tau20 = 32'sd15373;
-                16'd30: trace_decay_tau20 = 32'sd14623;
-                16'd31: trace_decay_tau20 = 32'sd13910;
-                16'd32: trace_decay_tau20 = 32'sd13231;
-                16'd33: trace_decay_tau20 = 32'sd12586;
-                16'd34: trace_decay_tau20 = 32'sd11972;
-                16'd35: trace_decay_tau20 = 32'sd11388;
-                16'd36: trace_decay_tau20 = 32'sd10833;
-                16'd37: trace_decay_tau20 = 32'sd10305;
-                16'd38: trace_decay_tau20 = 32'sd9802;
-                16'd39: trace_decay_tau20 = 32'sd9324;
-                16'd40: trace_decay_tau20 = 32'sd8869;
-                16'd41: trace_decay_tau20 = 32'sd8437;
-                16'd42: trace_decay_tau20 = 32'sd8025;
-                16'd43: trace_decay_tau20 = 32'sd7634;
-                16'd44: trace_decay_tau20 = 32'sd7262;
-                16'd45: trace_decay_tau20 = 32'sd6907;
-                16'd46: trace_decay_tau20 = 32'sd6571;
-                16'd47: trace_decay_tau20 = 32'sd6250;
-                16'd48: trace_decay_tau20 = 32'sd5945;
-                16'd49: trace_decay_tau20 = 32'sd5655;
-                16'd50: trace_decay_tau20 = 32'sd5380;
-                16'd51: trace_decay_tau20 = 32'sd5117;
-                16'd52: trace_decay_tau20 = 32'sd4868;
-                16'd53: trace_decay_tau20 = 32'sd4630;
-                16'd54: trace_decay_tau20 = 32'sd4404;
-                16'd55: trace_decay_tau20 = 32'sd4190;
-                16'd56: trace_decay_tau20 = 32'sd3985;
-                16'd57: trace_decay_tau20 = 32'sd3791;
-                16'd58: trace_decay_tau20 = 32'sd3606;
-                16'd59: trace_decay_tau20 = 32'sd3430;
-                16'd60: trace_decay_tau20 = 32'sd3263;
-                16'd61: trace_decay_tau20 = 32'sd3104;
-                16'd62: trace_decay_tau20 = 32'sd2952;
-                16'd63: trace_decay_tau20 = 32'sd2808;
-                default: trace_decay_tau20 = 32'sd0;
-            endcase
+            decay_q16 = FXP_ONE;
+            if (age_steps[15:8] != 8'd0)
+                decay_q16 = 32'sd0;
+            else begin
+                if (age_steps[0]) decay_q16 = fxp_mul_trace_q16(decay_q16, 32'sd62340);
+                if (age_steps[1]) decay_q16 = fxp_mul_trace_q16(decay_q16, 32'sd59299);
+                if (age_steps[2]) decay_q16 = fxp_mul_trace_q16(decay_q16, 32'sd53656);
+                if (age_steps[3]) decay_q16 = fxp_mul_trace_q16(decay_q16, 32'sd43930);
+                if (age_steps[4]) decay_q16 = fxp_mul_trace_q16(decay_q16, 32'sd29447);
+                if (age_steps[5]) decay_q16 = fxp_mul_trace_q16(decay_q16, 32'sd13231);
+                if (age_steps[6]) decay_q16 = fxp_mul_trace_q16(decay_q16, 32'sd2671);
+                if (age_steps[7]) decay_q16 = fxp_mul_trace_q16(decay_q16, 32'sd109);
+            end
+            trace_decay_tau20 = decay_q16;
         end
     endfunction
 
     function automatic logic signed [31:0] trace_decay_tau40(
         input logic [15:0] age_steps
     );
+        logic signed [31:0] decay_q16;
         begin
-            case (age_steps)
-                16'd0: trace_decay_tau40 = 32'sd65536;
-                16'd1: trace_decay_tau40 = 32'sd63918;
-                16'd2: trace_decay_tau40 = 32'sd62340;
-                16'd3: trace_decay_tau40 = 32'sd60801;
-                16'd4: trace_decay_tau40 = 32'sd59299;
-                16'd5: trace_decay_tau40 = 32'sd57835;
-                16'd6: trace_decay_tau40 = 32'sd56407;
-                16'd7: trace_decay_tau40 = 32'sd55015;
-                16'd8: trace_decay_tau40 = 32'sd53656;
-                16'd9: trace_decay_tau40 = 32'sd52332;
-                16'd10: trace_decay_tau40 = 32'sd51039;
-                16'd11: trace_decay_tau40 = 32'sd49779;
-                16'd12: trace_decay_tau40 = 32'sd48550;
-                16'd13: trace_decay_tau40 = 32'sd47352;
-                16'd14: trace_decay_tau40 = 32'sd46182;
-                16'd15: trace_decay_tau40 = 32'sd45042;
-                16'd16: trace_decay_tau40 = 32'sd43930;
-                16'd17: trace_decay_tau40 = 32'sd42845;
-                16'd18: trace_decay_tau40 = 32'sd41788;
-                16'd19: trace_decay_tau40 = 32'sd40756;
-                16'd20: trace_decay_tau40 = 32'sd39750;
-                16'd21: trace_decay_tau40 = 32'sd38768;
-                16'd22: trace_decay_tau40 = 32'sd37811;
-                16'd23: trace_decay_tau40 = 32'sd36877;
-                16'd24: trace_decay_tau40 = 32'sd35967;
-                16'd25: trace_decay_tau40 = 32'sd35079;
-                16'd26: trace_decay_tau40 = 32'sd34213;
-                16'd27: trace_decay_tau40 = 32'sd33368;
-                16'd28: trace_decay_tau40 = 32'sd32544;
-                16'd29: trace_decay_tau40 = 32'sd31741;
-                16'd30: trace_decay_tau40 = 32'sd30957;
-                16'd31: trace_decay_tau40 = 32'sd30193;
-                16'd32: trace_decay_tau40 = 32'sd29447;
-                16'd33: trace_decay_tau40 = 32'sd28720;
-                16'd34: trace_decay_tau40 = 32'sd28011;
-                16'd35: trace_decay_tau40 = 32'sd27319;
-                16'd36: trace_decay_tau40 = 32'sd26645;
-                16'd37: trace_decay_tau40 = 32'sd25987;
-                16'd38: trace_decay_tau40 = 32'sd25345;
-                16'd39: trace_decay_tau40 = 32'sd24720;
-                16'd40: trace_decay_tau40 = 32'sd24109;
-                16'd41: trace_decay_tau40 = 32'sd23514;
-                16'd42: trace_decay_tau40 = 32'sd22934;
-                16'd43: trace_decay_tau40 = 32'sd22367;
-                16'd44: trace_decay_tau40 = 32'sd21815;
-                16'd45: trace_decay_tau40 = 32'sd21276;
-                16'd46: trace_decay_tau40 = 32'sd20751;
-                16'd47: trace_decay_tau40 = 32'sd20239;
-                16'd48: trace_decay_tau40 = 32'sd19739;
-                16'd49: trace_decay_tau40 = 32'sd19252;
-                16'd50: trace_decay_tau40 = 32'sd18776;
-                16'd51: trace_decay_tau40 = 32'sd18313;
-                16'd52: trace_decay_tau40 = 32'sd17861;
-                16'd53: trace_decay_tau40 = 32'sd17420;
-                16'd54: trace_decay_tau40 = 32'sd16990;
-                16'd55: trace_decay_tau40 = 32'sd16570;
-                16'd56: trace_decay_tau40 = 32'sd16161;
-                16'd57: trace_decay_tau40 = 32'sd15762;
-                16'd58: trace_decay_tau40 = 32'sd15373;
-                16'd59: trace_decay_tau40 = 32'sd14993;
-                16'd60: trace_decay_tau40 = 32'sd14623;
-                16'd61: trace_decay_tau40 = 32'sd14262;
-                16'd62: trace_decay_tau40 = 32'sd13910;
-                16'd63: trace_decay_tau40 = 32'sd13566;
-                default: trace_decay_tau40 = 32'sd0;
-            endcase
+            decay_q16 = FXP_ONE;
+            if (age_steps[15:9] != 7'd0)
+                decay_q16 = 32'sd0;
+            else begin
+                if (age_steps[0]) decay_q16 = fxp_mul_trace_q16(decay_q16, 32'sd63918);
+                if (age_steps[1]) decay_q16 = fxp_mul_trace_q16(decay_q16, 32'sd62340);
+                if (age_steps[2]) decay_q16 = fxp_mul_trace_q16(decay_q16, 32'sd59299);
+                if (age_steps[3]) decay_q16 = fxp_mul_trace_q16(decay_q16, 32'sd53656);
+                if (age_steps[4]) decay_q16 = fxp_mul_trace_q16(decay_q16, 32'sd43930);
+                if (age_steps[5]) decay_q16 = fxp_mul_trace_q16(decay_q16, 32'sd29447);
+                if (age_steps[6]) decay_q16 = fxp_mul_trace_q16(decay_q16, 32'sd13231);
+                if (age_steps[7]) decay_q16 = fxp_mul_trace_q16(decay_q16, 32'sd2671);
+                if (age_steps[8]) decay_q16 = fxp_mul_trace_q16(decay_q16, 32'sd109);
+            end
+            trace_decay_tau40 = decay_q16;
+        end
+    endfunction
+
+    function automatic logic signed [31:0] trace_from_last_step_tau20(
+        input logic [31:0] curr_step,
+        input logic signed [31:0] last_step
+    );
+        logic [15:0] age_steps;
+        begin
+            if (last_step[31]) begin
+                trace_from_last_step_tau20 = 32'sd0;
+            end else begin
+                age_steps = curr_step[15:0] - last_step[15:0];
+                trace_from_last_step_tau20 = trace_decay_tau20(age_steps);
+            end
+        end
+    endfunction
+
+    function automatic logic signed [31:0] trace_from_last_step_tau40(
+        input logic [31:0] curr_step,
+        input logic signed [31:0] last_step
+    );
+        logic [15:0] age_steps;
+        begin
+            if (last_step[31]) begin
+                trace_from_last_step_tau40 = 32'sd0;
+            end else begin
+                age_steps = curr_step[15:0] - last_step[15:0];
+                trace_from_last_step_tau40 = trace_decay_tau40(age_steps);
+            end
         end
     endfunction
 
@@ -2685,6 +2573,10 @@ module top_level(
             infer_evt_pre_hist_q <= 32'd0;
             infer_evt_delay_q <= 4'd0;
             infer_evt_age_q <= 16'd0;
+            infer_eval_theta_q32_cur <= 64'sd0;
+            infer_commit_theta_next_q32 <= 64'sd0;
+            infer_commit_theta_decay_q32 <= 64'sd0;
+            infer_commit_theta_delta_q32 <= 64'sd0;
             infer_total_spikes  <= 32'd0;
             infer_rng_state     <= 32'd0;
             infer_rng_mul_prod_q32 <= 64'd0;
@@ -2738,6 +2630,11 @@ module top_level(
             infer_accum_pair_count <= 2'd0;
             infer_accum_lane0_fire <= 1'b0;
             infer_accum_edge_ptr_q <= '0;
+            infer_accum_last_spike_step_q <= 16'd0;
+            infer_accum_w_cur_q16 <= 32'sd0;
+            infer_accum_post1_q16 <= 32'sd0;
+            infer_accum_dep_term_q16 <= 32'sd0;
+            infer_accum_w_next_q16 <= 32'sd0;
             infer_accum_trace_cur <= 32'sd0;
             infer_accum_trace_decay <= 32'sd0;
             infer_accum_trace_prod_q32 <= 64'sd0;
@@ -4308,7 +4205,7 @@ module top_level(
                     TMI_XPRE_CLEAR: begin
                         infer_pre_trace_wr_en <= 1'b1;
                         infer_pre_trace_wr_addr <= train_mem_init_idx;
-                        infer_pre_trace_wr_data <= 32'sd0;
+                        infer_pre_trace_wr_data <= -32'sd1;
                         if (train_mem_init_idx == (N_WEIGHTS - 1)) begin
                             train_mem_init_state <= TMI_DONE;
                         end else begin
@@ -4687,7 +4584,9 @@ module top_level(
                                         infer_pre_active_count <= 10'd0;
                                         raw_image0_rd_addr <= 10'd0;
                                         infer_poisson_thresh_rd_addr <= 10'd0;
-                                        infer_model_state_valid <= 1'b0;
+                                        if (batch_cfg_mode_train) begin
+                                            infer_model_state_valid <= 1'b0;
+                                        end
                                     end else begin
                                         resp_status    <= STATUS_BAD_PACKET;
                                         resp_result    <= 32'sd0;
@@ -4887,7 +4786,9 @@ module top_level(
                                         batch_prefetch_issue_pending <= 1'b0;
                                         batch_prefetch_ready <= 1'b0;
                                         batch_prefetch_sample_idx <= 32'd0;
-                                        infer_model_state_valid <= 1'b0;
+                                        if (batch_cfg_mode_train) begin
+                                            infer_model_state_valid <= 1'b0;
+                                        end
                                         if (!(batch_cfg0_valid && batch_cfg1_valid)) begin
                                             batch_done <= 1'b1;
                                             batch_error <= 1'b1;
@@ -5244,6 +5145,7 @@ module top_level(
                         infer_g_in_state[infer_apply_idx] <= 32'sd0;
                         if (!infer_init_preserve_theta) begin
                             infer_exc_theta[infer_apply_idx] <= 32'sd0;
+                            infer_exc_theta_q32[infer_apply_idx] <= 64'sd0;
                         end
                         infer_g_in_delay0[infer_apply_idx] <= 32'sd0;
                         infer_g_in_delay1[infer_apply_idx] <= 32'sd0;
@@ -5461,11 +5363,15 @@ module top_level(
                             logic lane0_fire_now;
                             logic lane1_fire_now;
                             logic [9:0] lane1_pre_idx;
-                            lane0_fire_now = infer_pre_hist[infer_evt_edge_idx[9:0]][dense_delay_step(infer_neuron_idx, infer_evt_edge_idx[9:0])];
+                            lane0_fire_now = infer_pre_hist[infer_evt_edge_idx[9:0]][
+                                infer_delay_step_mem[dense_weight_addr(infer_neuron_idx, infer_evt_edge_idx[9:0])]
+                            ];
                             lane1_fire_now = 1'b0;
                             lane1_pre_idx = (infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}}, 1'b1});
                             if (!(TRAIN_ENABLE && train_chunk_active) && (infer_accum_pair_count == 2'd2)) begin
-                                lane1_fire_now = infer_pre_hist[lane1_pre_idx][dense_delay_step(infer_neuron_idx, lane1_pre_idx)];
+                                lane1_fire_now = infer_pre_hist[lane1_pre_idx][
+                                    infer_delay_step_mem[dense_weight_addr(infer_neuron_idx, lane1_pre_idx)]
+                                ];
                             end
                             infer_accum_lane0_fire <= lane0_fire_now;
                             if (TRAIN_ENABLE && train_chunk_active) begin
@@ -5492,37 +5398,33 @@ module top_level(
                             // weight BRAM read latency fill cycle.
                             infer_accum_weight_phase <= (TRAIN_ENABLE && train_chunk_active) ? 4'd6 : 4'd9;
                         end else if (infer_accum_weight_phase == 4'd6) begin
-                            infer_accum_trace_cur <= infer_pre_trace_rd_data;
-                            infer_accum_trace_prod_q32 <= $signed(infer_pre_trace_rd_data) * $signed(FXP_TRACE_PRE_DECAY);
-                            infer_accum_weight_phase <= 4'd7;
+                            infer_accum_weight_phase <= 4'd8;
                         end else if (infer_accum_weight_phase == 4'd7) begin
-                            if (infer_accum_trace_prod_q32 >= 0) begin
-                                infer_accum_trace_decay <= $signed((infer_accum_trace_prod_q32 + 64'sd32768) >>> 16);
-                            end else begin
-                                infer_accum_trace_decay <= $signed((infer_accum_trace_prod_q32 - 64'sd32768) >>> 16);
-                            end
                             infer_accum_weight_phase <= 4'd8;
                         end else if (infer_accum_weight_phase == 4'd8) begin
                             logic signed [31:0] accum_delta_q16;
                             logic [EDGE_ADDR_W-1:0] infer_evt_edge_next;
                             accum_delta_q16 = infer_accum_lane0_fire ? $signed({16'd0, infer_w_rd_data_q}) : 32'sd0;
-                            infer_pre_trace_wr_en <= 1'b1;
-                            infer_pre_trace_wr_addr <= infer_accum_edge_ptr_q;
-                            infer_pre_trace_wr_data <= infer_accum_lane0_fire ? FXP_TRACE_EVENT_SET : infer_accum_trace_decay;
                             infer_accum <= infer_accum + accum_delta_q16;
-                            infer_evt_edge_next = infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}}, infer_accum_pair_count};
-                            infer_accum_lane0_fire <= 1'b0;
-                            if (infer_evt_edge_next >= infer_evt_edge_end) begin
-                                infer_delay_pipe_valid <= 1'b1;
-                                infer_delay_pipe_idx <= infer_neuron_idx;
-                                infer_accum_weight_phase <= 4'd0;
-                                infer_state <= INFER_ACCUM_NEURON_GIN_MUL;
+                            if (infer_accum_lane0_fire) begin
+                                infer_accum_w_cur_q16 <= $signed({16'd0, infer_w_rd_data_q});
+                                infer_accum_last_spike_step_q <= infer_exc_last_spike_step[infer_neuron_idx];
+                                infer_accum_weight_phase <= 4'd10;
                             end else begin
-                                infer_evt_edge_idx <= infer_evt_edge_next;
-                                infer_accum_pair_count <= 2'd1;
-                                infer_accum_weight_phase <= 4'd4;
+                                infer_evt_edge_next = infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}}, infer_accum_pair_count};
+                                infer_accum_lane0_fire <= 1'b0;
+                                if (infer_evt_edge_next >= infer_evt_edge_end) begin
+                                    infer_delay_pipe_valid <= 1'b1;
+                                    infer_delay_pipe_idx <= infer_neuron_idx;
+                                    infer_accum_weight_phase <= 4'd0;
+                                    infer_state <= INFER_ACCUM_NEURON_GIN_MUL;
+                                end else begin
+                                    infer_evt_edge_idx <= infer_evt_edge_next;
+                                    infer_accum_pair_count <= 2'd1;
+                                    infer_accum_weight_phase <= 4'd4;
+                                end
                             end
-                        end else begin
+                        end else if (infer_accum_weight_phase == 4'd9) begin
                             logic signed [31:0] accum_delta_q16;
                             logic [EDGE_ADDR_W-1:0] infer_evt_edge_next;
                             accum_delta_q16 = 32'sd0;
@@ -5548,6 +5450,45 @@ module top_level(
                                 end else begin
                                     infer_accum_pair_count <= 2'd1;
                                 end
+                                infer_accum_weight_phase <= 4'd4;
+                            end
+                        end else if (infer_accum_weight_phase == 4'd10) begin
+                            infer_accum_post1_q16 <= trace_decay_tau20(
+                                infer_step_idx[15:0] - infer_accum_last_spike_step_q
+                            );
+                            infer_accum_weight_phase <= 4'd11;
+                        end else if (infer_accum_weight_phase == 4'd11) begin
+                            infer_accum_dep_term_q16 <= fxp_mul_s16_16(TRAIN_LR_M_Q16, infer_accum_post1_q16);
+                            infer_accum_weight_phase <= 4'd12;
+                        end else if (infer_accum_weight_phase == 4'd12) begin
+                            logic signed [31:0] w_next_q16;
+                            w_next_q16 = infer_accum_w_cur_q16 - infer_accum_dep_term_q16;
+                            if (w_next_q16 > TRAIN_WMAX_Q16)
+                                w_next_q16 = TRAIN_WMAX_Q16;
+                            else if (w_next_q16 < TRAIN_WMIN_Q16)
+                                w_next_q16 = TRAIN_WMIN_Q16;
+                            infer_accum_w_next_q16 <= w_next_q16;
+                            infer_accum_weight_phase <= 4'd13;
+                        end else begin
+                            logic [EDGE_ADDR_W-1:0] infer_evt_edge_next;
+                            if (infer_accum_w_next_q16[15:0] != infer_accum_w_cur_q16[15:0]) begin
+                                infer_w_wr_en <= 1'b1;
+                                infer_w_wr_addr <= infer_accum_edge_ptr_q;
+                                infer_w_wr_data <= infer_accum_w_next_q16[15:0];
+                            end
+                            infer_pre_trace_wr_en <= 1'b1;
+                            infer_pre_trace_wr_addr <= infer_accum_edge_ptr_q;
+                            infer_pre_trace_wr_data <= $signed(infer_step_idx);
+                            infer_evt_edge_next = infer_evt_edge_idx + {{(W_ADDR_W-1){1'b0}}, infer_accum_pair_count};
+                            infer_accum_lane0_fire <= 1'b0;
+                            if (infer_evt_edge_next >= infer_evt_edge_end) begin
+                                infer_delay_pipe_valid <= 1'b1;
+                                infer_delay_pipe_idx <= infer_neuron_idx;
+                                infer_accum_weight_phase <= 4'd0;
+                                infer_state <= INFER_ACCUM_NEURON_GIN_MUL;
+                            end else begin
+                                infer_evt_edge_idx <= infer_evt_edge_next;
+                                infer_accum_pair_count <= 2'd1;
                                 infer_accum_weight_phase <= 4'd4;
                             end
                         end
@@ -5603,6 +5544,7 @@ module top_level(
                             infer_eval_idx <= infer_delay_pipe_idx;
                             infer_eval_v_cur <= infer_v_state[infer_delay_pipe_idx];
                             infer_eval_theta_cur <= infer_exc_theta[infer_delay_pipe_idx];
+                            infer_eval_theta_q32_cur <= infer_exc_theta_q32[infer_delay_pipe_idx];
                             infer_eval_g_inh_cur <= infer_g_inh_state[infer_delay_pipe_idx];
                             infer_eval_delayed_g_in <= infer_delay_pipe_delayed_g_in;
                             infer_eval_last_spike_step <= infer_exc_last_spike_step[infer_delay_pipe_idx];
@@ -5691,38 +5633,46 @@ module top_level(
                     end
 
                     INFER_NEURON_THETA_PRE: begin
-                        infer_commit_theta_prod <= $signed(infer_eval_theta_cur) * $signed(FXP_THETA_DECAY);
+                        infer_commit_theta_delta_q32 <= infer_eval_theta_q32_cur / $signed({32'd0, THETA_TAU_MS});
                         infer_state <= INFER_NEURON_THETA_ROUND;
                     end
 
                     INFER_NEURON_THETA_ROUND: begin
-                        if (infer_commit_theta_prod >= 0) begin
-                            infer_commit_theta_decay <= $signed((infer_commit_theta_prod + 64'sd32768) >>> 16);
-                        end else begin
-                            infer_commit_theta_decay <= $signed((infer_commit_theta_prod - 64'sd32768) >>> 16);
-                        end
+                        infer_commit_theta_decay_q32 <= infer_eval_theta_q32_cur - infer_commit_theta_delta_q32;
                         infer_state <= INFER_NEURON_COMMIT;
                     end
 
                     INFER_NEURON_COMMIT: begin
-                        logic signed [31:0] theta_next;
-                        theta_next = infer_commit_theta_decay;
+                        logic signed [63:0] theta_next_q32;
+                        logic signed [31:0] theta_next_q16;
+                        theta_next_q32 = infer_commit_theta_decay_q32;
                         if (infer_commit_spike_now && train_chunk_active) begin
-                            theta_next = theta_next + FXP_THETA_PLUS;
+                            theta_next_q32 = theta_next_q32 + FXP_THETA_PLUS_Q32;
                         end
-                        if (theta_next < 32'sd0) begin
-                            theta_next = 32'sd0;
+                        if (theta_next_q32 < 64'sd0) begin
+                            theta_next_q32 = 64'sd0;
+                        end else if (theta_next_q32 > FXP_THETA_MAX_Q32) begin
+                            theta_next_q32 = FXP_THETA_MAX_Q32;
                         end
+                        theta_next_q16 = $signed((theta_next_q32 + 64'sd32768) >>> 16);
                         infer_spike_rd_addr <= infer_commit_idx;
-                        infer_commit_theta_next <= theta_next;
+                        infer_commit_theta_next_q32 <= theta_next_q32;
+                        infer_commit_theta_next <= theta_next_q16;
                         infer_state <= INFER_NEURON_WRITE;
                     end
 
                     INFER_NEURON_WRITE: begin
                         infer_exc_theta[infer_commit_idx] <= infer_commit_theta_next;
+                        infer_exc_theta_q32[infer_commit_idx] <= infer_commit_theta_next_q32;
                         if (infer_commit_spike_now) begin
                             // mine.py sets the membrane to vreset after spike (no residual carry).
                             infer_v_state[infer_commit_idx] <= FXP_EXC_VRESET;
+                            infer_post1_before[infer_commit_idx] <= trace_decay_tau20(
+                                infer_step_idx[15:0] - infer_eval_last_spike_step
+                            );
+                            infer_post2_before[infer_commit_idx] <= trace_decay_tau40(
+                                infer_step_idx[15:0] - infer_eval_last_spike_step
+                            );
                             spike_count_we <= 1'b1;
                             spike_count_waddr <= infer_commit_idx;
                             spike_count_wdata <= infer_spike_rd_data + 16'd1;
@@ -5936,7 +5886,7 @@ module top_level(
 	                        infer_g_inh_state[infer_apply_idx] <= infer_pass2_g_inh_next;
 
 	                        if (infer_apply_idx == (N_NEURONS - 1)) begin
-                                if (run_online_trace_now) begin
+                                if (run_online_trace_now && infer_step_winner_valid) begin
                                     infer_evt_has_winner <= infer_step_winner_valid;
                                     infer_evt_winner_idx <= infer_step_winner_idx;
                                     infer_evt_prelist_idx <= 10'd0;
@@ -5952,7 +5902,7 @@ module top_level(
                                     infer_evt_edge_ptr <= '0;
                                     infer_evt_pre_fire <= 1'b0;
                                     infer_trace_wait_last_step <= step_last_now;
-                                    infer_state <= INFER_EVT_PRE_PRELIST_REQ;
+                                    infer_state <= INFER_EVT_POST_PTR0_REQ;
                                 end else if (step_last_now) begin
                                     // Match mine.py tcount semantics: increment at end of each processed step,
                                     // including the terminal step.
@@ -6054,8 +6004,12 @@ module top_level(
                     end
 
                     INFER_EVT_PRE_EDGE_WAIT: begin
-                        infer_evt_pre_fire <= infer_pre_hist[infer_evt_pre_idx][dense_delay_step(infer_evt_post_idx, infer_evt_pre_idx)];
-                        if (infer_pre_hist[infer_evt_pre_idx][dense_delay_step(infer_evt_post_idx, infer_evt_pre_idx)]) begin
+                        infer_evt_pre_fire <= infer_pre_hist[infer_evt_pre_idx][
+                            infer_delay_step_mem[dense_weight_addr(infer_evt_post_idx, infer_evt_pre_idx)]
+                        ];
+                        if (infer_pre_hist[infer_evt_pre_idx][
+                                infer_delay_step_mem[dense_weight_addr(infer_evt_post_idx, infer_evt_pre_idx)]
+                            ]) begin
                             infer_state <= INFER_EVT_PRE_TRACE_WAIT;
                         end else if ((infer_evt_edge_idx + {{(EDGE_ADDR_W-1){1'b0}},1'b1}) >= infer_evt_edge_end) begin
                             if ((infer_evt_prelist_idx + 10'd1) >= 10'd784) begin
@@ -6200,15 +6154,13 @@ module top_level(
                     end
 
                     INFER_EVT_POST_TRACE_REQ: begin
-                        infer_evt_pre_hist_q <= infer_pre_hist[infer_evt_post_input_idx];
-                        infer_evt_delay_q <= dense_delay_step(infer_evt_post_idx, infer_evt_post_input_idx);
                         infer_evt_age_q <= infer_step_idx[15:0] - infer_exc_last_spike_step[infer_evt_post_idx];
                         infer_state <= INFER_EVT_POST_TRACE_PRE;
                     end
 
                     INFER_EVT_POST_TRACE_PRE: begin
-                        infer_evt_trace_val <= delayed_pre_trace_from_hist(infer_evt_pre_hist_q, infer_evt_delay_q);
-                        infer_evt_post2_before_q <= trace_decay_tau40(infer_evt_age_q);
+                        infer_evt_trace_val <= trace_from_last_step_tau20(infer_step_idx, infer_pre_trace_rd_data);
+                        infer_evt_post2_before_q <= infer_post2_before[infer_evt_post_idx];
                         infer_state <= INFER_EVT_POST_TRACE_WAIT;
                     end
 
